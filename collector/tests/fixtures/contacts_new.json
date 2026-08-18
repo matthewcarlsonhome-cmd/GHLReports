@@ -1,0 +1,50 @@
+{
+  "contacts": [
+    {
+      "id": "c1",
+      "firstName": "Jane",
+      "lastName": "Smith",
+      "source": "facebook",
+      "tags": [],
+      "dateAdded": "2026-08-15T10:00:00Z",
+      "dateUpdated": "2026-08-15T10:00:00Z"
+    },
+    {
+      "id": "c2",
+      "firstName": "Bob",
+      "lastName": "Jones",
+      "source": "web",
+      "tags": [],
+      "dateAdded": "2026-08-16T10:00:00Z",
+      "dateUpdated": "2026-08-16T11:00:00Z"
+    },
+    {
+      "id": "c3",
+      "firstName": "Test",
+      "lastName": "Person",
+      "source": "web",
+      "tags": [],
+      "dateAdded": "2026-08-15T09:00:00Z",
+      "dateUpdated": "2026-08-15T09:00:00Z"
+    },
+    {
+      "id": "c4",
+      "firstName": "Maria",
+      "lastName": "Testani",
+      "source": "gmb",
+      "tags": [],
+      "dateAdded": "2026-08-16T12:00:00Z",
+      "dateUpdated": "2026-08-16T12:00:00Z"
+    },
+    {
+      "id": "c5",
+      "firstName": "Al",
+      "lastName": "Recent",
+      "source": "web",
+      "tags": [],
+      "dateAdded": "2026-08-17T20:00:00Z",
+      "dateUpdated": "2026-08-17T20:00:00Z"
+    }
+  ],
+  "total": 5
+}

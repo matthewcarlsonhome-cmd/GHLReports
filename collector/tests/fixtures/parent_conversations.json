@@ -1,0 +1,14 @@
+{
+  "conversations": [
+    {
+      "id": "pw1",
+      "contactId": "pc9",
+      "contactName": "Prospect",
+      "lastMessageDate": 1786892400000,
+      "lastMessageDirection": "outbound",
+      "lastMessageType": "TYPE_EMAIL",
+      "unreadCount": 0
+    }
+  ],
+  "total": 1
+}

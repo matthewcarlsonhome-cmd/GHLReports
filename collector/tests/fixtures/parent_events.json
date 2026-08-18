@@ -1,0 +1,12 @@
+{
+  "events": [
+    {
+      "id": "pev1",
+      "title": "Monthly check-in",
+      "startTime": 1787313600000,
+      "contactId": "clientContact1",
+      "appointmentStatus": "confirmed",
+      "calendarId": "pcal1"
+    }
+  ]
+}

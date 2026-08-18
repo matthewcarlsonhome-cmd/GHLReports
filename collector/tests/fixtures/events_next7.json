@@ -1,0 +1,12 @@
+{
+  "events": [
+    {
+      "id": "ev1",
+      "title": "Estimate visit",
+      "startTime": 1787227200000,
+      "contactId": "cx2",
+      "appointmentStatus": "confirmed",
+      "calendarId": "cal1"
+    }
+  ]
+}

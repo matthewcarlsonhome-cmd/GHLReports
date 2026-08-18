@@ -1,0 +1,4 @@
+requests>=2.31
+supabase>=2.5
+python-dateutil>=2.9
+tzdata>=2024.1

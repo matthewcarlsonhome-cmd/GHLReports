@@ -1,0 +1,96 @@
+{
+  "opportunities": [
+    {
+      "id": "o1",
+      "name": "Stale Deal",
+      "monetaryValue": 30000,
+      "pipelineId": "p1",
+      "pipelineStageId": "s2",
+      "assignedTo": "u1",
+      "status": "open",
+      "source": "web",
+      "createdAt": "2026-07-01T12:00:00Z",
+      "updatedAt": "2026-07-20T12:00:00Z",
+      "lastStatusChangeAt": "2026-07-01T12:00:00Z",
+      "lastStageChangeAt": "2026-07-01T12:00:00Z",
+      "lastActionDate": "2026-07-20T12:00:00Z",
+      "contact": {
+        "id": "cx1",
+        "name": "Stale Contact",
+        "tags": []
+      },
+      "tasks": [],
+      "calendarEvents": []
+    },
+    {
+      "id": "o2",
+      "name": "Fresh Deal",
+      "monetaryValue": 5000,
+      "pipelineId": "p1",
+      "pipelineStageId": "s1",
+      "assignedTo": "u2",
+      "status": "open",
+      "source": "web",
+      "createdAt": "2026-08-12T12:00:00Z",
+      "updatedAt": "2026-08-17T12:00:00Z",
+      "lastStatusChangeAt": "2026-08-12T12:00:00Z",
+      "lastStageChangeAt": "2026-08-10T12:00:00Z",
+      "lastActionDate": "2026-08-17T12:00:00Z",
+      "contact": {
+        "id": "cx2",
+        "name": "Fresh Contact",
+        "tags": []
+      },
+      "tasks": [
+        {
+          "id": "t1",
+          "title": "Call back",
+          "dueDate": "2026-08-20T12:00:00Z",
+          "completed": false
+        }
+      ],
+      "calendarEvents": []
+    },
+    {
+      "id": "o3",
+      "name": "Won Deal",
+      "monetaryValue": 12000,
+      "pipelineId": "p1",
+      "pipelineStageId": "s2",
+      "status": "won",
+      "createdAt": "2026-08-01T12:00:00Z",
+      "updatedAt": "2026-08-15T12:00:00Z",
+      "lastStatusChangeAt": "2026-08-15T12:00:00Z",
+      "lastStageChangeAt": "2026-08-14T12:00:00Z",
+      "contact": {
+        "id": "cx3",
+        "name": "Winner",
+        "tags": [
+          "customer"
+        ]
+      },
+      "tasks": [],
+      "calendarEvents": []
+    },
+    {
+      "id": "o4",
+      "name": "Lost Deal",
+      "monetaryValue": 8000,
+      "pipelineId": "p1",
+      "pipelineStageId": "s2",
+      "status": "lost",
+      "lostReasonId": "price",
+      "createdAt": "2026-08-01T12:00:00Z",
+      "updatedAt": "2026-08-16T12:00:00Z",
+      "lastStatusChangeAt": "2026-08-16T12:00:00Z",
+      "lastStageChangeAt": "2026-08-13T12:00:00Z",
+      "contact": {
+        "id": "cx4",
+        "name": "Loser",
+        "tags": []
+      },
+      "tasks": [],
+      "calendarEvents": []
+    }
+  ]
+}

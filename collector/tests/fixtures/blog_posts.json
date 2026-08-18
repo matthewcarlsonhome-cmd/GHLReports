@@ -1,0 +1,11 @@
+{
+  "blogs": [
+    {
+      "_id": "bp1",
+      "title": "Pool opening tips",
+      "status": "PUBLISHED",
+      "publishedAt": "2026-08-10T12:00:00Z",
+      "updatedAt": "2026-08-10T12:00:00Z"
+    }
+  ]
+}

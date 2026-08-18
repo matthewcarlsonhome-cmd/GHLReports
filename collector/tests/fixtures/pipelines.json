@@ -1,0 +1,18 @@
+{
+  "pipelines": [
+    {
+      "id": "p1",
+      "name": "Sales",
+      "stages": [
+        {
+          "id": "s1",
+          "name": "New"
+        },
+        {
+          "id": "s2",
+          "name": "Quote"
+        }
+      ]
+    }
+  ]
+}

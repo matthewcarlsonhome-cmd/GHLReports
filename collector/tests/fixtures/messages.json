@@ -1,0 +1,39 @@
+{
+  "conv_c2": {
+    "messages": {
+      "lastMessageId": null,
+      "nextPage": false,
+      "messages": [
+        {
+          "id": "m1",
+          "direction": "inbound",
+          "dateAdded": "2026-08-16T10:05:00Z",
+          "type": "TYPE_SMS"
+        },
+        {
+          "id": "m2",
+          "direction": "outbound",
+          "dateAdded": "2026-08-16T10:30:00Z",
+          "type": "TYPE_SMS",
+          "userId": "u1",
+          "source": "app"
+        }
+      ]
+    }
+  },
+  "conv_c4": {
+    "messages": {
+      "lastMessageId": null,
+      "nextPage": false,
+      "messages": [
+        {
+          "id": "m3",
+          "direction": "outbound",
+          "dateAdded": "2026-08-16T13:00:00Z",
+          "type": "TYPE_EMAIL",
+          "source": "workflow"
+        }
+      ]
+    }
+  }
+}

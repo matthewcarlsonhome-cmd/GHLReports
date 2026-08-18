@@ -1,0 +1,32 @@
+{
+  "conversations": [
+    {
+      "id": "w1",
+      "contactId": "cw1",
+      "contactName": "Wait Guy",
+      "lastMessageDate": 1787029200000,
+      "lastMessageDirection": "inbound",
+      "lastMessageType": "TYPE_SMS",
+      "unreadCount": 1
+    },
+    {
+      "id": "w2",
+      "contactId": "cw2",
+      "contactName": "Answered Ann",
+      "lastMessageDate": 1786881600000,
+      "lastMessageDirection": "outbound",
+      "lastMessageType": "TYPE_EMAIL",
+      "unreadCount": 0
+    },
+    {
+      "id": "w3",
+      "contactId": "cw3",
+      "contactName": "Friday Fred",
+      "lastMessageDate": 1786750200000,
+      "lastMessageDirection": "inbound",
+      "lastMessageType": "TYPE_SMS",
+      "unreadCount": 2
+    }
+  ],
+  "total": 3
+}

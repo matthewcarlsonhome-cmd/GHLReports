@@ -1,0 +1,12 @@
+{
+  "conversations": [
+    {
+      "id": "pconv1",
+      "contactId": "clientContact1",
+      "contactName": "Pilot One Pools",
+      "lastMessageDate": 1786363200000,
+      "lastMessageDirection": "outbound",
+      "lastMessageType": "TYPE_EMAIL"
+    }
+  ]
+}

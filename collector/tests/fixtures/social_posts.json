@@ -1,0 +1,14 @@
+{
+  "results": {
+    "posts": [
+      {
+        "_id": "sp1",
+        "status": "published",
+        "publishedAt": "2026-08-16T12:00:00Z",
+        "accountIds": [
+          "ig1"
+        ]
+      }
+    ]
+  }
+}
