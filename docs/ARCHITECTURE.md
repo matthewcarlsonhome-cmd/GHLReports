@@ -195,12 +195,13 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
 - **After-hours heatmap** — pure UI on `lead_events`: 7×24 grid in the
   account's timezone, sequential single-hue ramp, toggle between arrival
   counts and median first response, business hours outlined.
-- **Monday digest** — `collector/digest.py` builds one plain-text email per
-  AM (attention list with actions and MRR, changed-this-week, steady/no-data
-  rollups; acked flags excluded; recipients restricted to
-  `@smallscreenproducer.com`) and sends via Resend at the end of every
-  Monday run when `RESEND_API_KEY` + `DIGEST_FROM` are set. On demand:
-  `python -m collector.main --digest` (`--dry-run` prints instead).
+- **Monday digest (parked — off by default)** — `collector/digest.py` builds
+  one plain-text email per AM (attention list with actions and MRR,
+  changed-this-week, steady/no-data rollups; acked flags excluded;
+  recipients restricted to `@smallscreenproducer.com`). Sending requires an
+  email API key that is deliberately NOT part of the go-live setup; with
+  nothing configured every run skips the digest as a logged no-op. Preview
+  without sending: `python -m collector.main --digest --dry-run`.
 - **Copy-ready weekly client summary** — deterministic template fill in the
   drilldown (`web/src/lib/clientSummary.ts`): client-facing wording, unknown
   lines omitted, no flag/risk language, one-click copy.

@@ -169,12 +169,15 @@ Do them in order.
    is the backstop.
 6. **Authentication → Email**: set **OTP expiry to 600 seconds**. Two things
    make the code flow work (the first at team scale, the second always):
-   - **(a) Custom SMTP** — create a Resend account, add and verify
-     `smallscreenproducer.com` (Resend shows the DKIM/SPF TXT records to
-     publish in DNS), then in Supabase set SMTP host `smtp.resend.com`,
-     port 465, user `resend`, password = the Resend API key, sender
-     `health@smallscreenproducer.com`. Without custom SMTP the built-in
-     mailer allows only a few emails per hour.
+   - **(a) Email delivery** — Supabase's built-in mailer only delivers to
+     members of your Supabase organization and only a few emails per hour:
+     fine for one admin (invite your work email under Organization → Team),
+     not for a staff rollout. For the team, set custom SMTP to your own
+     Google Workspace: host `smtp.gmail.com`, port 465, username = a real
+     mailbox (e.g. `health@smallscreenproducer.com`), password = a Google
+     App Password (myaccount.google.com/apppasswords, needs 2-Step
+     Verification), sender = the same mailbox. No third-party email
+     service.
    - **(b) Email Templates → Magic Link AND Confirm signup** — both bodies
      must include `{{ .Token }}` (e.g. `Your sign-in code is {{ .Token }}.
      It expires in 10 minutes.`); if either template lacks the token the
@@ -254,7 +257,6 @@ in `netlify.toml` is the frame policy.
 ### DNS (wherever smallscreenproducer.com is hosted)
 
 - `CNAME health → <your-site>.netlify.app`
-- The Resend DKIM/SPF TXT records from the Supabase SMTP step
 
 Propagation takes minutes to an hour.
 

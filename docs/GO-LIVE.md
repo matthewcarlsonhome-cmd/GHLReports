@@ -3,15 +3,16 @@
 This is the complete, in-order setup to take the Account Health dashboard
 live. **Every step happens in a web dashboard — no terminal, no local
 installs.** The app runs on Netlify, the Python collector runs on Render, and
-the database runs on Supabase.
+the database runs on Supabase. Sign-in emails come straight from Supabase's
+built-in mailer — no third-party email service to configure.
 
 **Today's finish line is your free Netlify URL** —
 `https://<your-site>.netlify.app`. That address is the dashboard until you
 choose to add the custom domain. Everything tied to
-`smallscreenproducer.com` — the `health.` subdomain, DNS records, the Resend
-email domain, and embedding the app inside GoHighLevel — is deliberately
-parked in the **Later phase** at the end of this guide. Nothing in Parts 1–6
-touches DNS or GHL's menu settings.
+`smallscreenproducer.com` — the `health.` subdomain, DNS records, and
+embedding the app inside GoHighLevel — is deliberately parked in the
+**Later phase** at the end of this guide. Nothing in Parts 1–6 touches DNS
+or GHL's menu settings.
 
 (One clarification so nothing gets skipped by accident: Part 3 has you create
 a **read-only API token** inside GoHighLevel. That token is how the collector
@@ -86,14 +87,20 @@ down this list:
    - Sessions → Inactivity timeout: **30 days**.
 3. **Authentication → Email (settings)**
    - OTP expiry: **600 seconds** (the sign-in code lives 10 minutes).
-4. **Authentication → Users → Add user**
-   - Today: add **yourself** (and at most one or two testers). Work email
-     only (must end `@smallscreenproducer.com`), toggle **Auto Confirm
-     User** ON, no password needed — sign-in is by emailed code.
-   - **Why not all 11 staff yet:** until custom SMTP is configured (Later
-     phase), Supabase's built-in mailer only sends a **few emails per
-     hour**. Plenty for you to test today; not enough for the whole team
-     signing in. Add the rest of the staff when you do the Later phase.
+4. **Authentication → Users → Add user** — today, just **yourself**:
+   - Your work email (must end `@smallscreenproducer.com`), toggle
+     **Auto Confirm User** ON, no password needed — sign-in is by emailed
+     code.
+   - **Make the sign-in email actually arrive:** Supabase's built-in mailer
+     only delivers to members of your Supabase **organization** (and only a
+     few emails per hour). So also do: dashboard top-left → your
+     organization → **Team → Invite member** → the same work email → accept
+     the invite from that inbox. Two clicks, and now your login codes get
+     delivered.
+   - The rest of the staff get added in the Later phase — the built-in
+     mailer's limits make it a one-person setup today, and the Later phase
+     covers team-scale email using your own Google Workspace (still no
+     third-party service).
 5. **Authentication → Email Templates** — edit **both** "Magic Link" AND
    "Confirm signup" so the body contains the token, e.g.:
    > `Your sign-in code is {{ .Token }}. It expires in 10 minutes.`
@@ -113,6 +120,14 @@ Still in the Supabase dashboard:
    spaces or quotes). Browser-only options: your password manager's
    generator, or https://bitwarden.com/password-generator/ set to 40
    characters. Copy it — it's needed in two places (here and Render).
+
+   *Why this exists:* Render has to hold a Supabase admin key to write
+   snapshots. The GHL tokens are far more sensitive than the snapshots, so
+   they sit behind a second lock — the Vault function that returns a GHL
+   token demands this collector key too, and logs every attempt (right or
+   wrong) to `pit_audit`. If the Supabase admin key ever leaks, the leaker
+   still can't read your clients' CRM tokens, and you'd see the failed
+   attempts in the audit log.
 2. **Project Settings → Vault → Add new secret**
    - Name: `collector_key` (exactly)
    - Secret: the random string from step 1
@@ -198,8 +213,8 @@ All of this happens at your `https://<your-site>.netlify.app` URL:
 - [ ] Acknowledge a flag with a note → it drops out of "needs attention"
 - [ ] Add an account note → it appears newest-first
 
-That's live. The Later phase below adds the custom domain and the in-GHL
-embed whenever you're ready.
+That's live. The Later phase below adds the custom domain, the rest of the
+staff, and the in-GHL embed whenever you're ready.
 
 ## Part 6 — Onboard each pilot client (~5 min each)
 
@@ -224,55 +239,52 @@ embed whenever you're ready.
 
 ---
 
-## Later phase — custom domain, staff email, and the GHL embed
+## Later phase — custom domain, full staff, and the GHL embed
 
 Do this whenever you're ready to roll the dashboard out to the whole team
 and put it inside GoHighLevel. It's one sitting (~30 min hands-on) plus DNS
 propagation (minutes to an hour). Until then, the Netlify URL keeps working
 — nothing breaks by waiting.
 
-### L1 — Resend: real email sending (~10 min + DNS)
-
-1. Create a free account at https://resend.com → **Domains → Add Domain**
-   → `smallscreenproducer.com`. Resend shows 3–4 DNS records (DKIM/SPF) —
-   keep the tab open for step L3.
-2. Resend → **API Keys → Create** — copy the key somewhere safe for a
-   moment (used in the next step, and again if you enable Monday digests).
-3. Supabase → **Authentication → Email → SMTP Settings** (custom SMTP):
-   - Host `smtp.resend.com` · Port `465` · Username `resend` ·
-     Password = the Resend API key · Sender `health@smallscreenproducer.com`
-   - This lifts the few-emails-per-hour cap of the built-in mailer.
-
-### L2 — Netlify: add the custom domain (~2 min)
+### L1 — Netlify: add the custom domain (~2 min)
 
 **Domain management → Add a domain → `health.smallscreenproducer.com`.**
 Netlify shows the DNS target (your `<site>.netlify.app` host) and
 provisions the TLS certificate automatically once DNS resolves.
 
-### L3 — DNS (~5 min, then wait)
+### L2 — DNS (~2 min, then wait)
 
 Wherever `smallscreenproducer.com` DNS is hosted (registrar or Cloudflare),
-add:
+add one record:
 
 | Type | Name | Value |
 |---|---|---|
-| CNAME | `health` | `<your-site>.netlify.app` (from L2) |
-| TXT/CNAME × 3–4 | per Resend | the DKIM/SPF records from L1 |
+| CNAME | `health` | `<your-site>.netlify.app` (from L1) |
 
-Propagation is usually minutes. When done: Netlify shows the domain as
-secured (TLS issued), and Resend shows the domain as **Verified**.
+Propagation is usually minutes. When done, Netlify shows the domain as
+secured (TLS issued).
 
-### L4 — Supabase: swap the Site URL and add the rest of the staff
+### L3 — Supabase: swap the Site URL and add the rest of the staff
 
 1. **Authentication → URL Configuration** → Site URL:
    `https://health.smallscreenproducer.com`.
-2. **Authentication → Users → Add user** for the remaining staff (~11 total,
-   work emails, Auto Confirm ON) — SMTP from L1 makes team-scale sign-in
-   emails reliable now.
+2. **Team-scale sign-in emails, using your own email account** (the
+   built-in mailer won't deliver to staff who aren't Supabase org members):
+   Supabase → **Authentication → Email → SMTP Settings** and point it at
+   your existing Google Workspace —
+   - Host `smtp.gmail.com` · Port `465` · Username = a real mailbox you
+     control (e.g. `health@smallscreenproducer.com` or your own address) ·
+     Password = a **Google App Password** for that mailbox (create at
+     https://myaccount.google.com/apppasswords — requires 2-Step
+     Verification to be on) · Sender = the same mailbox.
+   - No new services, no DNS records — sign-in codes now come from your own
+     Google account, which is already authorized to send as your domain.
+3. **Authentication → Users → Add user** for the remaining staff (~11
+   total, work emails, Auto Confirm ON).
 
-### L5 — Put it inside GoHighLevel (~5 min)
+### L4 — Put it inside GoHighLevel (~5 min)
 
-Only do this after L2–L3: sign-in **inside the GHL iframe** depends on the
+Only do this after L1–L2: sign-in **inside the GHL iframe** depends on the
 custom domain being same-site with `crm.smallscreenproducer.com`.
 
 GHL **Agency** view → Settings → **Custom Menu Links** → **+ Create New**:
@@ -294,25 +306,24 @@ console for a `frame-ancestors` violation (extend the CSP list in
 ### Later-phase checklist
 
 - [ ] `https://health.smallscreenproducer.com` loads over TLS
-- [ ] Resend domain shows **Verified**; a sign-in email arrives promptly
+- [ ] A sign-in email arrives promptly, sent from your own mailbox
 - [ ] Every staff member is pre-created and can sign in
 - [ ] Inside GHL: the iframe renders and you're already signed in
 
-## Optional: Monday digest emails (after the Later phase)
+## Parked: Monday digest emails
 
-Requires the Resend account from L1. Render → Environment → add
-`RESEND_API_KEY` and `DIGEST_FROM` = `health@smallscreenproducer.com`.
-Every Monday run then emails each AM their book. To preview without
-sending: `COLLECTOR_ARGS` = `--digest --dry-run` → Trigger Run → read the
-logs. Note: the "open dashboard" links inside the digest point at
-`https://health.smallscreenproducer.com`, so turn digests on only after
-the custom domain is live (L2–L3).
+The collector contains an optional Monday-morning email digest per account
+manager. It is **off** and stays off until an email-sending decision is
+made — it does nothing unless explicitly configured, and no setup step in
+this guide enables it. The **Weekly summary** button on each account page
+covers the same need with zero email plumbing: it builds the copy-ready
+client update in the browser.
 
 ## Troubleshooting
 
 | Symptom | Likely cause → fix |
 |---|---|
-| Login email never arrives | Before the Later phase: the built-in mailer sends only a few emails per hour — wait a bit and check spam, or do L1 (Resend SMTP). After L1: Resend domain not yet Verified (L3) |
+| Login email never arrives | The built-in mailer only delivers to Supabase **organization members** — accept the Team invite from Part 2.4; it also sends only a few emails per hour, so wait a bit and check spam. Team-scale fix: the Google Workspace SMTP step (L3) |
 | Email arrives with a link but no code | `{{ .Token }}` missing from a template (Part 2.5) |
 | Account shows "no data — token" | Vault secret name typo — must be `ghl_pit_<location_id>` exactly |
 | A source shows SOURCE UNAVAILABLE / 403 in `/runs` | The PIT lacks that scope — edit the Private Integration's scopes in GHL (no new token) and re-run |
