@@ -16,6 +16,7 @@ const COLUMNS_KEY = "portfolio.columns";
 // Expanded columns behind the column chooser (spec v3 9.3), persisted locally.
 const EXPANDED_COLUMNS = [
   { key: "stale", label: "Stale opps" },
+  { key: "missed", label: "Missed calls" },
   { key: "past_due", label: "Past due" },
   { key: "publish", label: "Since publish" },
   { key: "client_touch", label: "Client touch" },
@@ -225,7 +226,7 @@ export default function Portfolio() {
     const lines = [headers.join(",")];
     for (const row of visible) {
       const extended: Record<ExpandedKey, unknown> = {
-        stale: row.opps_stale, past_due: row.invoices_past_due_amount,
+        stale: row.opps_stale, missed: row.calls_missed_7d, past_due: row.invoices_past_due_amount,
         publish: row.days_since_last_publish, client_touch: row.client_last_touch_days,
         unassigned: row.leads_unassigned_7d, noshow: row.noshow_rate_28d,
         lead_opp: row.lead_to_opp_28d_pct, win_rate: row.win_rate_90d,
@@ -256,6 +257,8 @@ export default function Portfolio() {
         return noData || row.opps_stale === null ? "—"
           : row.opps_stale > 0
             ? `${row.opps_stale} (${fmtMoney(row.opps_stale_value)})` : "0";
+      case "missed":
+        return noData ? "—" : fmtNum(row.calls_missed_7d);
       case "past_due":
         return noData || row.invoices_past_due === null ? "—"
           : row.invoices_past_due > 0 ? fmtMoney(row.invoices_past_due_amount) : "$0";

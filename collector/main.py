@@ -20,7 +20,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import fetchers, flags as flags_mod, metrics
+from . import digest as digest_mod, fetchers, flags as flags_mod, metrics
 from .fetchers import Coverage
 from .ghl_client import GHLClient, GHLAuthError, GHLError
 
@@ -29,6 +29,7 @@ DETAILS_CAP = 50
 TOKEN_ROTATION_WARN_DAYS = 80
 HISTORY_DAYS = 42       # one contacts fetch covers 7d window, 28d baseline, 14-42d cohort, 28d funnel
 CLOSED_OPP_DAYS = 90
+CALL_CONVO_CAP = 30     # missed-call scan: message fetches per location, cap noted in coverage
 
 
 def log(message: str) -> None:
@@ -278,6 +279,27 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                                                  int(since_14d.timestamp() * 1000),
                                                  max_pages=max_pages)
 
+    # Missed inbound calls (Tier 2): message-level TYPE_CALL metadata on the
+    # call conversations in the recent scan.
+    call_convos = [c for c in convos if metrics.is_call_conversation(c)]
+    missed_calls: list[dict] = []
+    call_errors = 0
+    for convo in call_convos[:CALL_CONVO_CAP]:
+        conv_id = convo.get("id")
+        if not conv_id:
+            continue
+        try:
+            call_messages = fetchers.fetch_messages(client, str(conv_id))
+        except GHLError:
+            call_errors += 1
+            continue
+        missed_calls.extend(metrics.missed_calls_in_window(convo, call_messages, win_start, win_end))
+    cov.record("calls", retrieved=min(len(call_convos), CALL_CONVO_CAP),
+               exhausted=len(call_convos) <= CALL_CONVO_CAP and call_errors == 0,
+               error=f"{call_errors} conversations failed" if call_errors else None,
+               note=f"capped at {CALL_CONVO_CAP} call conversations" if len(call_convos) > CALL_CONVO_CAP else None)
+    missed_calls.sort(key=lambda m: m["at"], reverse=True)
+
     # One contacts fetch covers every window (7d, baseline, cohort, funnel, speed)
     contacts_all = fetchers.fetch_contacts_range(
         client, cov, location_id,
@@ -462,6 +484,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "excluded_count": excluded_count,
         "convos_waiting": len(waiting),
         "convos_waiting_max_hours": waiting[0]["hours"] if waiting else None,
+        "calls_missed_7d": len(missed_calls),
         "opps_open": pipe["opps_open"],
         "opps_open_value": pipe["opps_open_value"],
         "opps_stale": pipe["opps_stale"],
@@ -498,6 +521,15 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         lead_events=lead_events, unassigned=unassigned, waiting=waiting, pipe=pipe,
         rel=rel, reviews=reviews, events_next7=events_next7, delivery=delivery,
         social_accounts=social_accounts, client_contact_id=client_contact_id)
+    details["missed_calls"] = [{
+        "conversation_id": m.get("conversation_id"),
+        "contact_id": m.get("contact_id"),
+        "contact": m.get("contact"),
+        "at": m["at"].isoformat() if m.get("at") else None,
+        "status": m.get("status"),
+        "deep_link": metrics.link_conversation(base, location_id, m.get("conversation_id"),
+                                               m.get("contact_id")),
+    } for m in missed_calls[:DETAILS_CAP]]
     if parent_ctx.location_id and details.get("client"):
         details["client"]["deep_link"] = metrics.link_contact(
             base, parent_ctx.location_id, client_contact_id)
@@ -830,6 +862,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--date", help="snapshot date YYYY-MM-DD (default: today local)")
     parser.add_argument("--backfill", type=int, metavar="N",
                         help="write N ISO weeks of lead_history from CRM history, then exit")
+    parser.add_argument("--digest", action="store_true",
+                        help="build and send the per-AM digest from today's data, then exit "
+                             "(with --dry-run: print instead of sending)")
     args = parser.parse_args(argv)
 
     if store is None:
@@ -872,6 +907,24 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             fh.write(report)
         log("probe appended to VERIFICATION.md")
         return 0
+
+    # -- digest mode ------------------------------------------------------------
+    if args.digest:
+        data = store.read_portfolio(run_date)
+        digests = digest_mod.build_digests(
+            data["subs"], data["snapshots_by_loc"], data["flags_by_loc"],
+            data["acked_by_loc"], run_date.isoformat())
+        if not digests:
+            log("digest: no AMs with client accounts; nothing to send")
+            return 0
+        if args.dry_run:
+            for am, message in digests.items():
+                print(f"--- {am} :: {message['subject']} ---\n{message['text']}\n")
+            log(f"digest dry run: {len(digests)} emails built, none sent")
+            return 0
+        sent, digest_failed = digest_mod.send_digests(digests, log=log)
+        log(f"digest: {sent} sent, {digest_failed} failed")
+        return 0 if digest_failed == 0 else 2
 
     # -- backfill mode ----------------------------------------------------------
     if args.backfill:
@@ -1038,6 +1091,17 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
                                       result["details"])
         log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
             f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
+
+    # Monday digest (Tier 2): sent at the end of the Monday run when Resend is configured
+    if run_date.weekday() == 0:
+        data = store.read_portfolio(run_date)
+        digests = digest_mod.build_digests(
+            data["subs"], data["snapshots_by_loc"], data["flags_by_loc"],
+            data["acked_by_loc"], run_date.isoformat())
+        if digests:
+            sent, digest_failed = digest_mod.send_digests(digests, log=log)
+            if sent or digest_failed:
+                log(f"digest: {sent} sent, {digest_failed} failed")
 
     requests_made = sum(c.requests_made for c in clients)
     rate_limited = sum(c.rate_limited for c in clients)

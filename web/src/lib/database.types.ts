@@ -68,6 +68,7 @@ export interface SnapshotRow {
   excluded_count: number | null;
   convos_waiting: number | null;
   convos_waiting_max_hours: number | null;
+  calls_missed_7d: number | null;
   opps_open: number | null;
   opps_open_value: number | null;
   opps_stale: number | null;
@@ -236,6 +237,7 @@ export interface PortfolioRow {
   attention_score: number;
   top_action: string | null;
   state: PortfolioState;
+  calls_missed_7d: number | null;
 }
 
 export interface HistoryRow {

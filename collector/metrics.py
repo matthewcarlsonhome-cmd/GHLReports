@@ -24,6 +24,9 @@ AUTOMATION_SOURCES = {"workflow", "campaign", "bulk_actions", "api"}
 SHOWED_STATUSES = {"showed"}
 NOSHOW_STATUSES = {"noshow", "no_show", "no-show"}
 
+# VERIFY with --probe: the meta.call.status vocabulary for calls nobody answered
+MISSED_CALL_STATUSES = {"no-answer", "noanswer", "no_answer", "missed", "busy", "failed", "voicemail"}
+
 
 # -- time parsing and windows -------------------------------------------
 
@@ -730,6 +733,40 @@ def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datet
         "stale_detail": stale,
         "gap_detail": gap,
     }
+
+
+# -- missed calls (Tier 2) --------------------------------------------------
+
+
+def is_call_conversation(convo: dict) -> bool:
+    kind = f"{convo.get('lastMessageType') or ''} {convo.get('type') or ''}".upper()
+    return "CALL" in kind
+
+
+def missed_calls_in_window(convo: dict, messages: list[dict],
+                           start: datetime, end: datetime) -> list[dict]:
+    """Inbound call messages nobody answered, within the window. One row per
+    missed call: conversation/contact identifiers and a timestamp only."""
+    out = []
+    for message in messages:
+        if "CALL" not in str(message.get("type") or "").upper():
+            continue
+        if str(message.get("direction") or "").strip().lower() != "inbound":
+            continue
+        status = str(message.get("call_status") or "").strip().lower()
+        if status not in MISSED_CALL_STATUSES:
+            continue
+        at = parse_ts(message.get("dateAdded"))
+        if not in_window(at, start, end):
+            continue
+        out.append({
+            "conversation_id": convo.get("id"),
+            "contact_id": convo.get("contactId"),
+            "contact": convo.get("contactName") or "(no name)",
+            "at": at,
+            "status": status,
+        })
+    return out
 
 
 # -- change tracking -------------------------------------------------------

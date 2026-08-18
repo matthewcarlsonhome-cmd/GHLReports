@@ -59,7 +59,14 @@ def test_happy_path_metrics_gate_and_flags():
     # conversations: weekend rule makes Friday-evening inbound 25h, Tuesday one 10h
     assert snap["convos_waiting"] == 2
     assert snap["convos_waiting_max_hours"] == 25.0
-    assert snap["convos_active_7d"] == 2
+    assert snap["convos_active_7d"] == 3    # w2, w3, and the returned call convo
+
+    # missed calls (Tier 2): one unanswered inbound call in the window
+    assert snap["calls_missed_7d"] == 1
+    missed = snap["details"]["missed_calls"]
+    assert missed[0]["conversation_id"] == "conv_call"
+    assert missed[0]["status"] == "no-answer"
+    assert missed[0]["contact"] == "Call Karl"
 
     # pipeline: the stale/stuck flags land on the right opp
     assert snap["opps_open"] == 2
@@ -222,6 +229,19 @@ def test_missing_token_marks_location_failed():
     assert store.token_status["locA"] == ("none", None)
     assert ("locA", "2026-08-18") not in store.snapshots
     assert store.runs[-1]["failed"] == 1
+
+
+def test_digest_mode_builds_from_stored_data(capsys):
+    store = happy_store()
+    assert run_with(store, make_factory()) == 0
+    # digest dry run prints the built emails and sends nothing
+    exit_code = run_with(store, make_factory(),
+                         argv=["--digest", "--dry-run", "--date", "2026-08-18"])
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "lisa@smallscreenproducer.com" in output
+    assert "Pilot One Pools" in output
+    assert "need attention" in output
 
 
 def test_backfill_writes_lead_history_weeks():

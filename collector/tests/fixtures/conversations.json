@@ -29,7 +29,17 @@
       "lastMessageType": "TYPE_SMS",
       "unreadCount": 2,
       "lastMessageBody": "PII_BODY_DO_NOT_STORE call me at +16085559999"
+    },
+    {
+      "id": "conv_call",
+      "contactId": "cw4",
+      "contactName": "Call Karl",
+      "lastMessageDate": 1786903200000,
+      "lastMessageDirection": "outbound",
+      "lastMessageType": "TYPE_CALL",
+      "unreadCount": 0,
+      "lastMessageBody": "PII_BODY_DO_NOT_STORE call transcript"
     }
   ],
-  "total": 3
+  "total": 4
 }

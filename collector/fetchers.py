@@ -153,6 +153,13 @@ def _clean_conversation(convo: dict) -> dict:
 
 
 def _clean_message(message: dict) -> dict:
+    meta = message.get("meta") or {}
+    call = meta.get("call") if isinstance(meta, dict) else None
+    call_status = None
+    if isinstance(call, dict):
+        call_status = call.get("status")
+    if call_status is None and isinstance(meta, dict):
+        call_status = meta.get("callStatus")
     return {
         "id": _get_id(message),
         "direction": message.get("direction"),
@@ -161,6 +168,7 @@ def _clean_message(message: dict) -> dict:
         "source": message.get("source"),
         "userId": message.get("userId"),
         "status": message.get("status"),
+        "call_status": call_status,   # status word only (VERIFY meta.call.status); never numbers or recordings
     }
 
 

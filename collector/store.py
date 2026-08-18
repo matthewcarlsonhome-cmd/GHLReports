@@ -169,6 +169,32 @@ class Store:
         return [(row.get("leads_new_7d"), row.get("convos_active_7d"), row.get("opps_created_7d"))
                 for row in (result.data or [])]
 
+    def read_portfolio(self, snapshot_date: date) -> dict:
+        """Everything the Monday digest needs for one date."""
+        subs = self.load_subaccounts(active=True)
+        snaps = self.client.table("snapshots").select(
+            "location_id,gate_passed,flags_new,flags_resolved"
+        ).eq("snapshot_date", snapshot_date.isoformat()).execute().data or []
+        flags = self.client.table("flags").select(
+            "location_id,code,severity,action"
+        ).eq("snapshot_date", snapshot_date.isoformat()).execute().data or []
+        acks = self.client.table("flag_acks").select(
+            "location_id,code"
+        ).gte("snooze_until", snapshot_date.isoformat()).execute().data or []
+
+        flags_by_loc: dict[str, list[dict]] = {}
+        for flag in flags:
+            flags_by_loc.setdefault(flag["location_id"], []).append(flag)
+        acked_by_loc: dict[str, set] = {}
+        for ack in acks:
+            acked_by_loc.setdefault(ack["location_id"], set()).add(ack["code"])
+        return {
+            "subs": subs,
+            "snapshots_by_loc": {s["location_id"]: s for s in snaps},
+            "flags_by_loc": flags_by_loc,
+            "acked_by_loc": acked_by_loc,
+        }
+
     def todays_snapshots(self, snapshot_date: date) -> list[dict]:
         result = self.client.table("snapshots").select(
             "location_id,snapshot_date,gate_passed,leads_delta_pct"

@@ -254,6 +254,35 @@ def test_flags_changed():
     assert new == ["A"] and resolved == ["C"]
 
 
+def test_missed_calls_classification_and_window():
+    start, end = metrics.window_7d(NOW, CT)
+    convo = {"id": "cv1", "contactId": "c1", "contactName": "Call Karl",
+             "lastMessageType": "TYPE_CALL"}
+    assert metrics.is_call_conversation(convo)
+    assert not metrics.is_call_conversation({"lastMessageType": "TYPE_SMS"})
+    messages = [
+        # missed, in window
+        {"type": "TYPE_CALL", "direction": "inbound",
+         "dateAdded": "2026-08-16T17:00:00Z", "call_status": "no-answer"},
+        # answered call: not missed
+        {"type": "TYPE_CALL", "direction": "inbound",
+         "dateAdded": "2026-08-16T18:00:00Z", "call_status": "completed"},
+        # outbound call: never "missed by us"
+        {"type": "TYPE_CALL", "direction": "outbound",
+         "dateAdded": "2026-08-16T19:00:00Z", "call_status": "no-answer"},
+        # missed but before the window
+        {"type": "TYPE_CALL", "direction": "inbound",
+         "dateAdded": "2026-07-01T17:00:00Z", "call_status": "missed"},
+        # not a call
+        {"type": "TYPE_SMS", "direction": "inbound",
+         "dateAdded": "2026-08-16T17:30:00Z", "call_status": None},
+    ]
+    missed = metrics.missed_calls_in_window(convo, messages, start, end)
+    assert len(missed) == 1
+    assert missed[0]["conversation_id"] == "cv1"
+    assert missed[0]["status"] == "no-answer"
+
+
 # -- invoices -----------------------------------------------------------------
 
 def test_past_due_invoices_status_and_amount_fallback():

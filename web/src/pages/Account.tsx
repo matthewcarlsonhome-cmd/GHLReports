@@ -15,6 +15,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { AfterHoursHeatmap } from "../components/Heatmap";
 import {
   DetailTable,
   EmptyState,
@@ -25,6 +26,7 @@ import {
   Skeleton,
   StatTile,
 } from "../components/ui";
+import { buildClientSummary } from "../lib/clientSummary";
 import type {
   AccountNoteRow,
   FlagAckRow,
@@ -117,6 +119,7 @@ export default function Account() {
   const [ackError, setAckError] = useState<string | null>(null);
   const [noteBody, setNoteBody] = useState("");
   const [noteError, setNoteError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     if (!locationId) return;
@@ -439,6 +442,8 @@ export default function Account() {
           <StatTile label="Convos waiting" value={fmtNum(snapshot.convos_waiting)}
                     context={(snapshot.convos_waiting ?? 0) > 0 ? `longest ${fmtHours(snapshot.convos_waiting_max_hours)}` : undefined}
                     tone={(snapshot.convos_waiting_max_hours ?? 0) >= 24 ? "bad" : undefined} />
+          <StatTile label="Missed calls 7d" value={fmtNum(snapshot.calls_missed_7d)}
+                    tone={(snapshot.calls_missed_7d ?? 0) > 0 ? "bad" : undefined} />
           <StatTile label="Open pipeline" value={fmtMoney(snapshot.opps_open_value)}
                     context={`${fmtNum(snapshot.opps_open)} open`} />
           <StatTile label="Stale value (14d+)" value={fmtMoney(snapshot.opps_stale_value)}
@@ -539,6 +544,12 @@ export default function Account() {
         </div>
       ) : null}
 
+      {leadEvents.length > 0 ? (
+        <Section title="After-hours arrivals vs response">
+          <AfterHoursHeatmap events={leadEvents} timeZone={sub.timezone || "America/Chicago"} />
+        </Section>
+      ) : null}
+
       {histogram.some((bin) => bin.count > 0) ? (
         <Section title={`${speedLabel} — distribution, last 30 days`}>
           <div className="rounded border border-grid bg-surface p-3">
@@ -576,6 +587,17 @@ export default function Account() {
                 { header: "Lead", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> },
                 { header: "Source", cell: (r) => r.source ?? "—" },
                 { header: "Created", cell: (r) => fmtDateTime(r.created_at) },
+              ]} />
+          </Collapsible>
+
+          <Collapsible title={`Missed calls (${details.missed_calls?.length ?? 0})`}
+                       defaultOpen={(snapshot?.calls_missed_7d ?? 0) > 0}>
+            <DetailTable rows={details.missed_calls ?? []}
+              empty="No unanswered inbound calls in the window (or this snapshot predates the missed-calls metric)."
+              columns={[
+                { header: "Contact", cell: (r) => <ExternalLink href={r.deep_link}>{r.contact}</ExternalLink> },
+                { header: "When", cell: (r) => fmtDateTime(r.at) },
+                { header: "Call status", cell: (r) => r.status },
               ]} />
           </Collapsible>
 
@@ -715,6 +737,34 @@ export default function Account() {
             </pre>
           </div>
         </Collapsible>
+      ) : null}
+
+      {/* copy-ready weekly client summary (Tier 2): template fill, no LLM */}
+      {snapshot && !noData ? (
+        <Section
+          title="Weekly client summary (copy-ready)"
+          right={
+            <button
+              onClick={() => {
+                void navigator.clipboard.writeText(buildClientSummary(sub, snapshot)).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                });
+              }}
+              className="rounded border border-grid px-2 py-1 text-xxs text-ink-2 hover:bg-plane"
+            >
+              {copied ? "Copied ✓" : "Copy"}
+            </button>
+          }
+        >
+          <pre className="whitespace-pre-wrap rounded border border-grid bg-surface p-3 font-sans text-xs text-ink-2">
+            {buildClientSummary(sub, snapshot)}
+          </pre>
+          <p className="mt-1 text-xxs text-muted">
+            Client-facing wording, filled from this snapshot only — lines with unknown data are omitted.
+            Paste into your weekly email and edit freely.
+          </p>
+        </Section>
       ) : null}
 
       {/* 9. notes — append-only */}

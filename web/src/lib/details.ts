@@ -103,5 +103,13 @@ export type Details = {
     kind: "human" | "automation" | "unknown" | null;
   }[];
   changed: { new: string[]; resolved: string[] }; // flag codes
+  missed_calls?: {
+    conversation_id: string | null;
+    contact_id: string | null;
+    contact: string;
+    at: string | null;
+    status: string;
+    deep_link: string;
+  }[]; // Tier 2 — absent on snapshots collected before it shipped
   ghl_dashboard_url: string; // deep link to the native GHL dashboard for ads
 };

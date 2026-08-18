@@ -38,5 +38,40 @@
         }
       ]
     }
+  },
+  "conv_call": {
+    "messages": {
+      "lastMessageId": null,
+      "nextPage": false,
+      "messages": [
+        {
+          "id": "mc1",
+          "direction": "inbound",
+          "dateAdded": "2026-08-16T17:00:00Z",
+          "type": "TYPE_CALL",
+          "body": "PII_BODY_DO_NOT_STORE",
+          "meta": {
+            "call": {
+              "status": "no-answer",
+              "duration": 0
+            }
+          }
+        },
+        {
+          "id": "mc2",
+          "direction": "outbound",
+          "dateAdded": "2026-08-16T18:00:00Z",
+          "type": "TYPE_CALL",
+          "userId": "u1",
+          "body": "PII_BODY_DO_NOT_STORE",
+          "meta": {
+            "call": {
+              "status": "completed",
+              "duration": 240
+            }
+          }
+        }
+      ]
+    }
   }
 }

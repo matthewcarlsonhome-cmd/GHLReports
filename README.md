@@ -271,6 +271,8 @@ python -m collector.main --dry-run --location pilot1   # fetch + compute, write 
 # operations
 python -m collector.main                   # full daily run (what the cron does)
 python -m collector.main --backfill 12     # (re)build lead_history charts
+python -m collector.main --digest --dry-run  # preview the per-AM digest emails
+python -m collector.main --digest          # send them now (needs RESEND_API_KEY + DIGEST_FROM)
 python -m collector.tools.pit status       # token health; flags >80-day-old tokens
 
 # tests

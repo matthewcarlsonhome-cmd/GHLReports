@@ -20,3 +20,8 @@ services:
       - key: TZ
         value: America/Chicago
       # That is the complete secret set. PITs are in Supabase Vault, not here.
+      # Optional Tier 2 — Monday digest email per AM (leave unset to skip digests):
+      # - key: RESEND_API_KEY
+      #   sync: false
+      # - key: DIGEST_FROM
+      #   value: health@smallscreenproducer.com

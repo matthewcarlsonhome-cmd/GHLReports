@@ -185,6 +185,26 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
   `frame-ancestors` CSP for GHL hosts, no `X-Frame-Options`.
 - **GHL**: Custom Menu Link embeds the portfolio (spec section 10).
 
+## Tier 2 features (shipped on request, 2026-08-18)
+
+- **Missed inbound calls** — the recent-conversation scan pulls messages for
+  call conversations (cap 30/location, noted in coverage) and counts inbound
+  `TYPE_CALL` messages whose `meta.call.status` says nobody answered
+  (vocabulary is VERIFY). Snapshot column `calls_missed_7d`
+  (migration `0002`), a drilldown tile + table, and a portfolio column.
+- **After-hours heatmap** — pure UI on `lead_events`: 7×24 grid in the
+  account's timezone, sequential single-hue ramp, toggle between arrival
+  counts and median first response, business hours outlined.
+- **Monday digest** — `collector/digest.py` builds one plain-text email per
+  AM (attention list with actions and MRR, changed-this-week, steady/no-data
+  rollups; acked flags excluded; recipients restricted to
+  `@smallscreenproducer.com`) and sends via Resend at the end of every
+  Monday run when `RESEND_API_KEY` + `DIGEST_FROM` are set. On demand:
+  `python -m collector.main --digest` (`--dry-run` prints instead).
+- **Copy-ready weekly client summary** — deterministic template fill in the
+  drilldown (`web/src/lib/clientSummary.ts`): client-facing wording, unknown
+  lines omitted, no flag/risk language, one-click copy.
+
 ## Deviations from the spec
 
 Logged in detail in `VERIFICATION.md`; the headlines:

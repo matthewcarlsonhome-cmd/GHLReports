@@ -218,6 +218,19 @@ class FakeStore:
             row["flags_resolved"] = flags_resolved
             row["details"] = details
 
+    def read_portfolio(self, snapshot_date):
+        iso = snapshot_date.isoformat()
+        snaps = {loc: {"location_id": loc, "gate_passed": row["gate_passed"],
+                       "flags_new": row.get("flags_new", []),
+                       "flags_resolved": row.get("flags_resolved", [])}
+                 for (loc, day), row in self.snapshots.items() if day == iso}
+        flags_by_loc = {}
+        for (loc, day), flag_list in self.flags.items():
+            if day == iso:
+                flags_by_loc[loc] = [dict(f) for f in flag_list]
+        return {"subs": [dict(s) for s in self.subs], "snapshots_by_loc": snaps,
+                "flags_by_loc": flags_by_loc, "acked_by_loc": {}}
+
     def todays_snapshots(self, snapshot_date):
         return [
             {"location_id": row["location_id"], "snapshot_date": key[1],

@@ -34,6 +34,7 @@ wrong field name costs a column, not the night's data.
 | `POST /social-media-posting/{loc}/posts/list` | `results.posts[]` or flat `posts[]`; `publishedAt`→`createdAt` fallback | UNVERIFIED |
 | `GET /social-media-posting/{loc}/accounts` | `results.accounts[]`; expired detection: `isExpired` → `expired` → `status in {expired, disconnected, invalid}` | UNVERIFIED — the disconnected/expired field name is the whole signal |
 | `GET /contacts/{id}/tasks` | `tasks[]` (fallback only) | UNVERIFIED |
+| Missed calls (Tier 2) | message-level `TYPE_CALL` with `meta.call.status` (fallback `meta.callStatus`); missed vocabulary assumed `no-answer / noanswer / no_answer / missed / busy / failed / voicemail` | UNVERIFIED — update `MISSED_CALL_STATUSES` in `collector/metrics.py` from probe output |
 
 Deep links (spec section 3): contact link is high-confidence; the
 conversation and opportunity URL shapes are VERIFY — both fall back to the
@@ -88,6 +89,7 @@ retry/backoff and halves on repeated 429 — verify against live
       `appointmentStatus` values (update SHOWED/NOSHOW sets in metrics.py)?
 - [ ] blog / social envelope keys as parsed?
 - [ ] social accounts expired/disconnected field name?
+- [ ] call messages: `meta.call.status` present, and which values mean "nobody answered"?
 - [ ] deep links: conversation and opportunity URL shapes open the right records?
 - [ ] no token, phone, email, or message body anywhere in probe output?
 
