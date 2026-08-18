@@ -1,0 +1,22 @@
+services:
+  - type: cron
+    name: ghl-health-collector
+    runtime: python
+    plan: starter
+    schedule: "30 10 * * *"        # 05:30 America/Chicago during CDT; revisit in November
+    buildCommand: pip install -r collector/requirements.txt
+    startCommand: python -m collector.main
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: COLLECTOR_KEY
+        sync: false
+      - key: GHL_APP_BASE
+        value: https://crm.smallscreenproducer.com
+      - key: TZ
+        value: America/Chicago
+      # That is the complete secret set. PITs are in Supabase Vault, not here.

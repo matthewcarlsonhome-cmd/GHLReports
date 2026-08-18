@@ -1,5 +1,7 @@
-"""PIT management CLI (spec 8.5). The token is prompted with getpass — never
-passed as a command-line argument, never echoed, never logged.
+"""Optional PIT management CLI (spec 8.4: the Supabase Vault UI is the
+primary path for loading tokens; this wraps the same RPCs for anyone who
+prefers a terminal). The token is prompted with getpass — never passed as a
+command-line argument, never echoed, never logged.
 
     python -m collector.tools.pit set    --location <id|slug>
     python -m collector.tools.pit rotate --location <id|slug>

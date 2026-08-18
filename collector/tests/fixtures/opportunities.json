@@ -17,7 +17,9 @@
       "contact": {
         "id": "cx1",
         "name": "Stale Contact",
-        "tags": []
+        "tags": [],
+        "email": "opp-contact@example-client.com",
+        "phone": "+16085558888"
       },
       "tasks": [],
       "calendarEvents": []
@@ -39,7 +41,9 @@
       "contact": {
         "id": "cx2",
         "name": "Fresh Contact",
-        "tags": []
+        "tags": [],
+        "email": "opp-contact@example-client.com",
+        "phone": "+16085558888"
       },
       "tasks": [
         {
@@ -67,7 +71,9 @@
         "name": "Winner",
         "tags": [
           "customer"
-        ]
+        ],
+        "email": "opp-contact@example-client.com",
+        "phone": "+16085558888"
       },
       "tasks": [],
       "calendarEvents": []
@@ -87,7 +93,9 @@
       "contact": {
         "id": "cx4",
         "name": "Loser",
-        "tags": []
+        "tags": [],
+        "email": "opp-contact@example-client.com",
+        "phone": "+16085558888"
       },
       "tasks": [],
       "calendarEvents": []

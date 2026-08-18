@@ -8,7 +8,8 @@
           "id": "m1",
           "direction": "inbound",
           "dateAdded": "2026-08-16T10:05:00Z",
-          "type": "TYPE_SMS"
+          "type": "TYPE_SMS",
+          "body": "PII_BODY_DO_NOT_STORE secret message text"
         },
         {
           "id": "m2",
@@ -16,7 +17,8 @@
           "dateAdded": "2026-08-16T10:30:00Z",
           "type": "TYPE_SMS",
           "userId": "u1",
-          "source": "app"
+          "source": "app",
+          "body": "PII_BODY_DO_NOT_STORE secret message text"
         }
       ]
     }
@@ -31,7 +33,8 @@
           "direction": "outbound",
           "dateAdded": "2026-08-16T13:00:00Z",
           "type": "TYPE_EMAIL",
-          "source": "workflow"
+          "source": "workflow",
+          "body": "PII_BODY_DO_NOT_STORE secret message text"
         }
       ]
     }

@@ -1,0 +1,13 @@
+{
+  "contacts": [
+    {
+      "id": "b0",
+      "firstName": "First",
+      "lastName": "Ever",
+      "source": "web",
+      "dateAdded": "2025-01-15T12:00:00Z",
+      "dateUpdated": "2025-01-15T12:00:00Z"
+    }
+  ],
+  "total": 1
+}

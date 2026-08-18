@@ -6,7 +6,8 @@
       "contactName": "Pilot One Pools",
       "lastMessageDate": 1786363200000,
       "lastMessageDirection": "outbound",
-      "lastMessageType": "TYPE_EMAIL"
+      "lastMessageType": "TYPE_EMAIL",
+      "lastMessageBody": "PII_BODY_DO_NOT_STORE call me at +16085559999"
     }
   ]
 }

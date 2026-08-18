@@ -1,5 +1,5 @@
-"""Pure metric functions for spec section 4. No I/O, no network, no clock reads:
-"now" is always passed in so runs and tests are reproducible.
+"""Pure metric functions for spec section 4 (v3). No I/O, no network, no clock
+reads: "now" is always passed in so runs and tests are reproducible.
 
 All timestamps are parsed to timezone-aware UTC datetimes; window math happens
 in the location's local timezone. Missing data yields None (rendered "Unknown"
@@ -21,9 +21,8 @@ REVIEW_TAG = "review-request"
 HUMAN_SOURCES = {"app", "manual", "user"}
 AUTOMATION_SOURCES = {"workflow", "campaign", "bulk_actions", "api"}
 
-STALE_IDLE_DAYS = 14
-STUCK_STAGE_DAYS = 30
-WAITING_MIN_HOURS = 4.0
+SHOWED_STATUSES = {"showed"}
+NOSHOW_STATUSES = {"noshow", "no_show", "no-show"}
 
 
 # -- time parsing and windows -------------------------------------------
@@ -71,6 +70,15 @@ def window_7d(now_utc: datetime, tz: ZoneInfo) -> tuple[datetime, datetime]:
     return start, end
 
 
+def baseline_weeks(win_start: datetime) -> list[tuple[datetime, datetime]]:
+    """The four 7-day buckets of the baseline window [win_start-28d, win_start),
+    oldest first."""
+    return [
+        (win_start - timedelta(days=7 * (i + 1)), win_start - timedelta(days=7 * i))
+        for i in range(4)
+    ][::-1]
+
+
 def rolling_window(now_utc: datetime, tz: ZoneInfo, days: int) -> tuple[datetime, datetime]:
     """Start of the local day `days` ago through now (used for fetch ranges)."""
     local_now = now_utc.astimezone(tz)
@@ -80,6 +88,10 @@ def rolling_window(now_utc: datetime, tz: ZoneInfo, days: int) -> tuple[datetime
 
 def in_window(ts: datetime | None, start: datetime, end: datetime) -> bool:
     return ts is not None and start <= ts <= end
+
+
+def iso_week_start(day: date) -> date:
+    return day - timedelta(days=day.weekday())
 
 
 # -- exclusions ----------------------------------------------------------
@@ -126,7 +138,7 @@ def percentile(values: list[float], pct: float) -> float | None:
     return float(vals[rank - 1])
 
 
-# -- leads ---------------------------------------------------------------
+# -- leads, sources, and the live baseline --------------------------------
 
 
 def contact_name(contact: dict) -> str:
@@ -134,8 +146,63 @@ def contact_name(contact: dict) -> str:
     return name or contact.get("companyName") or contact.get("name") or "(no name)"
 
 
-def leads_new_in_window(contacts: list[dict], start: datetime, end: datetime) -> list[dict]:
+def contact_source(contact: dict) -> str:
+    source = contact.get("source")
+    if source:
+        return str(source)
+    attribution = contact.get("attributionSource") or {}
+    if isinstance(attribution, dict):
+        alt = attribution.get("sessionSource") or attribution.get("utmSource")
+        if alt:
+            return str(alt)
+    return "unknown"
+
+
+def leads_in_window(contacts: list[dict], start: datetime, end: datetime) -> list[dict]:
     return [c for c in contacts if in_window(parse_ts(c.get("dateAdded")), start, end)]
+
+
+def leads_by_source(contacts: list[dict]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for contact in contacts:
+        source = contact_source(contact)
+        out[source] = out.get(source, 0) + 1
+    return out
+
+
+def baseline_stats(contacts: list[dict], win_start: datetime,
+                   earliest_added: datetime | None) -> dict:
+    """Live baseline from CRM history (spec 4.1): the 28 days before the 7d
+    window, bucketed into four weeks. A week counts toward trailing_n only if
+    the account existed during it (earliest contact before the week's end);
+    with no earliest date the account is assumed older than the baseline."""
+    weeks = baseline_weeks(win_start)
+    weekly_counts: list[int] = []
+    weekly_sources: list[dict[str, int]] = []
+    trailing_n = 0
+    for week_start, week_end in weeks:
+        countable = earliest_added is None or earliest_added < week_end
+        bucket = [c for c in contacts
+                  if in_window(parse_ts(c.get("dateAdded")), week_start, week_end - timedelta(seconds=1))]
+        if countable:
+            trailing_n += 1
+            weekly_counts.append(len(bucket))
+            weekly_sources.append(leads_by_source(bucket))
+    trailing_avg = (sum(weekly_counts) / len(weekly_counts)) if trailing_n >= 2 else None
+
+    source_totals: dict[str, float] = {}
+    for bucket_sources in weekly_sources:
+        for source, count in bucket_sources.items():
+            source_totals[source] = source_totals.get(source, 0) + count
+    source_weekly_avg = (
+        {source: round(total / trailing_n, 2) for source, total in source_totals.items()}
+        if trailing_n >= 2 else {}
+    )
+    return {
+        "leads_trailing_avg": round(trailing_avg, 2) if trailing_avg is not None else None,
+        "trailing_n": trailing_n,
+        "leads_by_source_trailing": source_weekly_avg,
+    }
 
 
 def leads_delta_pct(leads_new_7d: int, trailing_avg: float | None) -> float | None:
@@ -144,12 +211,34 @@ def leads_delta_pct(leads_new_7d: int, trailing_avg: float | None) -> float | No
     return round((leads_new_7d - trailing_avg) / trailing_avg * 100.0, 1)
 
 
-def trailing_stats(values: list[int]) -> tuple[float | None, int]:
-    """Mean of the four weekly snapshots; null until all four exist."""
-    n = len(values)
-    if n < 4:
-        return None, n
-    return sum(values[:4]) / 4.0, 4
+def leads_unassigned(contacts_7d: list[dict]) -> list[dict]:
+    return [c for c in contacts_7d if not c.get("assignedTo")]
+
+
+def missing_phone_pct(contacts_7d: list[dict]) -> float | None:
+    if len(contacts_7d) < 5:
+        return None
+    missing = sum(1 for c in contacts_7d if not c.get("has_phone"))
+    return round(missing / len(contacts_7d) * 100.0, 1)
+
+
+def form_submission_stats(submissions: list[dict] | None, win_start: datetime,
+                          win_end: datetime, trailing_n: int) -> dict:
+    """7d count and baseline weekly average from a single fetch covering both
+    windows. None submissions = source unavailable = both metrics null."""
+    if submissions is None:
+        return {"form_submissions_7d": None, "form_submissions_trailing_avg": None}
+    current = sum(1 for s in submissions
+                  if in_window(parse_ts(s.get("createdAt")), win_start, win_end))
+    weeks = baseline_weeks(win_start)
+    weekly = [
+        sum(1 for s in submissions
+            if in_window(parse_ts(s.get("createdAt")), week_start, week_end - timedelta(seconds=1)))
+        for week_start, week_end in weeks
+    ]
+    usable = weekly[-trailing_n:] if trailing_n else []
+    avg = round(sum(usable) / len(usable), 2) if len(usable) >= 2 else None
+    return {"form_submissions_7d": current, "form_submissions_trailing_avg": avg}
 
 
 def peer_median(deltas: list[float]) -> tuple[float | None, int]:
@@ -178,7 +267,8 @@ def _is_outbound(message: dict) -> bool:
 
 
 def lead_event(contact: dict, messages: list[dict]) -> dict:
-    """First-touch record for one contact across all its conversations' messages."""
+    """First-touch record for one contact across all its conversations' messages.
+    Names, IDs, and timestamps only — never phone, email, or message text."""
     created = parse_ts(contact.get("dateAdded"))
     outbound = [(parse_ts(m.get("dateAdded")), m) for m in messages if _is_outbound(m)]
     outbound = [(ts, m) for ts, m in outbound if ts is not None]
@@ -195,9 +285,9 @@ def lead_event(contact: dict, messages: list[dict]) -> dict:
         return round((ts - created).total_seconds() / 60.0, 1)
 
     return {
-        "contact_id": contact.get("id") or contact.get("_id"),
+        "contact_id": contact.get("id"),
         "contact_name": contact_name(contact),
-        "source": contact.get("source"),
+        "source": contact_source(contact),
         "created_at": created,
         "first_outbound_at": first_outbound_at,
         "first_outbound_kind": first_outbound_kind,
@@ -265,8 +355,8 @@ def waiting_hours(last_inbound_utc: datetime, now_utc: datetime, tz: ZoneInfo) -
 
 
 def waiting_conversations(conversations: list[dict], now_utc: datetime, tz: ZoneInfo,
-                          since_utc: datetime) -> list[dict]:
-    """Conversations whose last message is inbound and has waited >= 4h."""
+                          since_utc: datetime, min_hours: float = 4.0) -> list[dict]:
+    """Conversations whose last message is inbound and has waited >= min_hours."""
     out = []
     for convo in conversations:
         direction = str(convo.get("lastMessageDirection") or "").strip().lower()
@@ -276,12 +366,12 @@ def waiting_conversations(conversations: list[dict], now_utc: datetime, tz: Zone
         if last is None or last < since_utc:
             continue
         hours = waiting_hours(last, now_utc, tz)
-        if hours < WAITING_MIN_HOURS:
+        if hours < min_hours:
             continue
         out.append({
-            "conversation_id": convo.get("id") or convo.get("_id"),
+            "conversation_id": convo.get("id"),
             "contact_id": convo.get("contactId"),
-            "contact": convo.get("contactName") or convo.get("fullName") or "(no name)",
+            "contact": convo.get("contactName") or "(no name)",
             "channel": convo.get("lastMessageType") or convo.get("type"),
             "hours": hours,
             "last_inbound_at": last,
@@ -332,9 +422,10 @@ def opp_next_step(opp: dict, now_utc: datetime, feature_available: bool) -> str:
 
 
 def pipeline_metrics(opps: list[dict], now_utc: datetime,
-                     win_start: datetime, win_end: datetime) -> dict:
+                     win_start: datetime, win_end: datetime,
+                     stale_days: float = 14.0, stuck_days: float = 30.0) -> dict:
     open_opps = [o for o in opps if str(o.get("status") or "").lower() == "open"]
-    feature_available = any(("tasks" in o) or ("calendarEvents" in o) for o in opps)
+    feature_available = any(o.get("_has_task_keys") for o in opps)
 
     stale, stale_value = [], 0.0
     stuck = 0
@@ -355,12 +446,12 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
         stage_days = opp_days_in_stage(opp, now_utc)
         next_step = opp_next_step(opp, now_utc, feature_available)
 
-        is_stale = idle_days is not None and idle_days >= STALE_IDLE_DAYS
+        is_stale = idle_days is not None and idle_days >= stale_days
         if is_stale:
             stale.append(opp)
             if numeric_value:
                 stale_value += numeric_value
-        if stage_days is not None and stage_days >= STUCK_STAGE_DAYS:
+        if stage_days is not None and stage_days >= stuck_days:
             stuck += 1
         if feature_available and next_step == "none":
             no_next_step += 1
@@ -375,26 +466,31 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
             "is_stale": is_stale,
         })
 
-    won_7d = sum(
-        1 for o in opps
-        if str(o.get("status") or "").lower() == "won"
-        and in_window(parse_ts(o.get("lastStatusChangeAt")), win_start, win_end)
-    )
-    lost_7d = sum(
-        1 for o in opps
-        if str(o.get("status") or "").lower() == "lost"
-        and in_window(parse_ts(o.get("lastStatusChangeAt")), win_start, win_end)
-    )
+    def closed_in(status: str, start: datetime, end: datetime) -> list[dict]:
+        return [o for o in opps
+                if str(o.get("status") or "").lower() == status
+                and in_window(parse_ts(o.get("lastStatusChangeAt")), start, end)]
+
+    won_7d = len(closed_in("won", win_start, win_end))
+    lost_7d = len(closed_in("lost", win_start, win_end))
 
     cutoff_90 = now_utc - timedelta(days=90)
+    won_90 = closed_in("won", cutoff_90, now_utc)
+    lost_90 = closed_in("lost", cutoff_90, now_utc)
+    win_rate = (round(len(won_90) / (len(won_90) + len(lost_90)) * 100.0, 1)
+                if len(won_90) + len(lost_90) >= 5 else None)
+
+    close_days = []
+    for opp in won_90:
+        created = parse_ts(opp.get("createdAt"))
+        closed = parse_ts(opp.get("lastStatusChangeAt"))
+        if created is not None and closed is not None and closed >= created:
+            close_days.append((closed - created).total_seconds() / 86400.0)
+    median_close = round(median(close_days), 1) if close_days else None
+
     lost_reasons: dict[str, int] = {}
-    for o in opps:
-        if str(o.get("status") or "").lower() != "lost":
-            continue
-        changed = parse_ts(o.get("lastStatusChangeAt"))
-        if changed is None or changed < cutoff_90:
-            continue
-        reason = str(o.get("lostReasonId") or "unspecified")
+    for opp in lost_90:
+        reason = str(opp.get("lostReasonId") or "unspecified")
         lost_reasons[reason] = lost_reasons.get(reason, 0) + 1
 
     created_7d = sum(1 for o in opps if in_window(parse_ts(o.get("createdAt")), win_start, win_end))
@@ -410,9 +506,64 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
         "opps_won_7d": won_7d,
         "opps_lost_7d": lost_7d,
         "opps_created_7d": created_7d,
+        "win_rate_90d": win_rate,
+        "median_days_to_close_90d": median_close,
         "lost_reasons_90d": lost_reasons,
         "next_step_available": feature_available,
         "per_opp": per_opp,
+    }
+
+
+def lead_to_opp_pct(contacts: list[dict], opps: list[dict], now_utc: datetime) -> float | None:
+    """Of contacts created 14 to 42 days ago, the percent with any opportunity
+    whose contact id matches and createdAt >= the contact's dateAdded."""
+    start = now_utc - timedelta(days=42)
+    end = now_utc - timedelta(days=14)
+    cohort = {}
+    for contact in contacts:
+        added = parse_ts(contact.get("dateAdded"))
+        if added is not None and start <= added <= end and contact.get("id"):
+            cohort[str(contact["id"])] = added
+    if len(cohort) < 5:
+        return None
+    converted = set()
+    for opp in opps:
+        contact_id = str((opp.get("contact") or {}).get("id") or "")
+        if contact_id not in cohort:
+            continue
+        created = parse_ts(opp.get("createdAt"))
+        if created is not None and created >= cohort[contact_id]:
+            converted.add(contact_id)
+    return round(len(converted) / len(cohort) * 100.0, 1)
+
+
+# -- appointments ----------------------------------------------------------
+
+
+def appointment_metrics(events: list[dict], now_utc: datetime,
+                        win_start: datetime, win_end: datetime) -> dict:
+    """From client-calendar events fetched [-28d, +7d]. Booked = created field
+    in the 7d window (VERIFY dateAdded vs createdAt); showed/no-show by
+    appointmentStatus on events that started in the last 28 days."""
+    booked_7d = sum(1 for e in events
+                    if in_window(parse_ts(e.get("dateAdded")), win_start, win_end))
+    cutoff_28 = now_utc - timedelta(days=28)
+    showed = noshow = 0
+    for event in events:
+        start = parse_ts(event.get("startTime"))
+        if start is None or not (cutoff_28 <= start <= now_utc):
+            continue
+        status = str(event.get("appointmentStatus") or "").strip().lower()
+        if status in SHOWED_STATUSES:
+            showed += 1
+        elif status in NOSHOW_STATUSES:
+            noshow += 1
+    rate = round(noshow / (showed + noshow) * 100.0, 1) if showed + noshow >= 5 else None
+    return {
+        "appts_booked_7d": booked_7d,
+        "appts_showed_28d": showed,
+        "appts_noshow_28d": noshow,
+        "noshow_rate_28d": rate,
     }
 
 
@@ -467,6 +618,13 @@ def delivery_metrics(blog_posts: list[dict], social_posts: list[dict],
         "recent_publishes": recent,
         "no_publish_found": not all_stamps,
     }
+
+
+def social_account_stats(accounts: list[dict] | None) -> dict:
+    if accounts is None:
+        return {"social_accounts_total": None, "social_accounts_expired": None}
+    expired = sum(1 for a in accounts if a.get("expired"))
+    return {"social_accounts_total": len(accounts), "social_accounts_expired": expired}
 
 
 # -- relationship (from the SSP parent account) --------------------------
@@ -532,7 +690,7 @@ def relationship_metrics(client_invoices: list[dict], client_conversations: list
     }
 
 
-# -- review proxies ------------------------------------------------------
+# -- review proxies --------------------------------------------------------
 
 
 def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datetime) -> dict:
@@ -544,7 +702,7 @@ def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datet
         updated = parse_ts(contact.get("dateUpdated"))
         if updated is not None and updated <= cutoff_7:
             stale.append({
-                "contact_id": contact.get("id") or contact.get("_id"),
+                "contact_id": contact.get("id"),
                 "name": contact_name(contact),
                 "days_quiet": int((now_utc - updated).total_seconds() // 86400),
             })
@@ -560,7 +718,7 @@ def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datet
         tags = [str(t).strip().lower() for t in (contact.get("tags") or [])]
         if REVIEW_TAG not in tags:
             gap.append({
-                "opp_id": opp.get("id") or opp.get("_id"),
+                "opp_id": opp.get("id"),
                 "name": opp.get("name") or "(no name)",
                 "won_at": won_at.isoformat(),
                 "contact_id": contact.get("id"),
@@ -572,6 +730,14 @@ def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datet
         "stale_detail": stale,
         "gap_detail": gap,
     }
+
+
+# -- change tracking -------------------------------------------------------
+
+
+def flags_changed(today_codes: list[str], prior_codes: list[str]) -> tuple[list[str], list[str]]:
+    today_set, prior_set = set(today_codes), set(prior_codes)
+    return sorted(today_set - prior_set), sorted(prior_set - today_set)
 
 
 # -- gate ----------------------------------------------------------------
@@ -606,6 +772,40 @@ def gate_check(g1_ok: bool, coverage, leads_new_7d: int | None,
             reasons.append("G4: sudden all-zero read (leads, conversations, opportunities)")
 
     return (not reasons), reasons
+
+
+# -- lead history bucketing -------------------------------------------------
+
+
+def weekly_lead_history(contacts: list[dict], submissions: list[dict] | None,
+                        tz: ZoneInfo, weeks: list[date]) -> list[dict]:
+    """Bucket kept contacts (and form submissions when available) into ISO
+    weeks; `weeks` is a list of Monday dates to emit rows for."""
+    wanted = set(weeks)
+    lead_buckets: dict[date, list[dict]] = {w: [] for w in wanted}
+    for contact in contacts:
+        added = parse_ts(contact.get("dateAdded"))
+        if added is None:
+            continue
+        week = iso_week_start(added.astimezone(tz).date())
+        if week in wanted:
+            lead_buckets[week].append(contact)
+    form_counts: dict[date, int] | None = None
+    if submissions is not None:
+        form_counts = {w: 0 for w in wanted}
+        for submission in submissions:
+            created = parse_ts(submission.get("createdAt"))
+            if created is None:
+                continue
+            week = iso_week_start(created.astimezone(tz).date())
+            if week in wanted:
+                form_counts[week] += 1
+    return [{
+        "week_start": week.isoformat(),
+        "leads": len(lead_buckets[week]),
+        "leads_by_source": leads_by_source(lead_buckets[week]),
+        "form_submissions": form_counts[week] if form_counts is not None else None,
+    } for week in sorted(wanted)]
 
 
 # -- deep links ----------------------------------------------------------

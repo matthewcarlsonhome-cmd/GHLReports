@@ -7,7 +7,8 @@
       "lastMessageDate": 1787029200000,
       "lastMessageDirection": "inbound",
       "lastMessageType": "TYPE_SMS",
-      "unreadCount": 1
+      "unreadCount": 1,
+      "lastMessageBody": "PII_BODY_DO_NOT_STORE call me at +16085559999"
     },
     {
       "id": "w2",
@@ -16,7 +17,8 @@
       "lastMessageDate": 1786881600000,
       "lastMessageDirection": "outbound",
       "lastMessageType": "TYPE_EMAIL",
-      "unreadCount": 0
+      "unreadCount": 0,
+      "lastMessageBody": "PII_BODY_DO_NOT_STORE call me at +16085559999"
     },
     {
       "id": "w3",
@@ -25,7 +27,8 @@
       "lastMessageDate": 1786750200000,
       "lastMessageDirection": "inbound",
       "lastMessageType": "TYPE_SMS",
-      "unreadCount": 2
+      "unreadCount": 2,
+      "lastMessageBody": "PII_BODY_DO_NOT_STORE call me at +16085559999"
     }
   ],
   "total": 3

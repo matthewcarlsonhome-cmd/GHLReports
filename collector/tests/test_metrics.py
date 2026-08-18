@@ -143,9 +143,33 @@ def test_median_and_percentile():
     assert metrics.percentile(list(map(float, range(1, 11))), 90) == 9.0
 
 
-def test_trailing_and_delta():
-    assert metrics.trailing_stats([10, 8, 9, 13]) == (10.0, 4)
-    assert metrics.trailing_stats([10, 8]) == (None, 2)
+def test_baseline_stats_live_from_history():
+    win_start, _ = metrics.window_7d(NOW, CT)
+    # 2/3/4/5 leads across the four baseline weeks -> avg 3.5
+    contacts = []
+    for week_index, count in enumerate((2, 3, 4, 5)):
+        week_start = win_start - metrics.timedelta(days=7 * (4 - week_index))
+        for i in range(count):
+            contacts.append({"id": f"x{week_index}-{i}", "source": "web",
+                             "dateAdded": (week_start + metrics.timedelta(hours=i)).isoformat()})
+    stats = metrics.baseline_stats(contacts, win_start, earliest_added=None)
+    assert stats["trailing_n"] == 4
+    assert stats["leads_trailing_avg"] == 3.5
+    assert stats["leads_by_source_trailing"] == {"web": 3.5}
+
+    # account born mid-baseline: only the weeks it existed count
+    born = win_start - metrics.timedelta(days=10)
+    stats = metrics.baseline_stats(contacts, win_start, earliest_added=born)
+    assert stats["trailing_n"] == 2
+
+    # a single countable week is not enough for a baseline
+    born_late = win_start - metrics.timedelta(days=3)
+    stats = metrics.baseline_stats(contacts, win_start, earliest_added=born_late)
+    assert stats["trailing_n"] == 1
+    assert stats["leads_trailing_avg"] is None
+
+
+def test_delta():
     assert metrics.leads_delta_pct(4, 10.0) == -60.0
     assert metrics.leads_delta_pct(4, None) is None
     assert metrics.leads_delta_pct(4, 2.0) is None  # trailing < 3 -> null
@@ -167,7 +191,7 @@ def test_pipeline_idle_source_field_and_stale_stuck():
         "lastActionDate": "2026-07-20T12:00:00Z",
         "lastStatusChangeAt": "2026-07-01T12:00:00Z",
         "lastStageChangeAt": "2026-07-01T12:00:00Z",
-        "tasks": [], "calendarEvents": [],
+        "tasks": [], "calendarEvents": [], "_has_task_keys": True,
     }]
     pipe = metrics.pipeline_metrics(opps, NOW, start, end)
     assert pipe["opps_stale"] == 1
@@ -180,11 +204,54 @@ def test_pipeline_idle_source_field_and_stale_stuck():
 def test_pipeline_next_step_unavailable_when_keys_missing():
     start, end = metrics.window_7d(NOW, CT)
     opps = [{"id": "o1", "status": "open", "monetaryValue": None,
-             "updatedAt": "2026-08-17T12:00:00Z"}]
+             "updatedAt": "2026-08-17T12:00:00Z", "_has_task_keys": False}]
     pipe = metrics.pipeline_metrics(opps, NOW, start, end)
     assert pipe["next_step_available"] is False
     assert pipe["opps_no_next_step"] is None
     assert pipe["opps_missing_value"] == 1
+
+
+def test_pipeline_stale_threshold_is_overridable():
+    start, end = metrics.window_7d(NOW, CT)
+    opps = [{"id": "o1", "status": "open", "monetaryValue": 100,
+             "lastActionDate": "2026-08-01T12:00:00Z", "_has_task_keys": True,
+             "tasks": [], "calendarEvents": []}]  # ~17 days idle
+    default = metrics.pipeline_metrics(opps, NOW, start, end)
+    relaxed = metrics.pipeline_metrics(opps, NOW, start, end, stale_days=21)
+    assert default["opps_stale"] == 1
+    assert relaxed["opps_stale"] == 0
+
+
+def test_lead_to_opp_cohort():
+    cohort_added = (NOW - metrics.timedelta(days=20)).isoformat()
+    contacts = [{"id": f"c{i}", "dateAdded": cohort_added} for i in range(6)]
+    opps = [{"id": "o1", "status": "open", "createdAt": (NOW - metrics.timedelta(days=10)).isoformat(),
+             "contact": {"id": "c0"}, "_has_task_keys": False}]
+    assert metrics.lead_to_opp_pct(contacts, opps, NOW) == round(1 / 6 * 100, 1)
+    # cohort below 5 -> null
+    assert metrics.lead_to_opp_pct(contacts[:3], opps, NOW) is None
+
+
+def test_appointment_metrics_statuses_and_booked_window():
+    start, end = metrics.window_7d(NOW, CT)
+    events = [
+        {"id": "e1", "startTime": (NOW - metrics.timedelta(days=3)).isoformat(),
+         "appointmentStatus": "showed", "dateAdded": "2026-08-15T12:00:00Z"},
+        {"id": "e2", "startTime": (NOW - metrics.timedelta(days=5)).isoformat(),
+         "appointmentStatus": "noshow", "dateAdded": "2026-08-01T12:00:00Z"},
+        {"id": "e3", "startTime": (NOW + metrics.timedelta(days=2)).isoformat(),
+         "appointmentStatus": "confirmed", "dateAdded": "2026-08-16T12:00:00Z"},
+    ]
+    stats = metrics.appointment_metrics(events, NOW, start, end)
+    assert stats["appts_booked_7d"] == 2   # e1 + e3 created in the window
+    assert stats["appts_showed_28d"] == 1
+    assert stats["appts_noshow_28d"] == 1
+    assert stats["noshow_rate_28d"] is None  # denominator < 5
+
+
+def test_flags_changed():
+    new, resolved = metrics.flags_changed(["A", "B"], ["B", "C"])
+    assert new == ["A"] and resolved == ["C"]
 
 
 # -- invoices -----------------------------------------------------------------

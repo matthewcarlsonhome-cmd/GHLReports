@@ -1,11 +1,13 @@
-"""Collector entry point. Run sequence per spec section 7.2:
+"""Collector entry point. Run sequence per spec section 7.2 (v3):
 
-1. start run   2. load subaccounts   3. parent first (invoices, events, users)
-4. each client subaccount: fetch -> metrics -> snapshot + lead_events
-5. peer pass: vertical medians written back, then flags per location
-6. finish run. Exit 0 all ok, 2 any held or failed, 1 crash.
+1. start run + pit_key_ok   2. load subaccounts   3. parent first (invoices,
+events, users)   4. each client subaccount: fetch -> metrics -> snapshot +
+lead_events + lead_history   5. peer pass: vertical medians, then flags and
+flags_new/flags_resolved per location   6. finish run with per-location
+details. Exit 0 all ok, 2 any held or failed, 1 crash.
 
-CLI: --probe | --dry-run | --location <id|slug> | --max-pages N | --date YYYY-MM-DD
+CLI: --probe | --dry-run | --location <id|slug> | --max-pages N
+     | --date YYYY-MM-DD | --backfill N
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 
 from . import fetchers, flags as flags_mod, metrics
@@ -24,6 +27,8 @@ from .ghl_client import GHLClient, GHLAuthError, GHLError
 SPEED_CAP = 100
 DETAILS_CAP = 50
 TOKEN_ROTATION_WARN_DAYS = 80
+HISTORY_DAYS = 42       # one contacts fetch covers 7d window, 28d baseline, 14-42d cohort, 28d funnel
+CLOSED_OPP_DAYS = 90
 
 
 def log(message: str) -> None:
@@ -85,9 +90,11 @@ def build_parent_context(parent_sub: dict, client: GHLClient, now_utc: datetime,
 
 
 def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict,
-                  speed: dict, lead_events: list[dict], waiting: list[dict],
+                  by_source_7d: dict, funnel_28d: dict, speed: dict,
+                  lead_events: list[dict], unassigned: list[dict], waiting: list[dict],
                   pipe: dict, rel: dict | None, reviews: dict, events_next7: list[dict],
-                  delivery: dict, client_contact_id: str | None) -> dict:
+                  delivery: dict, social_accounts: list[dict] | None,
+                  client_contact_id: str | None) -> dict:
     def contact_link(contact_id):
         return metrics.link_contact(base, location_id, contact_id)
 
@@ -100,6 +107,14 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
         if e.get("created_at") else None,
         "deep_link": contact_link(e.get("contact_id")),
     } for e in speed.get("uncontacted_events", [])[:DETAILS_CAP]]
+
+    unassigned_rows = [{
+        "contact_id": c.get("id"),
+        "name": metrics.contact_name(c),
+        "source": metrics.contact_source(c),
+        "created_at": (metrics.parse_ts(c.get("dateAdded")) or speed["now_utc"]).isoformat(),
+        "deep_link": contact_link(c.get("id")),
+    } for c in unassigned[:DETAILS_CAP]]
 
     waiting_rows = [{
         "conversation_id": w.get("conversation_id"),
@@ -126,7 +141,7 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
         if not item["is_stale"]:
             continue
         opp = item["opp"]
-        opp_id = opp.get("id") or opp.get("_id")
+        opp_id = opp.get("id")
         owner_id = opp.get("assignedTo")
         stale_rows.append({
             "opp_id": opp_id,
@@ -146,17 +161,16 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
     stale_rows.sort(key=lambda r: (r["days_idle"] or 0), reverse=True)
 
     missing_value_rows = [{
-        "opp_id": item["opp"].get("id") or item["opp"].get("_id"),
+        "opp_id": item["opp"].get("id"),
         "name": item["opp"].get("name") or "(no name)",
-        "deep_link": metrics.link_opportunity(base, location_id,
-                                              item["opp"].get("id") or item["opp"].get("_id"),
+        "deep_link": metrics.link_opportunity(base, location_id, item["opp"].get("id"),
                                               (item["opp"].get("contact") or {}).get("id")),
     } for item in pipe.get("per_opp", []) if not item["value"]][:DETAILS_CAP]
 
     appts = [{
-        "id": ev.get("id") or ev.get("_id"),
+        "id": ev.get("id"),
         "title": ev.get("title") or "(no title)",
-        "start": (metrics.parse_ts(ev.get("startTime")) or datetime.now(timezone.utc)).isoformat(),
+        "start": (metrics.parse_ts(ev.get("startTime")) or speed["now_utc"]).isoformat(),
         "contact_id": ev.get("contactId"),
         "status": ev.get("appointmentStatus"),
     } for ev in events_next7[:DETAILS_CAP]]
@@ -173,7 +187,7 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
             "contact_id": client_contact_id,
             "last_touch_at": rel["client_last_touch_at"].isoformat() if rel.get("client_last_touch_at") else None,
             "next_appt_at": rel["client_next_appt_at"].isoformat() if rel.get("client_next_appt_at") else None,
-            "deep_link": metrics.link_contact(base, "PARENT", client_contact_id),
+            "deep_link": contact_link(client_contact_id),
         }
 
     speed_rows = [{
@@ -188,18 +202,23 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
     return {
         "users": umap,
         "pipelines": pipeline_map,
+        "leads_by_source": by_source_7d,
+        "funnel_28d": funnel_28d,
         "uncontacted_leads": uncontacted,
+        "unassigned_leads": unassigned_rows,
         "waiting_convos": waiting_rows,
         "stale_opps": stale_rows[:DETAILS_CAP],
         "missing_value_opps": missing_value_rows,
         "past_due_invoices": (rel or {}).get("past_due_detail", [])[:DETAILS_CAP],
         "appts_next_7d": appts,
         "recent_publishes": delivery.get("recent_publishes", [])[:DETAILS_CAP],
+        "social_accounts": (social_accounts or [])[:DETAILS_CAP],
         "review_asks_stale": review_stale_rows,
         "review_ask_gap": review_gap_rows,
         "client": client_block,
         "lost_reasons_90d": pipe.get("lost_reasons_90d", {}),
         "speed_to_lead": speed_rows,
+        "changed": {"new": [], "resolved": []},   # filled after the peer pass
         "ghl_dashboard_url": metrics.link_dashboard(base, location_id),
     }
 
@@ -212,6 +231,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     location_id = sub["location_id"]
     base = app_base()
     cov = Coverage()
+    thresholds = flags_mod.merged_thresholds(sub.get("thresholds"))
 
     # G1: identity — a 401/403 here means the token itself is bad.
     try:
@@ -233,7 +253,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     tz = metrics.get_tz((loc or {}).get("timezone") or sub.get("timezone"))
 
     win_start, win_end = metrics.window_7d(now_utc, tz)
-    fetch_start, fetch_end = metrics.rolling_window(now_utc, tz, 14)
+    history_start, history_end = metrics.rolling_window(now_utc, tz, HISTORY_DAYS)
 
     users = fetchers.fetch_users(client, cov, location_id)
     umap = fetchers.users_map(users)
@@ -249,29 +269,43 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                            for s in (p.get("stages") or []) if s.get("id") or s.get("_id")},
             }
 
-    opps = fetchers.fetch_opportunities(client, cov, location_id, max_pages=max_pages)
+    closed_cutoff_ms = int((now_utc - timedelta(days=CLOSED_OPP_DAYS)).timestamp() * 1000)
+    opps = fetchers.fetch_opportunities(client, cov, location_id, closed_cutoff_ms,
+                                        max_pages=max_pages)
 
-    since_ms = int(fetch_start.timestamp() * 1000)
-    convos = fetchers.fetch_recent_conversations(client, cov, location_id, since_ms,
+    since_14d = metrics.rolling_window(now_utc, tz, 14)[0]
+    convos = fetchers.fetch_recent_conversations(client, cov, location_id,
+                                                 int(since_14d.timestamp() * 1000),
                                                  max_pages=max_pages)
 
-    contacts_14d = fetchers.fetch_new_contacts(
+    # One contacts fetch covers every window (7d, baseline, cohort, funnel, speed)
+    contacts_all = fetchers.fetch_contacts_range(
         client, cov, location_id,
-        gte_iso=fetch_start.astimezone(timezone.utc).isoformat(),
-        lte_iso=fetch_end.astimezone(timezone.utc).isoformat(),
+        gte_iso=history_start.astimezone(timezone.utc).isoformat(),
+        lte_iso=history_end.astimezone(timezone.utc).isoformat(),
         max_pages=max_pages)
+    earliest_added = metrics.parse_ts(fetchers.fetch_earliest_contact_added(client, location_id))
 
     tagged = fetchers.fetch_tagged_contacts(client, cov, location_id, metrics.REVIEW_TAG,
                                             max_pages=max_pages)
 
+    submissions = fetchers.fetch_form_submissions(
+        client, cov, location_id,
+        start_date=history_start.astimezone(tz).date().isoformat(),
+        end_date=history_end.astimezone(tz).date().isoformat(),
+        max_pages=max_pages)
+
     calendars = fetchers.fetch_calendars(client, cov, location_id)
-    events_next7 = fetchers.fetch_calendar_events(
+    events = fetchers.fetch_calendar_events(
         client, cov, location_id, calendars,
-        int(now_utc.timestamp() * 1000),
+        int((now_utc - timedelta(days=28)).timestamp() * 1000),
         int((now_utc + timedelta(days=7)).timestamp() * 1000))
+    events_next7 = [e for e in events
+                    if (ts := metrics.parse_ts(e.get("startTime"))) is not None and ts > now_utc]
 
     services = sub.get("services") or []
     delivery_applies = bool({"content", "social"} & set(services))
+    social_accounts = None
     if delivery_applies:
         sites = fetchers.fetch_blog_sites(client, cov, location_id)
         blog_posts = fetchers.fetch_blog_posts(client, cov, location_id, sites, max_pages=max_pages)
@@ -279,38 +313,55 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
             client, cov, location_id,
             from_iso=(now_utc - timedelta(days=90)).isoformat(),
             to_iso=now_utc.isoformat(), max_pages=max_pages)
+        if "social" in services:
+            social_accounts = fetchers.fetch_social_accounts(client, cov, location_id)
+        else:
+            cov.record("social_accounts", skipped=True, note="social not in services; skipped")
     else:
         blog_posts, social_posts = [], []
         cov.record("blogs", skipped=True, note="content/social not in services; skipped")
         cov.record("social", skipped=True, note="content/social not in services; skipped")
+        cov.record("social_accounts", skipped=True, note="content/social not in services; skipped")
 
-    # Exclusions and lead counts
-    kept_14d, excluded_count = metrics.filter_exclusions(contacts_14d)
-    leads_7d = metrics.leads_new_in_window(kept_14d, win_start, win_end)
+    # Exclusions, windows, and the live baseline
+    kept_all, _ = metrics.filter_exclusions(contacts_all)
+    leads_7d_raw = metrics.leads_in_window(contacts_all, win_start, win_end)
+    leads_7d = metrics.leads_in_window(kept_all, win_start, win_end)
+    excluded_count = len(leads_7d_raw) - len(leads_7d)
+
+    baseline = metrics.baseline_stats(kept_all, win_start, earliest_added)
+    delta = metrics.leads_delta_pct(len(leads_7d), baseline["leads_trailing_avg"])
+    by_source_7d = metrics.leads_by_source(leads_7d)
+    unassigned = metrics.leads_unassigned(leads_7d)
+    missing_phone = metrics.missing_phone_pct(leads_7d)
+    form_stats = metrics.form_submission_stats(submissions, win_start, win_end,
+                                               baseline["trailing_n"])
 
     # Speed to lead: newest first, capped
     def created_key(c):
         return metrics.parse_ts(c.get("dateAdded")) or datetime.min.replace(tzinfo=timezone.utc)
 
-    speed_targets = sorted(kept_14d, key=created_key, reverse=True)[:SPEED_CAP]
+    recent_14d = [c for c in kept_all
+                  if (ts := metrics.parse_ts(c.get("dateAdded"))) is not None and ts >= since_14d]
+    speed_targets = sorted(recent_14d, key=created_key, reverse=True)[:SPEED_CAP]
     lead_events: list[dict] = []
     speed_errors = 0
     for contact in speed_targets:
-        contact_id = contact.get("id") or contact.get("_id")
+        contact_id = contact.get("id")
         if not contact_id:
             continue
         try:
             convs = fetchers.fetch_conversations_for_contact(client, location_id, str(contact_id))
             messages: list[dict] = []
             for conv in convs:
-                conv_id = conv.get("id") or conv.get("_id")
+                conv_id = conv.get("id")
                 if conv_id:
                     messages.extend(fetchers.fetch_messages(client, str(conv_id)))
         except GHLError:
             speed_errors += 1
             continue
         lead_events.append(metrics.lead_event(contact, messages))
-    capped = len(kept_14d) > SPEED_CAP
+    capped = len(recent_14d) > SPEED_CAP
     cov.record("speed_to_lead", retrieved=len(lead_events),
                exhausted=not capped and speed_errors == 0,
                error=f"{speed_errors} contacts failed" if speed_errors else None,
@@ -319,16 +370,23 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     speed = metrics.speed_to_lead_metrics(lead_events, now_utc, win_start, win_end)
     speed["now_utc"] = now_utc
 
-    waiting = metrics.waiting_conversations(convos, now_utc, tz, since_utc=fetch_start)
+    waiting = metrics.waiting_conversations(convos, now_utc, tz, since_utc=since_14d,
+                                            min_hours=thresholds["convo_wait_hours"])
     active_7d = metrics.convos_active_7d(convos, win_start, win_end)
 
-    pipe = metrics.pipeline_metrics(opps, now_utc, win_start, win_end)
+    pipe = metrics.pipeline_metrics(opps, now_utc, win_start, win_end,
+                                    stale_days=thresholds["opp_idle_days"],
+                                    stuck_days=thresholds["opp_stuck_days"])
     if not pipe["next_step_available"]:
         cov.add_note("opportunities", "next-step check unavailable")
+    lead_to_opp = metrics.lead_to_opp_pct(kept_all, opps, now_utc)
+
+    appt_stats = metrics.appointment_metrics(events, now_utc, win_start, win_end)
 
     delivery = metrics.delivery_metrics(blog_posts, social_posts, now_utc, services)
     if delivery.get("no_publish_found"):
         cov.add_note("blogs", "no publish found in 90d")
+    social_stats = metrics.social_account_stats(social_accounts)
 
     # Relationship metrics come from the parent account
     rel = None
@@ -358,23 +416,42 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
 
     reviews = metrics.review_proxies(tagged, opps, now_utc)
 
-    trailing_values = store.read_trailing(location_id, run_date)
-    trailing_avg, trailing_n = metrics.trailing_stats(trailing_values)
-    delta = metrics.leads_delta_pct(len(leads_7d), trailing_avg)
-
     prev_dead = store.read_prev_dead(location_id, run_date)
     gate_passed, gate_reasons = metrics.gate_check(
         g1_ok, cov, len(leads_7d), active_7d, pipe["opps_created_7d"], prev_dead)
     if gate_reasons:
         cov.add_note("location" if not g1_ok else "opportunities", "; ".join(gate_reasons))
 
+    # 28-day funnel for the drilldown strip
+    cutoff_28 = now_utc - timedelta(days=28)
+    funnel_28d = {
+        "form_submissions": None if submissions is None else sum(
+            1 for s in submissions
+            if (ts := metrics.parse_ts(s.get("createdAt"))) is not None and ts >= cutoff_28),
+        "leads": sum(1 for c in kept_all
+                     if (ts := metrics.parse_ts(c.get("dateAdded"))) is not None and ts >= cutoff_28),
+        "opps_created": sum(1 for o in opps
+                            if (ts := metrics.parse_ts(o.get("createdAt"))) is not None and ts >= cutoff_28),
+        "appts_booked": sum(1 for e in events
+                            if (ts := metrics.parse_ts(e.get("dateAdded"))) is not None and ts >= cutoff_28),
+        "won": sum(1 for o in opps
+                   if str(o.get("status") or "").lower() == "won"
+                   and (ts := metrics.parse_ts(o.get("lastStatusChangeAt"))) is not None and ts >= cutoff_28),
+    }
+
     metric_values = {
         "leads_new_7d": len(leads_7d),
-        "leads_trailing_avg": trailing_avg,
-        "trailing_n": trailing_n,
+        "leads_trailing_avg": baseline["leads_trailing_avg"],
+        "trailing_n": baseline["trailing_n"],
         "leads_delta_pct": delta,
         "peer_median_delta_pct": None,   # peer pass fills this in
         "peer_n": None,
+        "leads_by_source_7d": by_source_7d,
+        "leads_by_source_trailing": baseline["leads_by_source_trailing"],
+        "leads_unassigned_7d": len(unassigned),
+        "leads_missing_phone_pct_7d": missing_phone,
+        "form_submissions_7d": form_stats["form_submissions_7d"],
+        "form_submissions_trailing_avg": form_stats["form_submissions_trailing_avg"],
         "convos_active_7d": active_7d,
         "opps_created_7d": pipe["opps_created_7d"],
         "leads_uncontacted_24h": speed["leads_uncontacted_24h"],
@@ -394,9 +471,18 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "opps_no_next_step": pipe["opps_no_next_step"],
         "opps_won_7d": pipe["opps_won_7d"],
         "opps_lost_7d": pipe["opps_lost_7d"],
+        "lead_to_opp_28d_pct": lead_to_opp,
+        "win_rate_90d": pipe["win_rate_90d"],
+        "median_days_to_close_90d": pipe["median_days_to_close_90d"],
+        "appts_booked_7d": appt_stats["appts_booked_7d"],
+        "appts_showed_28d": appt_stats["appts_showed_28d"],
+        "appts_noshow_28d": appt_stats["appts_noshow_28d"],
+        "noshow_rate_28d": appt_stats["noshow_rate_28d"],
         "blogs_published_30d": delivery["blogs_published_30d"],
         "social_published_7d": delivery["social_published_7d"],
         "days_since_last_publish": delivery["days_since_last_publish"],
+        "social_accounts_total": social_stats["social_accounts_total"],
+        "social_accounts_expired": social_stats["social_accounts_expired"],
         "invoices_past_due": rel["invoices_past_due"] if rel else None,
         "invoices_past_due_amount": rel["invoices_past_due_amount"] if rel else None,
         "client_last_touch_days": rel["client_last_touch_days"] if rel else None,
@@ -408,9 +494,10 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
 
     details = build_details(
         location_id=location_id, base=base, umap=umap, pipeline_map=pipeline_map,
-        speed=speed, lead_events=lead_events, waiting=waiting, pipe=pipe, rel=rel,
-        reviews=reviews, events_next7=events_next7, delivery=delivery,
-        client_contact_id=client_contact_id)
+        by_source_7d=by_source_7d, funnel_28d=funnel_28d, speed=speed,
+        lead_events=lead_events, unassigned=unassigned, waiting=waiting, pipe=pipe,
+        rel=rel, reviews=reviews, events_next7=events_next7, delivery=delivery,
+        social_accounts=social_accounts, client_contact_id=client_contact_id)
     if parent_ctx.location_id and details.get("client"):
         details["client"]["deep_link"] = metrics.link_contact(
             base, parent_ctx.location_id, client_contact_id)
@@ -437,10 +524,17 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "first_human_touch_minutes": e.get("first_human_touch_minutes"),
     } for e in lead_events if e.get("contact_id") and e.get("created_at")]
 
+    # lead_history rows for the current and previous ISO week (spec 4.1)
+    today_local = now_utc.astimezone(tz).date()
+    this_week = metrics.iso_week_start(today_local)
+    history_rows = metrics.weekly_lead_history(
+        kept_all, submissions, tz, [this_week, this_week - timedelta(days=7)])
+
     return {
         "token_invalid": False,
         "snapshot": snapshot,
         "lead_events": lead_event_rows,
+        "lead_history": history_rows,
         "metrics": metric_values,
         "details": details,
         "gate_passed": gate_passed,
@@ -493,13 +587,15 @@ def peer_pass(store, subs_by_id: dict, run_date: date) -> dict[str, tuple[float 
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 PHONE_RE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+BODY_KEYS = ("body", "lastmessagebody", "snippet", "message")
 
 
 def _redact(obj):
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
-            if any(word in key.lower() for word in ("email", "phone")):
+            lower = key.lower()
+            if any(word in lower for word in ("email", "phone", "address")) or lower in BODY_KEYS:
                 out[key] = "«redacted»" if value else value
             else:
                 out[key] = _redact(value)
@@ -523,7 +619,6 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
     first_blog_id: str | None = None
 
     def show(label: str, method: str, path: str, params=None, body=None, pick=None):
-        nonlocal first_convo_id, first_contact_id, first_calendar_id, first_blog_id
         status, data, error = client.try_request(method, path, params=params, json_body=body)
         lines.append(f"### {label}\n`{method} {path}` → **HTTP {status}**\n")
         if error:
@@ -549,9 +644,14 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
     show("Users", "GET", "/users/", params={"locationId": location_id}, pick=first_of("users", "data"))
     show("Pipelines", "GET", "/opportunities/pipelines",
          params={"locationId": location_id}, pick=first_of("pipelines", "data"))
-    show("Opportunities", "GET", "/opportunities/search",
-         params={"location_id": location_id, "limit": 2, "status": "all",
+    show("Opportunities (open)", "GET", "/opportunities/search",
+         params={"location_id": location_id, "limit": 2, "status": "open",
                  "getTasks": "true", "getCalendarEvents": "true"},
+         pick=first_of("opportunities", "data"))
+    show("Opportunities (won, date param test)", "GET", "/opportunities/search",
+         params={"location_id": location_id, "limit": 2, "status": "won",
+                 "date": (now_utc - timedelta(days=90)).date().isoformat(),
+                 "endDate": now_utc.date().isoformat()},
          pick=first_of("opportunities", "data"))
 
     status, data, error = client.try_request("POST", "/contacts/search", json_body={
@@ -560,7 +660,7 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
                      "value": {"gte": month_ago, "lte": now_utc.isoformat()}}],
         "sort": [{"field": "dateAdded", "direction": "desc"}],
     })
-    lines.append(f"### Contacts search (dateAdded range)\n`POST /contacts/search` → **HTTP {status}**\n")
+    lines.append(f"### Contacts search (dateAdded range; check attributionSource)\n`POST /contacts/search` → **HTTP {status}**\n")
     if error:
         lines.append(f"- error: {error}\n")
         print(f"  Contacts search: HTTP {status} — {error}")
@@ -576,6 +676,13 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
         "filters": [{"field": "tags", "operator": "eq", "value": metrics.REVIEW_TAG}],
     }, pick=first_of("contacts", "data"))
 
+    show("Form submissions", "GET", "/forms/submissions", params={
+        "locationId": location_id,
+        "startAt": (now_utc - timedelta(days=30)).date().isoformat(),
+        "endAt": now_utc.date().isoformat(),
+        "limit": 2, "page": 1,
+    }, pick=first_of("submissions", "data"))
+
     status, data, error = client.try_request("GET", "/conversations/search", params={
         "locationId": location_id, "limit": 2, "sortBy": "last_message_date", "sort": "desc"})
     lines.append(f"### Conversations\n`GET /conversations/search` → **HTTP {status}**\n")
@@ -590,7 +697,7 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
         print(f"  Conversations: HTTP {status}")
 
     if first_convo_id:
-        show("Messages (note nested messages.messages)", "GET",
+        show("Messages (note nested messages.messages; source/userId vocabulary)", "GET",
              f"/conversations/{first_convo_id}/messages", params={"limit": 2})
     else:
         lines.append("### Messages\n- skipped: no conversation found\n")
@@ -608,9 +715,9 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
         print(f"  Calendars: HTTP {status}")
 
     if first_calendar_id:
-        show("Calendar events", "GET", "/calendars/events", params={
+        show("Calendar events (check appointmentStatus + created field)", "GET", "/calendars/events", params={
             "locationId": location_id, "calendarId": first_calendar_id,
-            "startTime": int((now_utc - timedelta(days=7)).timestamp() * 1000),
+            "startTime": int((now_utc - timedelta(days=28)).timestamp() * 1000),
             "endTime": int((now_utc + timedelta(days=7)).timestamp() * 1000),
         }, pick=first_of("events", "data"))
     else:
@@ -646,6 +753,10 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
         "fromDate": ninety_ago, "toDate": now_utc.isoformat(), "includeUsers": False,
     }, pick=first_of("results", "posts", "data"))
 
+    show("Social accounts (check expired/disconnected field)", "GET",
+         f"/social-media-posting/{location_id}/accounts",
+         pick=first_of("results", "accounts", "data"))
+
     if first_contact_id:
         show("Contact tasks (fallback)", "GET", f"/contacts/{first_contact_id}/tasks",
              pick=first_of("tasks", "data"))
@@ -654,14 +765,49 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
 
     lines.append(
         "\n### Checklist (fix fetchers.py from the output above, rerun --probe)\n"
-        "- [ ] contacts/search `filters` accepted (HTTP 200, filtered results)?\n"
+        "- [ ] contacts/search range filter accepted (HTTP 200, filtered results)?\n"
+        "- [ ] `attributionSource` present on contacts?\n"
         "- [ ] opportunity timestamp fields present (`lastStatusChangeAt`, `lastStageChangeAt`, `lastActionDate`)?\n"
         "- [ ] `tasks` / `calendarEvents` populated on opportunities/search?\n"
-        "- [ ] message `source` / `userId` values seen (list them; update HUMAN/AUTOMATION sets in metrics.py)?\n"
+        "- [ ] do `date`/`endDate` filter opportunities (compare open vs won calls)?\n"
+        "- [ ] message `source` / `userId` values seen (update HUMAN/AUTOMATION sets in metrics.py)?\n"
         "- [ ] invoice `status` values seen?\n"
+        "- [ ] forms/submissions envelope as parsed?\n"
+        "- [ ] calendar event created field (`dateAdded` vs `createdAt`) and `appointmentStatus` values?\n"
         "- [ ] blog / social envelope keys as parsed?\n"
+        "- [ ] social accounts expired/disconnected field name?\n"
     )
     return "".join(f"{line}\n" if not line.endswith("\n") else line for line in lines)
+
+
+# -- backfill ------------------------------------------------------------------
+
+
+def backfill_location(sub: dict, client: GHLClient, store, now_utc: datetime,
+                      weeks_back: int, max_pages: int | None, dry_run: bool) -> int:
+    location_id = sub["location_id"]
+    tz = metrics.get_tz(sub.get("timezone"))
+    cov = Coverage()
+    today_local = now_utc.astimezone(tz).date()
+    this_week = metrics.iso_week_start(today_local)
+    weeks = [this_week - timedelta(days=7 * i) for i in range(weeks_back)]
+    range_start = datetime.combine(min(weeks), datetime.min.time(), tzinfo=tz)
+
+    contacts = fetchers.fetch_contacts_range(
+        client, cov, location_id,
+        gte_iso=range_start.astimezone(timezone.utc).isoformat(),
+        lte_iso=now_utc.isoformat(),
+        max_pages=max_pages)
+    kept, _ = metrics.filter_exclusions(contacts)
+    submissions = fetchers.fetch_form_submissions(
+        client, cov, location_id,
+        start_date=min(weeks).isoformat(),
+        end_date=today_local.isoformat(),
+        max_pages=max_pages)
+    rows = metrics.weekly_lead_history(kept, submissions, tz, weeks)
+    if not dry_run:
+        store.upsert_lead_history(location_id, rows)
+    return len(rows)
 
 
 # -- run ---------------------------------------------------------------------
@@ -682,6 +828,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--location", help="location_id or slug; parent is always included")
     parser.add_argument("--max-pages", type=int, default=None, help="page cap per paged source")
     parser.add_argument("--date", help="snapshot date YYYY-MM-DD (default: today local)")
+    parser.add_argument("--backfill", type=int, metavar="N",
+                        help="write N ISO weeks of lead_history from CRM history, then exit")
     args = parser.parse_args(argv)
 
     if store is None:
@@ -715,8 +863,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         sub = targets[0] if args.location else (parent_sub or subs[0])
         token = store.get_pit(sub["location_id"])
         if not token:
-            log(f"no PIT stored for {sub.get('slug') or sub['location_id']} — run: "
-                f"python -m collector.tools.pit set --location {sub.get('slug') or sub['location_id']}")
+            log(f"no PIT stored for {sub.get('slug') or sub['location_id']} — add "
+                f"ghl_pit_{sub['location_id']} in the Supabase Vault UI")
             return 1
         client = client_factory(token)
         report = probe_location(client, sub, now_utc)
@@ -725,10 +873,27 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         log("probe appended to VERIFICATION.md")
         return 0
 
+    # -- backfill mode ----------------------------------------------------------
+    if args.backfill:
+        failed = 0
+        for sub in targets:
+            slug = sub.get("slug") or sub["location_id"]
+            token = store.get_pit(sub["location_id"])
+            if not token:
+                log(f"{slug}: no PIT stored — skipping backfill")
+                failed += 1
+                continue
+            client = client_factory(token)
+            rows = backfill_location(sub, client, store, now_utc, args.backfill,
+                                     args.max_pages, args.dry_run)
+            log(f"{slug}: backfilled {rows} lead_history weeks")
+        return 0 if failed == 0 else 2
+
     # -- collection -----------------------------------------------------------
     run_id = None if args.dry_run else store.start_run()
     clients: list[GHLClient] = []
     results: dict[str, dict] = {}
+    run_details: dict[str, dict] = {}
     ok = held = failed = 0
     errors: list[str] = []
 
@@ -753,6 +918,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
 
     for sub in ordered:
         slug = sub.get("slug") or sub["location_id"]
+        location_id = sub["location_id"]
         rotated = sub.get("token_rotated_at")
         if rotated:
             try:
@@ -765,40 +931,64 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         if sub.get("is_parent") and parent_ctx.client is not None:
             client = parent_ctx.client
         else:
-            token = store.get_pit(sub["location_id"])
+            token = store.get_pit(location_id)
             if not token:
                 log(f"{slug}: no PIT stored — marking token_status=none")
                 if not args.dry_run:
-                    store.set_token_status(sub["location_id"], "none")
+                    store.set_token_status(location_id, "none")
                 failed += 1
                 errors.append(f"{slug}: token missing")
+                run_details[location_id] = {"status": "failed", "error": "token missing"}
                 continue
             client = client_factory(token)
             clients.append(client)
 
         log(f"{slug}: collecting")
+        started = time.monotonic()
+        requests_before = client.requests_made
+        rate_limited_before = client.rate_limited
         try:
             result = collect_location(sub, client, store, parent_ctx, now_utc, run_date, args.max_pages)
         except Exception as exc:  # noqa: BLE001 — one location must not kill the run
             failed += 1
             message = client.sanitize(f"{type(exc).__name__}: {exc}") if hasattr(client, "sanitize") else str(exc)
             errors.append(f"{slug}: {message}")
+            run_details[location_id] = {"status": "failed", "error": message,
+                                        "seconds": round(time.monotonic() - started, 1)}
             log(f"{slug}: FAILED — {message}")
             continue
+
+        loc_detail = {
+            "requests": client.requests_made - requests_before,
+            "rate_limited": client.rate_limited - rate_limited_before,
+            "seconds": round(time.monotonic() - started, 1),
+        }
 
         if result.get("token_invalid"):
             failed += 1
             errors.append(f"{slug}: token invalid ({result.get('error')})")
             log(f"{slug}: token invalid — marking token_status=invalid")
             if not args.dry_run:
-                store.set_token_status(sub["location_id"], "invalid", result.get("error"))
+                store.set_token_status(location_id, "invalid", result.get("error"))
+            run_details[location_id] = {**loc_detail, "status": "failed", "error": result.get("error")}
             continue
 
         if not args.dry_run:
-            store.set_token_status(sub["location_id"], "ok")
+            rotated_at = None
+            try:
+                stamp = store.pit_updated_at(location_id)
+                if stamp:
+                    rotated_at = str(stamp)[:10]
+            except Exception:  # noqa: BLE001 — rotation bookkeeping must not fail the run
+                rotated_at = None
+            fields = {"token_status": "ok", "last_token_error": None}
+            if rotated_at:
+                fields["token_rotated_at"] = rotated_at
+            store.update_subaccount(location_id, fields)
             store.upsert_snapshot(result["snapshot"])
             store.upsert_lead_events(result["lead_events"])
-        results[sub["location_id"]] = {**result, "sub": sub}
+            store.upsert_lead_history(location_id, result["lead_history"])
+        results[location_id] = {**result, "sub": sub}
 
         if result["gate_passed"]:
             ok += 1
@@ -806,18 +996,26 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         else:
             held += 1
             log(f"{slug}: snapshot HELD — {'; '.join(result['gate_reasons'])}")
+        run_details[location_id] = {
+            **loc_detail,
+            "status": "ok" if result["gate_passed"] else "held",
+            "gate": result["gate_reasons"],
+            "error": None,
+        }
 
-    # -- peer pass and flags ----------------------------------------------------
+    # -- peer pass, flags, and change tracking -----------------------------------
     subs_by_id = {s["location_id"]: s for s in subs}
     if args.dry_run:
         for location_id, result in results.items():
+            sub = result["sub"]
+            location_flags = flags_mod.compute_flags(
+                result["metrics"], sub.get("thresholds"), result["details"], sub, today=run_date)
             printable = {
-                "location": result["sub"].get("slug") or location_id,
+                "location": sub.get("slug") or location_id,
                 "gate_passed": result["gate_passed"],
                 "gate_reasons": result["gate_reasons"],
                 "metrics": result["metrics"],
-                "flags": flags_mod.compute_flags(result["metrics"], result["sub"].get("thresholds"),
-                                                 result["details"], result["sub"].get("services")),
+                "flags": location_flags,
             }
             print(json.dumps(printable, indent=2, default=str))
         log("dry run complete; nothing written")
@@ -830,9 +1028,16 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         result["metrics"]["peer_n"] = peer_n
         sub = result["sub"]
         location_flags = flags_mod.compute_flags(
-            result["metrics"], sub.get("thresholds"), result["details"], sub.get("services"))
+            result["metrics"], sub.get("thresholds"), result["details"], sub, today=run_date)
+        prior_codes = store.read_flags(location_id, run_date - timedelta(days=7))
+        flags_new, flags_resolved = metrics.flags_changed(
+            [f["code"] for f in location_flags], prior_codes)
         store.replace_flags(location_id, run_date.isoformat(), location_flags)
-        log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags")
+        result["details"]["changed"] = {"new": flags_new, "resolved": flags_resolved}
+        store.update_snapshot_changes(location_id, run_date, flags_new, flags_resolved,
+                                      result["details"])
+        log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
+            f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
 
     requests_made = sum(c.requests_made for c in clients)
     rate_limited = sum(c.rate_limited for c in clients)
@@ -841,7 +1046,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     if rate_limited:
         error_summary = f"{error_summary + '; ' if error_summary else ''}429s: {rate_limited}"
     if run_id is not None:
-        store.finish_run(run_id, status, ok, held, failed, requests_made, rate_limited, error_summary)
+        store.finish_run(run_id, status, ok, held, failed, requests_made, rate_limited,
+                         error_summary, details=run_details)
     log(f"done: {ok} ok, {held} held, {failed} failed, "
         f"{requests_made} requests ({rate_limited} rate limited)")
     return 0 if failed == 0 and held == 0 else 2

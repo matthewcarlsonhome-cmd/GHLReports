@@ -7,7 +7,8 @@
       "lastMessageDate": 1786892400000,
       "lastMessageDirection": "outbound",
       "lastMessageType": "TYPE_EMAIL",
-      "unreadCount": 0
+      "unreadCount": 0,
+      "lastMessageBody": "PII_BODY_DO_NOT_STORE call me at +16085559999"
     }
   ],
   "total": 1

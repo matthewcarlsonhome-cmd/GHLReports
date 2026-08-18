@@ -6,7 +6,26 @@
       "startTime": 1787227200000,
       "contactId": "cx2",
       "appointmentStatus": "confirmed",
-      "calendarId": "cal1"
+      "calendarId": "cal1",
+      "dateAdded": "2026-08-15T14:00:00Z"
+    },
+    {
+      "id": "ev2",
+      "title": "Consult",
+      "startTime": 1786276800000,
+      "contactId": "cx1",
+      "appointmentStatus": "showed",
+      "calendarId": "cal1",
+      "dateAdded": "2026-07-30T14:00:00Z"
+    },
+    {
+      "id": "ev3",
+      "title": "Consult",
+      "startTime": 1786536000000,
+      "contactId": "cx4",
+      "appointmentStatus": "noshow",
+      "calendarId": "cal1",
+      "dateAdded": "2026-08-01T14:00:00Z"
     }
   ]
 }

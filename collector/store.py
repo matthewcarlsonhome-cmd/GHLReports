@@ -8,7 +8,7 @@ stored on this object beyond returning them to the caller.
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 
@@ -56,7 +56,8 @@ class Store:
         return result.data[0]["id"]
 
     def finish_run(self, run_id: int, status: str, ok: int, held: int, failed: int,
-                   requests_made: int, rate_limited: int, error: str | None) -> None:
+                   requests_made: int, rate_limited: int, error: str | None,
+                   details: dict | None = None) -> None:
         self.client.table("collector_runs").update({
             "finished_at": "now()",
             "status": status,
@@ -65,6 +66,7 @@ class Store:
             "locations_failed": failed,
             "requests_made": requests_made,
             "rate_limited": rate_limited,
+            "details": details or {},
             "error": error,
         }).eq("id", run_id).execute()
 
@@ -102,11 +104,18 @@ class Store:
         }).execute()
         return bool(result.data)
 
+    def pit_updated_at(self, location_id: str) -> str | None:
+        result = self.client.rpc("pit_updated_at", {
+            "p_location_id": location_id,
+            "p_collector_key": self.collector_key,
+        }).execute()
+        return result.data or None
+
     def set_token_status(self, location_id: str, status: str, error: str | None = None) -> None:
-        self.client.table("subaccounts").update({
-            "token_status": status,
-            "last_token_error": error,
-        }).eq("location_id", location_id).execute()
+        self.update_subaccount(location_id, {"token_status": status, "last_token_error": error})
+
+    def update_subaccount(self, location_id: str, fields: dict) -> None:
+        self.client.table("subaccounts").update(fields).eq("location_id", location_id).execute()
 
     # -- snapshots / flags / lead events ------------------------------------
 
@@ -127,17 +136,29 @@ class Store:
                     for flag in flags]
             self.client.table("flags").insert(rows).execute()
 
-    # -- reads for baseline / gate / peer pass -------------------------------
+    def upsert_lead_history(self, location_id: str, rows: list[dict]) -> None:
+        if rows:
+            payload = [{**row, "location_id": location_id} for row in rows]
+            self.client.table("lead_history").upsert(
+                payload, on_conflict="location_id,week_start").execute()
 
-    def read_trailing(self, location_id: str, snapshot_date: date) -> list[int]:
-        wanted = [(snapshot_date - timedelta(days=offset)).isoformat()
-                  for offset in (7, 14, 21, 28)]
-        result = self.client.table("snapshots").select(
-            "leads_new_7d,snapshot_date"
-        ).eq("location_id", location_id).eq("gate_passed", True).in_(
-            "snapshot_date", wanted).execute()
-        rows = result.data or []
-        return [row["leads_new_7d"] for row in rows if row.get("leads_new_7d") is not None]
+    # -- reads for gate / change tracking / peer pass --------------------------
+
+    def read_flags(self, location_id: str, snapshot_date: date) -> list[str]:
+        result = self.client.table("flags").select("code").eq(
+            "location_id", location_id).eq(
+            "snapshot_date", snapshot_date.isoformat()).execute()
+        return [row["code"] for row in (result.data or [])]
+
+    def update_snapshot_changes(self, location_id: str, snapshot_date: date,
+                                flags_new: list[str], flags_resolved: list[str],
+                                details: dict) -> None:
+        self.client.table("snapshots").update({
+            "flags_new": flags_new,
+            "flags_resolved": flags_resolved,
+            "details": details,
+        }).eq("location_id", location_id).eq(
+            "snapshot_date", snapshot_date.isoformat()).execute()
 
     def read_prev_dead(self, location_id: str, snapshot_date: date) -> list[tuple]:
         result = self.client.table("snapshots").select(
