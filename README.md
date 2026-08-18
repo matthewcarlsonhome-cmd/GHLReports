@@ -156,9 +156,11 @@ Do them in order.
    - `select public.pit_key_ok('wrong')` returns false and leaves a `read_denied` row in `pit_audit`.
    - Database → Replication: no table from this schema is in `supabase_realtime`.
    - An anon-key REST call to `v_portfolio` is denied, not rows.
-3. **Authentication → URL Configuration**: Site URL
-   `https://health.smallscreenproducer.com`; Additional Redirect URLs:
-   `http://localhost:5173` (dev only).
+3. **Authentication → URL Configuration**: Site URL = wherever the SPA is
+   served — your `https://<site>.netlify.app` URL at first, swapped to
+   `https://health.smallscreenproducer.com` once the custom domain is live
+   (see [`docs/GO-LIVE.md`](docs/GO-LIVE.md) for that ordering); Additional
+   Redirect URLs: `http://localhost:5173` (dev only).
 4. **Authentication → Providers**: Email only; every third-party provider
    (Google, GitHub, etc.) disabled. **Authentication → Settings: Allow new
    users to sign up: OFF.** Sessions: Inactivity timeout 30 days.
@@ -166,7 +168,7 @@ Do them in order.
    email, "Auto Confirm User" on). This is the allowlist; the domain trigger
    is the backstop.
 6. **Authentication → Email**: set **OTP expiry to 600 seconds**. Two things
-   are required for the code flow:
+   make the code flow work (the first at team scale, the second always):
    - **(a) Custom SMTP** — create a Resend account, add and verify
      `smallscreenproducer.com` (Resend shows the DKIM/SPF TXT records to
      publish in DNS), then in Supabase set SMTP host `smtp.resend.com`,
