@@ -323,6 +323,7 @@ client update in the browser.
 
 | Symptom | Likely cause → fix |
 |---|---|
+| Netlify deploy failed / built old code | **Deploys → Trigger deploy → Clear cache and deploy site** — this rebuilds the latest commit of the tracked branch. Check the deploy row shows the newest commit hash, and Site configuration → Build & deploy → Branches has Production branch = the repo default. Every future `git push` deploys automatically. Still failing → open the failed deploy's log and read the first red error |
 | Login email never arrives | The built-in mailer only delivers to Supabase **organization members** — accept the Team invite from Part 2.4; it also sends only a few emails per hour, so wait a bit and check spam. Team-scale fix: the Google Workspace SMTP step (L3) |
 | Email arrives with a link but no code | `{{ .Token }}` missing from a template (Part 2.5) |
 | Account shows "no data — token" | Vault secret name typo — must be `ghl_pit_<location_id>` exactly |
