@@ -85,8 +85,9 @@ down this list:
      nobody else can ever make an account. The database trigger that rejects
      non-`@smallscreenproducer.com` emails is already installed as a backup.)
    - Sessions → Inactivity timeout: **30 days**.
-3. **Authentication → Email (settings)**
-   - OTP expiry: **600 seconds** (the sign-in code lives 10 minutes).
+3. **Authentication → Sign In / Providers → click the "Email" provider row**
+   - Email OTP Expiration: **600 seconds** (the sign-in code lives 10
+     minutes).
 4. **Authentication → Users → Add user** — today, just **yourself**:
    - Your work email (must end `@smallscreenproducer.com`), toggle
      **Auto Confirm User** ON, no password needed — sign-in is by emailed
@@ -101,8 +102,9 @@ down this list:
      mailer's limits make it a one-person setup today, and the Later phase
      covers team-scale email using your own Google Workspace (still no
      third-party service).
-5. **Authentication → Email Templates** — edit **both** "Magic Link" AND
-   "Confirm signup" so the body contains the token, e.g.:
+5. **Authentication → Emails (under NOTIFICATIONS) → Templates tab** — edit
+   **both** "Magic Link" AND "Confirm signup" so the body contains the
+   token, e.g.:
    > `Your sign-in code is {{ .Token }}. It expires in 10 minutes.`
    If either template lacks `{{ .Token }}`, the email arrives with only a
    link and the 6-digit input on the login page has nothing to accept.
@@ -270,8 +272,8 @@ secured (TLS issued).
    `https://health.smallscreenproducer.com`.
 2. **Team-scale sign-in emails, using your own email account** (the
    built-in mailer won't deliver to staff who aren't Supabase org members):
-   Supabase → **Authentication → Email → SMTP Settings** and point it at
-   your existing Google Workspace —
+   Supabase → **Authentication → Emails → SMTP Settings tab** and point it
+   at your existing Google Workspace —
    - Host `smtp.gmail.com` · Port `465` · Username = a real mailbox you
      control (e.g. `health@smallscreenproducer.com` or your own address) ·
      Password = a **Google App Password** for that mailbox (create at
