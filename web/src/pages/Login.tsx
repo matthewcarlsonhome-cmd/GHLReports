@@ -1,6 +1,7 @@
 // Login.tsx — the sign-in page: a two-stage email OTP (one-time password) flow.
-// Stage 1 asks for a work email and sends a 6-digit code; stage 2 verifies the
-// code. On success Supabase stores a session (JWT) and we navigate back to
+// Stage 1 asks for a work email and sends a numeric code (6-10 digits,
+// per the Supabase "Email OTP Length" setting); stage 2 verifies the code.
+// On success Supabase stores a session (JWT) and we navigate back to
 // wherever RequireAuth (App.tsx) originally bounced the user from.
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -142,19 +143,21 @@ export default function Login() {
         ) : (
           <form onSubmit={onSubmitCode}>
             <p className="mb-3 text-xs text-ink-2">
-              Enter the 6-digit code sent to <span className="font-medium text-ink">{email}</span>.
+              Enter the code sent to <span className="font-medium text-ink">{email}</span>.
             </p>
             <label className="mb-1 block text-xxs uppercase tracking-wide text-muted" htmlFor="code">
               Code
             </label>
             {/* inputMode="numeric" brings up the digit keyboard on phones;
-                the onChange strips any non-digit characters as they type */}
+                the onChange strips any non-digit characters as they type.
+                Supabase's "Email OTP Length" setting allows 6-10 digits, so
+                accept that whole range rather than assuming 6. */}
             <input
               id="code"
               ref={codeInput}
               inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
+              pattern="[0-9]{6,10}"
+              maxLength={10}
               required
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
@@ -163,7 +166,7 @@ export default function Login() {
             />
             <button
               type="submit"
-              disabled={busy || code.length !== 6}
+              disabled={busy || code.length < 6}
               className="mb-2 w-full rounded bg-ink px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               {busy ? "Checking…" : "Sign in"}
