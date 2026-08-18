@@ -63,6 +63,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -1125,6 +1126,11 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             return 1
         client = client_factory(token)
         report = probe_location(client, sub, now_utc)
+        # Print the full report to stdout FIRST: on Render the filesystem is
+        # thrown away after the run, so the log stream is where the report
+        # actually survives. Locally you get both the file and the printout.
+        print("\n===== PROBE REPORT (also appended to VERIFICATION.md) =====")
+        print(report)
         with open("VERIFICATION.md", "a") as fh:
             fh.write(report)
         log("probe appended to VERIFICATION.md")
@@ -1383,10 +1389,31 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     return 0 if failed == 0 and held == 0 else 2
 
 
+def resolve_argv(cli_argv: list[str], env: dict) -> list[str] | None:
+    """Pick the arguments for this run: real CLI args win; otherwise the
+    COLLECTOR_ARGS environment variable is split like a shell command line.
+
+    COLLECTOR_ARGS exists so every mode is reachable from a browser: in the
+    Render dashboard you set COLLECTOR_ARGS to e.g. "--probe" or
+    "--backfill 12" or "--digest", click "Trigger Run", read the logs, then
+    clear the variable to return to the normal nightly collection. No local
+    terminal required anywhere in operations.
+    """
+    if cli_argv:
+        return cli_argv
+    env_args = (env.get("COLLECTOR_ARGS") or "").strip()
+    if env_args:
+        return shlex.split(env_args)
+    return None
+
+
 def main() -> None:
     """Console entry point: run() plus the exit-code contract for crashes."""
+    argv = resolve_argv(sys.argv[1:], os.environ)
+    if argv is not None and not sys.argv[1:]:
+        log(f"using COLLECTOR_ARGS: {' '.join(argv)}")
     try:
-        sys.exit(run())
+        sys.exit(run(argv))
     except KeyboardInterrupt:
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 — crash path, exit 1 per spec

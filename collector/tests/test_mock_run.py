@@ -261,6 +261,17 @@ def test_backfill_writes_lead_history_weeks():
     assert by_source == {"facebook": 4, "web": 6}
 
 
+def test_collector_args_env_drives_cloud_triggered_modes():
+    # Real CLI args always win over the environment variable
+    assert main_mod.resolve_argv(["--probe"], {"COLLECTOR_ARGS": "--digest"}) == ["--probe"]
+    # No CLI args: COLLECTOR_ARGS is split like a shell command line
+    assert main_mod.resolve_argv([], {"COLLECTOR_ARGS": "--backfill 12 --dry-run"}) == [
+        "--backfill", "12", "--dry-run"]
+    # Neither set: None means "run the normal nightly collection"
+    assert main_mod.resolve_argv([], {}) is None
+    assert main_mod.resolve_argv([], {"COLLECTOR_ARGS": "   "}) is None
+
+
 def make_peer_book(deltas_by_loc: dict[str, tuple[str, float | None]]):
     """Build a FakeStore pre-loaded with today's snapshots and matching subs."""
     store = FakeStore(subs=[])

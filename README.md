@@ -8,9 +8,18 @@ accounts need a call and why — standalone or embedded inside GHL. Account
 managers can acknowledge flags (with a note and a snooze) and keep
 append-only account notes; those are the only writes in the whole system.
 
+> **Going live? Start here → [`docs/GO-LIVE.md`](docs/GO-LIVE.md)** — the
+> complete browser-only setup (Supabase ✓ already provisioned, Netlify,
+> Render, DNS, GHL). **No terminal or local install is needed to deploy or
+> operate this system**: the app deploys from GitHub via Netlify, the Python
+> collector deploys from GitHub via Render (`render.yaml`), and one-off
+> operations (probe / backfill / digest) are triggered from the Render
+> dashboard with the `COLLECTOR_ARGS` environment variable.
+
+- **Go-live setup guide (browser-only):** [`docs/GO-LIVE.md`](docs/GO-LIVE.md)
 - **Design spec (authoritative):** [`docs/DESIGN.md`](docs/DESIGN.md) (build spec v3.0, consolidated)
 - **As-built architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- **API verification log:** [`VERIFICATION.md`](VERIFICATION.md) — run `--probe` first; it appends here
+- **API verification log:** [`VERIFICATION.md`](VERIFICATION.md) — the probe appends here
 
 Hard guarantees: the collector never writes to GHL; no LLM touches any
 number; every count carries a coverage label; missing data reads "Unknown"
@@ -32,7 +41,12 @@ live only in Supabase Vault.
 
 ---
 
-## 1. Install — developer machines
+## 1. Install — developer machines (OPTIONAL — not needed to deploy or operate)
+
+Deployment and daily operation are 100% browser-based (see
+[`docs/GO-LIVE.md`](docs/GO-LIVE.md)); this section exists only for someone
+who wants to *develop* the code locally — run the test suite, hack on the
+UI with hot reload, or dry-run the collector against fixtures.
 
 Two runtimes are used: **Python 3.11+** (collector) and **Node.js 20+**
 (web app). Install both, clone, then set up each part.
@@ -263,17 +277,25 @@ Agency view → Settings → Custom Menu Links → Create New:
 
 ## 3. Day-to-day usage
 
+**Operations happen in the browser.** The collector runs itself nightly on
+Render; one-off modes are triggered from the Render dashboard: set the
+`COLLECTOR_ARGS` environment variable (e.g. `--probe`, `--backfill 12`,
+`--digest`, `--digest --dry-run`, `--location <slug>`), click **Trigger
+Run**, read the logs, then clear the variable to return to normal nightly
+runs. Token health lives on the app's `/runs` page; tokens are added and
+rotated in the Supabase Vault UI.
+
+For developers with the optional local setup:
+
 ```bash
 # local dev
 cd web && npm run dev                      # SPA at http://localhost:5173
 python -m collector.main --dry-run --location pilot1   # fetch + compute, write nothing
 
-# operations
+# the same modes the Render dashboard triggers
 python -m collector.main                   # full daily run (what the cron does)
 python -m collector.main --backfill 12     # (re)build lead_history charts
 python -m collector.main --digest --dry-run  # preview the per-AM digest emails
-python -m collector.main --digest          # send them now (needs RESEND_API_KEY + DIGEST_FROM)
-python -m collector.tools.pit status       # token health; flags >80-day-old tokens
 
 # tests
 pytest collector/tests -q                  # collector suite (no network)

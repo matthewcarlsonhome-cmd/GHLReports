@@ -20,6 +20,11 @@ services:
       - key: TZ
         value: America/Chicago
       # That is the complete secret set. PITs are in Supabase Vault, not here.
+      #
+      # One-off modes without a terminal: set COLLECTOR_ARGS in the Render
+      # dashboard (e.g. "--probe", "--backfill 12", "--digest"), click
+      # "Trigger Run", read the logs, then clear it to resume nightly runs.
+      #
       # Optional Tier 2 — Monday digest email per AM (leave unset to skip digests):
       # - key: RESEND_API_KEY
       #   sync: false
