@@ -1,3 +1,18 @@
+// Portfolio.tsx — the home page: every account in one big filterable, sortable
+// table, grouped into "Needs attention" / "Steady" / "No data" sections.
+//
+// Key ideas needed to read this file:
+// - Filter state lives in the URL query string (?view=all&q=pool...), read and
+//   written via react-router's useSearchParams. That makes every filter combo
+//   a shareable/bookmarkable link, and Back/Forward work over filter changes.
+// - useMemo caches derived data ("memoization"): the filtered+sorted row list
+//   is recomputed only when one of its listed dependencies changes, not on
+//   every render.
+// - A global window "keydown" listener implements keyboard shortcuts:
+//   j/k move the selection, Enter opens the account, a acknowledges the top
+//   flag, / focuses search.
+// - Column choices persist in localStorage; CSV export builds the file
+//   in-browser from the currently visible rows.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -9,11 +24,13 @@ import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
 import { acknowledgeFlag } from "../lib/writes";
 
-const REFRESH_MS = 15 * 60 * 1000;
-const SPARK_WEEKS = 8;
-const COLUMNS_KEY = "portfolio.columns";
+const REFRESH_MS = 15 * 60 * 1000; // auto-reload the data every 15 minutes
+const SPARK_WEEKS = 8; // weeks of history behind each sparkline
+const COLUMNS_KEY = "portfolio.columns"; // localStorage key for chosen columns
 
 // Expanded columns behind the column chooser (spec v3 9.3), persisted locally.
+// The always-on columns (account, state, leads...) are hard-coded in the table;
+// these are the optional extras each user toggles for themselves.
 const EXPANDED_COLUMNS = [
   { key: "stale", label: "Stale opps" },
   { key: "missed", label: "Missed calls" },
@@ -30,8 +47,12 @@ const EXPANDED_COLUMNS = [
   { key: "quality", label: "Quality" },
   { key: "snapshot", label: "Snapshot" },
 ] as const;
+// "typeof ...[number]['key']" derives the union of the key strings above, so
+// adding a column to the array automatically extends this type.
 type ExpandedKey = (typeof EXPANDED_COLUMNS)[number]["key"];
 
+// Read the saved column set from localStorage. try/catch guards against
+// corrupt JSON or storage being blocked; either way we fall back to defaults.
 function loadColumns(): Set<ExpandedKey> {
   try {
     const raw = localStorage.getItem(COLUMNS_KEY);
@@ -42,6 +63,10 @@ function loadColumns(): Set<ExpandedKey> {
   return new Set<ExpandedKey>(["stale", "past_due", "quality", "snapshot"]);
 }
 
+// Sort comparator #1: worst first. Higher attention_score wins; ties break on
+// the leads delta (most-negative — biggest lead drop — first). Rows without a
+// delta sort last via the +Infinity default. [...rows] copies before sorting
+// because Array.sort mutates and React state must not be mutated in place.
 function sortByAttention(rows: PortfolioRow[]): PortfolioRow[] {
   return [...rows].sort((a, b) => {
     if (b.attention_score !== a.attention_score) return b.attention_score - a.attention_score;
@@ -51,6 +76,9 @@ function sortByAttention(rows: PortfolioRow[]): PortfolioRow[] {
   });
 }
 
+// Sort comparator #2: "MRR at risk" — accounts needing attention first (that's
+// the aRisk/bRisk 0-vs-1 trick), then by revenue descending, so the most
+// valuable troubled accounts top the list. Unknown MRR (-1) sorts below $0.
 function sortByMrrAtRisk(rows: PortfolioRow[]): PortfolioRow[] {
   return [...rows].sort((a, b) => {
     const aRisk = a.attention_score > 0 ? 0 : 1;
@@ -60,6 +88,9 @@ function sortByMrrAtRisk(rows: PortfolioRow[]): PortfolioRow[] {
   });
 }
 
+// CSV escaping per RFC 4180: a field containing a quote, comma, or newline is
+// wrapped in double quotes, with embedded quotes doubled ("" inside).
+// Everything else passes through untouched; null/undefined become empty cells.
 function csvEscape(value: unknown): string {
   const text = value === null || value === undefined ? "" : String(value);
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -68,17 +99,22 @@ function csvEscape(value: unknown): string {
 export default function Portfolio() {
   const { session } = useSession();
   const navigate = useNavigate();
+  // params is the live URL query string; setParams rewrites it (see setParam).
   const [params, setParams] = useSearchParams();
+  // Server data: null = still loading (vs [] = loaded but empty).
   const [rows, setRows] = useState<PortfolioRow[] | null>(null);
   const [sparks, setSparks] = useState<Record<string, (number | null)[]>>({});
   const [flagsByLoc, setFlagsByLoc] = useState<Record<string, FlagRow[]>>({});
   const [error, setError] = useState<string | null>(null);
+  // UI-only state: keyboard-selected row index, chosen columns, open menus.
   const [selected, setSelected] = useState(0);
   const [columns, setColumns] = useState<Set<ExpandedKey>>(loadColumns);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [ackNotice, setAckNotice] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Decode each filter from the query string, with a safe default when the
+  // param is absent or has an unexpected value.
   const view = params.get("view") === "all" ? "all" : "mine";
   const includeSsp = params.get("ssp") === "1";
   const search = params.get("q") ?? "";
@@ -88,6 +124,12 @@ export default function Portfolio() {
   const sortMode = params.get("sort") === "mrr" ? "mrr" : "attention";
   const groupByAm = params.get("group") === "am";
 
+  // Load everything the page needs, in three queries:
+  // 1) the v_portfolio view (one row per account, pre-joined server-side),
+  // 2) weekly lead history for the sparklines,
+  // 3) current flags, for the flag filter and the "a" acknowledge shortcut.
+  // useCallback keeps the function identity stable so the effect below doesn't
+  // re-subscribe its interval on every render.
   const load = useCallback(async () => {
     const { data, error: err } = await supabase.from("v_portfolio").select("*");
     if (err) {
@@ -98,6 +140,8 @@ export default function Portfolio() {
     setRows(portfolio);
     setError(null);
 
+    // Sparkline data: last 8 weeks of weekly lead counts, grouped by account.
+    // 86400 = seconds per day; the slice(0, 10) keeps just "YYYY-MM-DD".
     const since = new Date(Date.now() - SPARK_WEEKS * 7 * 86400 * 1000)
       .toISOString().slice(0, 10);
     const { data: history } = await supabase
@@ -107,10 +151,13 @@ export default function Portfolio() {
       .order("week_start", { ascending: true });
     const grouped: Record<string, (number | null)[]> = {};
     for (const entry of (history ?? []) as Pick<LeadHistoryRow, "location_id" | "week_start" | "leads">[]) {
+      // "??=" assigns the array only when the key is still missing.
       (grouped[entry.location_id] ??= []).push(entry.leads);
     }
     setSparks(grouped);
 
+    // Flags for each account's *latest* snapshot date (dates differ between
+    // accounts, so collect the distinct set and query them all at once).
     const dates = [...new Set(portfolio.map((r) => r.snapshot_date).filter(Boolean))] as string[];
     if (dates.length) {
       const { data: flagRows } = await supabase
@@ -125,17 +172,21 @@ export default function Portfolio() {
     }
   }, []);
 
+  // Initial load, plus a 15-minute refresh interval (cleared on unmount).
   useEffect(() => {
     void load();
     const timer = setInterval(() => void load(), REFRESH_MS);
     return () => clearInterval(timer);
   }, [load]);
 
+  // The heart of the page: apply every active filter, then sort. Memoized so
+  // it only recomputes when a filter, the data, or the session changes.
   const visible = useMemo(() => {
     if (!rows) return [];
     const email = session?.user?.email?.toLowerCase();
     const needle = search.trim().toLowerCase();
     const filtered = rows.filter((row) => {
+      // Each check eliminates; a row must survive all of them to show.
       if (row.is_parent && !includeSsp) return false;
       if (view === "mine" && email && !row.is_parent
           && (row.am_email ?? "").toLowerCase() !== email) return false;
@@ -149,6 +200,7 @@ export default function Portfolio() {
     return sortMode === "mrr" ? sortByMrrAtRisk(filtered) : sortByAttention(filtered);
   }, [rows, view, includeSsp, search, vertical, stateFilter, flagFilter, sortMode, session, flagsByLoc]);
 
+  // Dropdown option lists derived from the data itself (deduped via Set).
   const verticals = useMemo(
     () => [...new Set((rows ?? []).map((r) => r.vertical).filter(Boolean))].sort() as string[],
     [rows]);
@@ -156,14 +208,19 @@ export default function Portfolio() {
     () => [...new Set(Object.values(flagsByLoc).flat().map((f) => f.code))].sort(),
     [flagsByLoc]);
 
+  // Header-tile numbers: total monthly revenue currently sitting in accounts
+  // that need attention (excluding SSP's own parent account).
   const attentionRows = visible.filter((r) => r.state === "attention" && !r.is_parent);
   const mrrInAttention = attentionRows.reduce((sum, r) => sum + (r.mrr ?? 0), 0);
   const attentionNoMrr = attentionRows.filter((r) => r.mrr === null).length;
 
+  // Keep the keyboard selection inside bounds when filtering shrinks the list.
   useEffect(() => {
     setSelected((s) => Math.min(s, Math.max(0, visible.length - 1)));
   }, [visible.length]);
 
+  // The "a" shortcut: acknowledge the most severe (red before amber, info
+  // excluded) flag on the selected row, with the default 7-day snooze.
   const ackSelected = useCallback(async () => {
     const row = visible[selected];
     const email = session?.user?.email;
@@ -183,6 +240,9 @@ export default function Portfolio() {
     if (!err) void load();
   }, [visible, selected, session, flagsByLoc, load]);
 
+  // Global keyboard handler. Listening on window means it works wherever
+  // focus is — except inside form fields, where typing "j" must stay typing,
+  // so those bail out early (Escape blurs the field instead).
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement;
@@ -196,6 +256,7 @@ export default function Portfolio() {
         navigate(`/account/${visible[selected].location_id}`);
       } else if (event.key === "a") void ackSelected();
       else if (event.key === "/") {
+        // preventDefault stops Firefox's quick-find from stealing "/".
         event.preventDefault();
         searchRef.current?.focus();
       }
@@ -204,6 +265,9 @@ export default function Portfolio() {
     return () => window.removeEventListener("keydown", onKey);
   }, [visible, selected, navigate, ackSelected]);
 
+  // Write one filter into the URL. Empty/null deletes the param so default
+  // states produce clean URLs; replace:true avoids flooding browser history
+  // with an entry per keystroke in the search box.
   function setParam(key: string, value: string | null) {
     const next = new URLSearchParams(params);
     if (value === null || value === "") next.delete(key);
@@ -211,6 +275,8 @@ export default function Portfolio() {
     setParams(next, { replace: true });
   }
 
+  // Toggle a column on/off and persist the choice. A *new* Set is built first
+  // because React only notices state changes when the object identity changes.
   function toggleColumn(key: ExpandedKey) {
     const next = new Set(columns);
     if (next.has(key)) next.delete(key);
@@ -219,12 +285,17 @@ export default function Portfolio() {
     localStorage.setItem(COLUMNS_KEY, JSON.stringify([...next]));
   }
 
+  // CSV export, fully in the browser: build the text, wrap it in a Blob,
+  // point a temporary object URL at it, and "click" an invisible <a download>
+  // to trigger the save dialog. Exports exactly what's visible — current
+  // filters, current sort, currently chosen expanded columns.
   function exportCsv() {
     const headers = ["account", "am", "state", "red", "amber", "acked", "new_flags",
       "leads_7d", "delta_pct", "peer_delta_pct", "uncontacted_24h", "convos_waiting",
       "top_action", ...[...columns]];
     const lines = [headers.join(",")];
     for (const row of visible) {
+      // Raw values per expanded column (unformatted, spreadsheet-friendly).
       const extended: Record<ExpandedKey, unknown> = {
         stale: row.opps_stale, missed: row.calls_missed_7d, past_due: row.invoices_past_due_amount,
         publish: row.days_since_last_publish, client_touch: row.client_last_touch_days,
@@ -247,9 +318,11 @@ export default function Portfolio() {
     anchor.href = url;
     anchor.download = `account-health-${new Date().toISOString().slice(0, 10)}.csv`;
     anchor.click();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url); // free the blob's memory once the click is done
   }
 
+  // Render one expanded-column cell. Shared convention: "—" for no-data rows,
+  // "not set" for missing manual config (MRR/contract) — never a fake 0.
   function cell(row: PortfolioRow, key: ExpandedKey) {
     const noData = row.state === "no_data";
     switch (key) {
@@ -276,6 +349,9 @@ export default function Portfolio() {
     }
   }
 
+  // Desktop layout: the full table ("hidden ... md:block" = only at >=768px;
+  // renderCards below is its mobile twin). Plain function, not a component —
+  // it can read all the surrounding state directly.
   function renderTable(sectionRows: PortfolioRow[]) {
     return (
       <div className="hidden overflow-x-auto rounded border border-grid bg-surface md:block">
@@ -298,6 +374,8 @@ export default function Portfolio() {
           </thead>
           <tbody>
             {sectionRows.map((row) => {
+              // Selection is tracked as an index into the *whole* visible
+              // list, so j/k walk across section boundaries seamlessly.
               const index = visible.indexOf(row);
               const isSelected = index === selected;
               const noData = row.state === "no_data";
@@ -309,6 +387,9 @@ export default function Portfolio() {
                   onClick={() => navigate(`/account/${row.location_id}`)}
                 >
                   <td className="px-2 py-1.5">
+                    {/* real <Link> inside the clickable row so middle-click /
+                        cmd-click open-in-new-tab still works; stopPropagation
+                        keeps the row's own onClick from double-navigating */}
                     <Link
                       to={`/account/${row.location_id}`}
                       className="font-medium text-series underline decoration-series/30 underline-offset-2"
@@ -328,6 +409,7 @@ export default function Portfolio() {
                     </div>
                   </td>
                   <td className="px-2 py-1.5">
+                    {/* flags newly raised by this snapshot; codes on hover */}
                     {(row.flags_new?.length ?? 0) > 0 ? (
                       <span className="rounded bg-series/10 px-1 py-0.5 text-xxs text-series"
                             title={(row.flags_new ?? []).join(", ")}>
@@ -338,6 +420,9 @@ export default function Portfolio() {
                     )}
                   </td>
                   <td className="px-2 py-1.5">
+                    {/* leads cell: count + delta vs baseline, or the reason
+                        no number exists (no data / unknown / still building
+                        the 4-week baseline) */}
                     {noData ? (
                       <span className="text-muted">
                         no data{row.token_status !== "ok" ? " (token)" : ""}
@@ -383,6 +468,8 @@ export default function Portfolio() {
     );
   }
 
+  // Mobile layout: the same rows as tappable cards ("md:hidden" — shown only
+  // below the md breakpoint, where the wide table can't fit).
   function renderCards(sectionRows: PortfolioRow[]) {
     return (
       <div className="grid gap-2 md:hidden">
@@ -417,12 +504,15 @@ export default function Portfolio() {
     );
   }
 
+  // The three page sections, in display order (worst first).
   const sections: { state: PortfolioState; title: string; empty: string }[] = [
     { state: "attention", title: "Needs attention", empty: "No accounts need attention." },
     { state: "steady", title: "Steady", empty: "No steady accounts in this view." },
     { state: "no_data", title: "No data", empty: "Every account in this view has fresh data." },
   ];
 
+  // Alternate grouping: one section per account manager instead of per state.
+  // Map preserves the order rows already have; entries are then sorted by AM.
   const amGroups = useMemo(() => {
     if (!groupByAm) return null;
     const groups = new Map<string, PortfolioRow[]>();
@@ -437,6 +527,7 @@ export default function Portfolio() {
   return (
     <div className="mx-auto max-w-[1500px] px-4 py-4">
       {/* filters */}
+      {/* every control below reads from and writes to the URL via setParam */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex rounded border border-grid bg-surface text-xs">
           <button onClick={() => setParam("view", null)}
@@ -487,6 +578,7 @@ export default function Portfolio() {
                  onChange={(e) => setParam("group", e.target.checked ? "am" : null)} />
           Group by AM
         </label>
+        {/* column chooser dropdown (state is local, persisted to localStorage) */}
         <div className="relative">
           <button onClick={() => setChooserOpen((v) => !v)}
                   className="rounded border border-grid bg-surface px-2 py-1 text-xs text-ink-2">
@@ -524,6 +616,7 @@ export default function Portfolio() {
       {error ? <EmptyState>Could not load the portfolio: {error}</EmptyState> : null}
       {!rows && !error ? <Skeleton rows={6} /> : null}
 
+      {/* body: either the group-by-AM layout or the three state sections */}
       {rows && amGroups
         ? amGroups.map(([am, groupRows]) => {
             const attention = groupRows.filter((r) => r.state === "attention");

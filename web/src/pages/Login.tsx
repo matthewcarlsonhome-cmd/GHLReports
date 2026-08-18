@@ -1,9 +1,15 @@
+// Login.tsx — the sign-in page: a two-stage email OTP (one-time password) flow.
+// Stage 1 asks for a work email and sends a 6-digit code; stage 2 verifies the
+// code. On success Supabase stores a session (JWT) and we navigate back to
+// wherever RequireAuth (App.tsx) originally bounced the user from.
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { emailHint } from "../lib/embed";
 import { supabase } from "../lib/supabase";
 
+// Seconds before "Resend code" becomes clickable again — stops accidental
+// double-sends and spamming the email provider.
 const RESEND_COOLDOWN_S = 30;
 
 // Email-code sign-in only, for pre-provisioned staff accounts (spec v3 9.1):
@@ -12,9 +18,13 @@ const RESEND_COOLDOWN_S = 30;
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
+  // RequireAuth stashed the page the user originally wanted in router state;
+  // fall back to the portfolio ("/") when they came straight to /login.
   const from = (location.state as { from?: { pathname: string; search: string } } | null)?.from;
   const destination = from ? `${from.pathname}${from.search ?? ""}` : "/";
 
+  // Form state. `stage` drives which of the two forms renders; `busy` disables
+  // buttons while a request is in flight; notice/error are user feedback.
   const [email, setEmail] = useState(emailHint());
   const [code, setCode] = useState("");
   const [stage, setStage] = useState<"email" | "code">("email");
@@ -22,18 +32,28 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
+  // useRef gives direct access to the code <input> DOM node so we can .focus()
+  // it — something declarative JSX can't express.
   const codeInput = useRef<HTMLInputElement>(null);
 
+  // Resend-cooldown countdown. Instead of one setInterval, each render whose
+  // cooldown > 0 schedules a single 1s timeout that decrements it; the effect
+  // then re-runs (cooldown is in its dependency array) and schedules the next
+  // tick. The cleanup cancels the pending timeout if the component unmounts.
   useEffect(() => {
     if (cooldown <= 0) return;
     const timer = setTimeout(() => setCooldown((s) => s - 1), 1000);
     return () => clearTimeout(timer);
   }, [cooldown]);
 
+  // When the code form appears, put the cursor straight into the code box.
   useEffect(() => {
     if (stage === "code") codeInput.current?.focus();
   }, [stage]);
 
+  // Ask Supabase to email a 6-digit code. shouldCreateUser: false is the
+  // client-side half of "no public sign-up" — unknown emails are rejected
+  // instead of silently creating an account.
   async function sendCode() {
     setBusy(true);
     setError(null);
@@ -44,6 +64,8 @@ export default function Login() {
     });
     setBusy(false);
     if (err) {
+      // Translate Supabase's generic "signups not allowed" wording into a
+      // message that tells staff what actually happened and who to ask.
       const message = err.message ?? "";
       const lower = message.toLowerCase();
       if (lower.includes("signups not allowed") || lower.includes("restricted")) {
@@ -58,11 +80,16 @@ export default function Login() {
     setNotice("Code sent. Check your email — it expires in 10 minutes.");
   }
 
+  // preventDefault stops the browser's default full-page form submission —
+  // the SPA handles the submit itself.
   async function onSubmitEmail(event: FormEvent) {
     event.preventDefault();
     await sendCode();
   }
 
+  // Stage 2: exchange email + code for a session. On success Supabase fires
+  // onAuthStateChange (useSession picks it up) and we return to `destination`.
+  // `replace: true` swaps /login out of history so Back doesn't revisit it.
   async function onSubmitCode(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -88,6 +115,7 @@ export default function Login() {
           Sign in with your work email. smallscreenproducer.com staff accounts only.
         </p>
 
+        {/* stage switch: email form first, code form after a code was sent */}
         {stage === "email" ? (
           <form onSubmit={onSubmitEmail}>
             <label className="mb-1 block text-xxs uppercase tracking-wide text-muted" htmlFor="email">
@@ -119,6 +147,8 @@ export default function Login() {
             <label className="mb-1 block text-xxs uppercase tracking-wide text-muted" htmlFor="code">
               Code
             </label>
+            {/* inputMode="numeric" brings up the digit keyboard on phones;
+                the onChange strips any non-digit characters as they type */}
             <input
               id="code"
               ref={codeInput}
@@ -139,6 +169,7 @@ export default function Login() {
               {busy ? "Checking…" : "Sign in"}
             </button>
             <div className="flex items-center justify-between text-xxs text-muted">
+              {/* escape hatch back to stage 1, clearing stage-2 state */}
               <button
                 type="button"
                 onClick={() => {
@@ -151,6 +182,7 @@ export default function Login() {
               >
                 Different email
               </button>
+              {/* disabled while the cooldown counter is still ticking down */}
               <button
                 type="button"
                 disabled={cooldown > 0 || busy}

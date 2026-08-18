@@ -1,3 +1,21 @@
+// Account.tsx — the single-account drilldown page, and the largest file in the
+// app. Reading order mirrors the numbered layout comments below: header,
+// "Do next" (flags + acknowledgements), flag changes, KPI tiles, funnel,
+// charts (stacked sources, delta-vs-baseline, heatmap, histogram), the
+// drill-down detail tables, coverage, the copy-ready client summary, notes.
+//
+// Key ideas needed to read this file:
+// - Data loading: one useCallback'd `load()` grabs the subaccount, then its
+//   latest snapshot, then runs SIX further queries concurrently via
+//   Promise.all (flags, acks, notes, weekly history, snapshot history, lead
+//   events) and stores everything in a single `Loaded` state object. After a
+//   write (ack or note) we simply call load() again to refresh.
+// - Acknowledgement flow: clicking "Acknowledge" on a flag opens an inline
+//   note + snooze-length picker; submitAck inserts a row via lib/writes.ts
+//   and reloads. Acked flags drop out of "Do next" into a quiet gray list.
+// - Chart data is computed with useMemo (recompute only when `data` changes)
+//   and rendered with Recharts, a React charting library whose components
+//   (<ComposedChart>, <Bar>, <Line>...) are declared as JSX.
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -52,6 +70,7 @@ import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
 import { acknowledgeFlag, addNote } from "../lib/writes";
 
+// Shared chart colors, matching the Tailwind palette in tailwind.config.js.
 const SERIES = "#2a78d6";
 const BASELINE = "#898781";
 const GRID = "#e1e0d9";
@@ -59,6 +78,9 @@ const INK2 = "#52514e";
 // Categorical slots for the stacked source chart (validated palette order)
 const SOURCE_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#c3c2b7"];
 
+// Response-time buckets for the speed-to-lead histogram. Buckets widen as
+// times grow (log-ish scale) because the difference between 5m and 15m
+// matters far more than between 25h and 30h.
 const HISTOGRAM_BINS = [
   { label: "≤5m", max: 5 },
   { label: "5–15m", max: 15 },
@@ -82,6 +104,8 @@ const FLAG_TABLE: Record<string, string> = {
   NO_DELIVERY: "publishes",
 };
 
+// Everything the page loads, bundled so a single setData() swap keeps all
+// pieces consistent with each other (no half-updated renders).
 type Loaded = {
   sub: SubaccountRow;
   snapshot: SnapshotRow | null;
@@ -93,6 +117,9 @@ type Loaded = {
   leadEvents: LeadEventRow[];
 };
 
+// Expand/collapse wrapper for the detail tables. `defaultOpen` is only the
+// *initial* value (used to auto-open tables tied to firing flags); after
+// mount the user's clicks own the state.
 function Collapsible({ title, defaultOpen, children }: {
   title: string; defaultOpen: boolean; children: ReactNode;
 }) {
@@ -110,25 +137,33 @@ function Collapsible({ title, defaultOpen, children }: {
 }
 
 export default function Account() {
+  // :locationId from the /account/:locationId route (see App.tsx).
   const { locationId } = useParams<{ locationId: string }>();
   const { session } = useSession();
   const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Ack-form state: which flag's inline form is open, its note text, errors.
   const [ackFor, setAckFor] = useState<string | null>(null);
   const [ackNote, setAckNote] = useState("");
   const [ackError, setAckError] = useState<string | null>(null);
+  // Note-form state, plus the transient "Copied ✓" indicator.
   const [noteBody, setNoteBody] = useState("");
   const [noteError, setNoteError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Load everything. First two queries are sequential (the flags query needs
+  // the snapshot's date); the remaining six run concurrently via Promise.all.
   const load = useCallback(async () => {
     if (!locationId) return;
     const { data: subRows, error: subErr } = await supabase
       .from("subaccounts").select("*").eq("location_id", locationId).limit(1);
     if (subErr || !subRows?.length) {
+      // RLS quirk: a row you can't see and a row that doesn't exist both come
+      // back empty — hence the "or you don't have access" wording.
       setError(subErr?.message ?? "Account not found (or you don't have access).");
       return;
     }
+    // Latest snapshot: newest date, and newest capture within that date.
     const { data: snapRows } = await supabase
       .from("snapshots").select("*").eq("location_id", locationId)
       .order("snapshot_date", { ascending: false })
@@ -137,10 +172,13 @@ export default function Account() {
 
     const twelveWeeksAgo = new Date(Date.now() - 12 * 7 * 86400 * 1000).toISOString().slice(0, 10);
     const [flagsRes, acksRes, notesRes, weeklyRes, historyRes, eventsRes] = await Promise.all([
+      // flags for the current snapshot only (no snapshot -> empty stub kept
+      // Promise-shaped so destructuring stays uniform)
       snapshot
         ? supabase.from("flags").select("*").eq("location_id", locationId)
             .eq("snapshot_date", snapshot.snapshot_date)
         : Promise.resolve({ data: [] as FlagRow[] }),
+      // only acks whose snooze window is still active (snooze_until >= today)
       supabase.from("flag_acks").select("*").eq("location_id", locationId)
         .gte("snooze_until", new Date().toISOString().slice(0, 10))
         .order("acked_at", { ascending: false }),
@@ -150,6 +188,7 @@ export default function Account() {
         .gte("week_start", twelveWeeksAgo).order("week_start", { ascending: true }),
       supabase.from("v_history").select("*").eq("location_id", locationId)
         .order("snapshot_date", { ascending: true }),
+      // last 30 days of lead events for the heatmap + histogram, capped at 500
       supabase.from("lead_events").select("*").eq("location_id", locationId)
         .gte("created_at", new Date(Date.now() - 30 * 86400 * 1000).toISOString())
         .order("created_at", { ascending: false }).limit(500),
@@ -171,8 +210,17 @@ export default function Account() {
     void load();
   }, [load]);
 
+  // Flag codes with a live (unexpired) acknowledgement — a Set for O(1) lookup.
   const ackedCodes = useMemo(() => new Set((data?.acks ?? []).map((a) => a.code)), [data]);
 
+  // Data for the stacked leads-by-source chart. Three steps:
+  // 1) Sum every source across all 12 weeks and keep the top 5; everything
+  //    else collapses into an "other" bar so the legend stays readable.
+  // 2) Index each gate-passed snapshot's trailing average by its date.
+  // 3) For each week, build one Recharts row: {week, source1: n, ..., other,
+  //    baseline} — the baseline is the first snapshot value found within that
+  //    week's 7 days (snapshots are daily, weeks are Mondays, so we probe
+  //    day by day for the nearest match).
   const stackedChart = useMemo(() => {
     if (!data) return { rows: [] as Record<string, unknown>[], sources: [] as string[] };
     const totals: Record<string, number> = {};
@@ -211,6 +259,7 @@ export default function Account() {
     return { rows, sources: [...top, "other"] };
   }, [data]);
 
+  // Delta-vs-peers line chart: gate-passed snapshots only, last 84 (~12wks).
   const deltaChart = useMemo(() => {
     if (!data) return [];
     return data.history.filter((row) => row.gate_passed).slice(-84).map((row) => ({
@@ -220,6 +269,11 @@ export default function Account() {
     }));
   }, [data]);
 
+  // Histogram bucketing: pick each lead's response time (human-only when the
+  // collector could tell humans from automations, otherwise any first touch),
+  // drop the nulls, then count how many fall in each bin. The bin test is
+  // "at most this bin's max AND above the previous bin's max" — half-open
+  // ranges, so every sample lands in exactly one bar.
   const histogram = useMemo(() => {
     if (!data) return [];
     const kindsKnown = data.snapshot?.speed_kind_known ?? false;
@@ -234,6 +288,8 @@ export default function Account() {
     }));
   }, [data]);
 
+  // Early returns for the error and loading states keep the main JSX below
+  // free of null checks on `data`.
   if (error) {
     return (
       <div className="mx-auto max-w-5xl px-4 py-6"><EmptyState>{error}</EmptyState></div>
@@ -246,16 +302,22 @@ export default function Account() {
   const quality = snapshot
     ? snapshot.gate_passed ? coverageQuality(snapshot.coverage) : "held"
     : "no data";
+  // Honesty in labeling: if automation touches couldn't be separated out, the
+  // speed metric says so rather than passing automations off as humans.
   const speedLabel = snapshot?.speed_kind_known ? "Speed to lead (human)" : "Speed to lead (automation incl.)";
   const noData = !snapshot || !snapshot.gate_passed;
+  // Split flags by acknowledgement; "Do next" is the top 3 unacked flags,
+  // reds before ambers before infos.
   const unacked = flags.filter((f) => !ackedCodes.has(f.code));
   const acked = flags.filter((f) => ackedCodes.has(f.code));
   const doNext = [...unacked].sort((a, b) => {
     const rank = { red: 0, amber: 1, info: 2 } as const;
     return rank[a.severity] - rank[b.severity];
   }).slice(0, 3);
+  // Detail tables tied to a firing (unacked) flag start expanded (spec 9.3.7).
   const firingTables = new Set(unacked.map((f) => FLAG_TABLE[f.code]).filter(Boolean));
 
+  // Insert an acknowledgement, then reload so the flag moves to the acked list.
   async function submitAck(code: string, days: 7 | 14 | 30) {
     const email = session?.user?.email;
     if (!email || !locationId) return;
@@ -272,6 +334,7 @@ export default function Account() {
     void load();
   }
 
+  // Insert a note (trimmed, capped at 4000 chars) and reload the list.
   async function submitNote() {
     const email = session?.user?.email;
     if (!email || !locationId || !noteBody.trim()) return;
@@ -285,6 +348,7 @@ export default function Account() {
     void load();
   }
 
+  // Relative-age label ("today" / "3d ago"); 86400000 = ms in a day.
   function daysAgo(iso: string): string {
     const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
     return days <= 0 ? "today" : `${days}d ago`;
@@ -357,6 +421,7 @@ export default function Account() {
                       </ExternalLink>
                     ) : null}
                   </div>
+                  {/* toggles the inline ack form; clicking again closes it */}
                   <button
                     onClick={() => { setAckFor(ackFor === flag.code ? null : flag.code); setAckNote(""); }}
                     className="rounded border border-grid px-2 py-1 text-xxs text-ink-2 hover:bg-plane"
@@ -364,6 +429,8 @@ export default function Account() {
                     Acknowledge
                   </button>
                 </div>
+                {/* inline ack form: optional note + pick a snooze length,
+                    which submits immediately (no separate save button) */}
                 {ackFor === flag.code ? (
                   <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-grid pt-2">
                     <input
@@ -386,6 +453,7 @@ export default function Account() {
             ))}
           </div>
         )}
+        {/* already-acknowledged flags: quiet gray receipts of who/when/note */}
         {acked.length > 0 ? (
           <div className="mt-2 grid gap-1">
             {acked.map((flag) => {
@@ -422,6 +490,9 @@ export default function Account() {
       </Section>
 
       {/* 4. KPI tiles */}
+      {/* Each tile hard-codes its "bad" threshold inline (uncontacted >= 3,
+          waiting >= 24h, stale >= $25k, ...) — the tone only colors the value;
+          the number itself always shows (color never carries meaning alone). */}
       {snapshot && !noData ? (
         <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           <StatTile
@@ -475,6 +546,7 @@ export default function Account() {
       {details ? (
         <Section title="Funnel (28d)">
           <div className="flex flex-wrap items-center gap-2 rounded border border-grid bg-surface px-3 py-2 text-xs">
+            {/* label/value pairs joined by arrows; null renders as "n/a" */}
             {[
               ["Form submissions", details.funnel_28d.form_submissions],
               ["New leads", details.funnel_28d.leads],
@@ -497,6 +569,8 @@ export default function Account() {
       {/* 6. charts */}
       {stackedChart.rows.length >= 2 ? (
         <div className="mb-6 grid gap-4 lg:grid-cols-3">
+          {/* stacked bars: weekly leads split by source, with the trailing
+              4-week average overlaid as a dashed reference line */}
           <div className="rounded border border-grid bg-surface p-3 lg:col-span-2">
             <div className="mb-1 text-xs font-semibold">
               Leads by week (12 wk, stacked by source) <span className="font-normal text-muted">— dashed line: trailing 4wk avg</span>
@@ -510,6 +584,7 @@ export default function Account() {
                 <Tooltip labelFormatter={(v) => `week of ${fmtDate(String(v))}`}
                          contentStyle={{ fontSize: 11, borderColor: GRID }} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
+                {/* one <Bar> per source; the shared stackId piles them up */}
                 {stackedChart.sources.map((source, i) => (
                   <Bar key={source} dataKey={source} stackId="leads"
                        fill={SOURCE_COLORS[i % SOURCE_COLORS.length]}
@@ -520,6 +595,9 @@ export default function Account() {
               </ComposedChart>
             </ResponsiveContainer>
           </div>
+          {/* companion line chart: this account's % delta vs its own baseline,
+              against the peer median — separates "we dipped" from "the whole
+              vertical dipped" */}
           <div className="rounded border border-grid bg-surface p-3">
             <div className="mb-1 flex items-baseline gap-3 text-xs">
               <span className="font-semibold">Delta vs baseline (%)</span>
@@ -550,6 +628,7 @@ export default function Account() {
         </Section>
       ) : null}
 
+      {/* response-time distribution — rendered only when any bar is non-zero */}
       {histogram.some((bin) => bin.count > 0) ? (
         <Section title={`${speedLabel} — distribution, last 30 days`}>
           <div className="rounded border border-grid bg-surface p-3">
@@ -567,6 +646,9 @@ export default function Account() {
       ) : null}
 
       {/* 7. detail tables — collapsed unless a firing flag ties to them */}
+      {/* All follow one pattern: Collapsible wrapper (auto-open when its flag
+          fires) around a DetailTable whose columns pull from details.ts, with
+          deep links back into GHL wherever the data offers one. */}
       {details ? (
         <>
           <Collapsible title={`Uncontacted leads (${details.uncontacted_leads.length})`}
@@ -590,6 +672,8 @@ export default function Account() {
               ]} />
           </Collapsible>
 
+          {/* missed_calls is optional (Tier 2) — old snapshots lack it, hence
+              the ?? [] fallback and the explanatory empty-state wording */}
           <Collapsible title={`Missed calls (${details.missed_calls?.length ?? 0})`}
                        defaultOpen={(snapshot?.calls_missed_7d ?? 0) > 0}>
             <DetailTable rows={details.missed_calls ?? []}
@@ -673,6 +757,7 @@ export default function Account() {
               columns={[
                 { header: "Platform", cell: (r) => r.platform ?? "—" },
                 { header: "Account", cell: (r) => r.name ?? r.id },
+                // glyph + word, not just color, per the accessibility rule
                 { header: "Status", cell: (r) => r.expired === null ? UNKNOWN : r.expired
                   ? <span className="text-status-critical">▲ disconnected</span>
                   : <span className="text-status-good-text">✓ connected</span> },
@@ -698,6 +783,7 @@ export default function Account() {
             {Object.keys(details.lost_reasons_90d).length === 0 ? (
               <EmptyState>No lost deals in the last 90 days.</EmptyState>
             ) : (
+              // rows here are [reason, count] tuples, sorted by count desc
               <DetailTable rows={Object.entries(details.lost_reasons_90d).sort((a, b) => b[1] - a[1])} empty=""
                 columns={[
                   { header: "Reason", cell: ([reason]) => reason },
@@ -720,6 +806,8 @@ export default function Account() {
       ) : null}
 
       {/* 8. coverage: the honesty layer */}
+      {/* auto-opens whenever quality isn't "complete", so partial data never
+          hides its caveats; the raw JSON dump below the table is for debugging */}
       {snapshot ? (
         <Collapsible title="Coverage and caveats" defaultOpen={quality !== "complete"}>
           <div className="rounded border border-grid bg-surface p-3">
@@ -744,6 +832,8 @@ export default function Account() {
         <Section
           title="Weekly client summary (copy-ready)"
           right={
+            // Clipboard copy via the async navigator.clipboard API; on success
+            // the button flips to "Copied ✓" for 2 seconds, then reverts.
             <button
               onClick={() => {
                 void navigator.clipboard.writeText(buildClientSummary(sub, snapshot)).then(() => {

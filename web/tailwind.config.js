@@ -1,3 +1,7 @@
+// Tailwind config: `content` lists the files scanned for class names (unused
+// styles are dropped from the build), and `theme.extend` defines the app's
+// custom color tokens (surface/ink/muted/status-*) and the tiny `xxs` size
+// that class names like `text-ink-2` and `bg-status-critical/10` refer to.
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],

@@ -8,6 +8,53 @@ details. Exit 0 all ok, 2 any held or failed, 1 crash.
 
 CLI: --probe | --dry-run | --location <id|slug> | --max-pages N
      | --date YYYY-MM-DD | --backfill N
+
+How this fits in
+----------------
+This module is the CLI (command-line interface, parsed with the standard
+library's argparse) and the orchestrator for the whole collector. A scheduler
+(cron — a job that fires on a fixed timetable) runs ``python -m collector``
+once a day. Everything else in the package is a supporting player:
+``fetchers`` pulls raw records from the GoHighLevel (GHL) API, ``metrics``
+turns those records into numbers, ``flags`` scores the numbers against
+thresholds, ``store`` persists everything in Supabase (Postgres), and
+``digest`` emails a Monday summary to each account manager (AM).
+
+In plain English, one normal daily run does this:
+
+1. Check the shared secret (COLLECTOR_KEY) against the database so a
+   misconfigured machine fails fast instead of half-running.
+2. Load the subaccount list: one row per client location, plus one special
+   "parent" account, which is SSP's own CRM.
+3. Collect the parent FIRST, because client-relationship data (invoices,
+   meetings with the client) lives in the parent account, indexed there by
+   each client's contact id.
+4. Collect each client location: fetch -> compute metrics -> write a daily
+   snapshot row, per-lead speed-to-lead rows, and weekly history rows.
+5. Run the "peer pass": once every snapshot is written, compute the median
+   lead delta per vertical so each account is judged against its peers,
+   then compute flags and diff them against last week's flags.
+6. On Mondays, send the AM digest emails; finally record run totals.
+
+Exit codes (what the scheduler sees): 0 = every location collected and passed
+its sanity gate; 2 = at least one location was held or failed (partial data);
+1 = the run crashed or could not start at all. Writes are idempotent —
+rerunning the same date upserts the same rows rather than duplicating them.
+
+Key ideas to understand this file
+---------------------------------
+* Modes: ``--probe`` prints raw API response shapes for one location (used to
+  verify fetchers against the real API); ``--dry-run`` fetches and computes
+  but writes and sends nothing (a rehearsal); ``--backfill N`` rebuilds N ISO
+  weeks of lead_history from CRM history; ``--digest`` builds/sends the AM
+  email on demand. With no mode flag you get the normal collection run.
+* Environment variables (settings injected by the shell or deploy config, not
+  hard-coded) supply things like GHL_APP_BASE and TZ.
+* PIT — a GHL "Private Integration Token", the per-location API secret. PITs
+  live in Supabase Vault and are fetched fresh each run via store.get_pit().
+* Gate — a per-location sanity check: a snapshot that looks broken (identity
+  mismatch, suspiciously dead sources) is still written but marked "held" so
+  bad numbers never reach the dashboard as if they were trustworthy.
 """
 
 from __future__ import annotations
@@ -24,24 +71,29 @@ from . import digest as digest_mod, fetchers, flags as flags_mod, metrics
 from .fetchers import Coverage
 from .ghl_client import GHLClient, GHLAuthError, GHLError
 
-SPEED_CAP = 100
-DETAILS_CAP = 50
-TOKEN_ROTATION_WARN_DAYS = 80
+# Tunable caps. Per-record drill-downs (one API request per contact or
+# conversation) are the expensive part of a run, so each one is bounded.
+SPEED_CAP = 100         # speed-to-lead: max contacts whose conversations we fetch per location
+DETAILS_CAP = 50        # max rows kept in each drill-down list inside snapshot details
+TOKEN_ROTATION_WARN_DAYS = 80   # nag before the 90-day PIT rotation policy bites
 HISTORY_DAYS = 42       # one contacts fetch covers 7d window, 28d baseline, 14-42d cohort, 28d funnel
-CLOSED_OPP_DAYS = 90
+CLOSED_OPP_DAYS = 90    # how far back closed (won/lost) opportunities are fetched
 CALL_CONVO_CAP = 30     # missed-call scan: message fetches per location, cap noted in coverage
 
 
 def log(message: str) -> None:
+    """Print a UTC-timestamped progress line (the collector's only logger)."""
     stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
     print(f"[{stamp}] {message}", flush=True)
 
 
 def app_base() -> str:
+    """Base URL of the white-labeled GHL app, used to build deep links."""
     return os.environ.get("GHL_APP_BASE", "https://crm.smallscreenproducer.com").rstrip("/")
 
 
 def run_timezone():
+    """Timezone for deciding "today's" snapshot date (TZ env var or default)."""
     return metrics.get_tz(os.environ.get("TZ") or metrics.DEFAULT_TZ)
 
 
@@ -49,6 +101,18 @@ def run_timezone():
 
 
 class ParentContext:
+    """Data pulled once from the SSP parent account and shared by every client.
+
+    The parent account is SSP's own CRM: each client company is a *contact*
+    there, and the invoices SSP sends and the meetings SSP books with clients
+    hang off those contacts. Fetching invoices/events once and indexing them
+    by contact id means each client location later does a cheap dict lookup
+    (via its configured ssp_client_contact_id) instead of its own API calls.
+
+    ``available`` is False when the parent could not be fetched; client
+    relationship metrics are then reported as unavailable, not as zeros.
+    """
+
     def __init__(self):
         self.available = False
         self.error: str | None = None
@@ -60,17 +124,28 @@ class ParentContext:
 
 def build_parent_context(parent_sub: dict, client: GHLClient, now_utc: datetime,
                          max_pages: int | None) -> ParentContext:
+    """Fetch parent-account invoices and calendar events, indexed by contact id.
+
+    Runs once, before any client location is collected (step 3 of the run
+    sequence). ``max_pages`` caps pagination the same way it does elsewhere.
+    Returns a ParentContext whose ``available`` flag reflects whether the
+    invoice fetch actually worked.
+    """
     ctx = ParentContext()
     ctx.location_id = parent_sub["location_id"]
     ctx.client = client
     cov = Coverage()
 
+    # Group every invoice under the client contact it was billed to, so a
+    # location later asks "invoices for MY client contact id" in O(1).
     invoices = fetchers.fetch_invoices(client, cov, ctx.location_id, max_pages=max_pages)
     for inv in invoices:
         contact = (inv.get("contactDetails") or {}).get("id")
         if contact:
             ctx.invoices_by_contact.setdefault(str(contact), []).append(inv)
 
+    # Same idea for calendar events: +/- 60 days around now covers both the
+    # "last touch" lookback and the "next appointment" lookahead metrics.
     calendars = fetchers.fetch_calendars(client, cov, ctx.location_id)
     start_ms = int((now_utc - timedelta(days=60)).timestamp() * 1000)
     end_ms = int((now_utc + timedelta(days=60)).timestamp() * 1000)
@@ -81,6 +156,8 @@ def build_parent_context(parent_sub: dict, client: GHLClient, now_utc: datetime,
         if contact:
             ctx.events_by_contact.setdefault(str(contact), []).append(event)
 
+    # Invoices are the load-bearing source here; if they failed, mark the
+    # whole context unavailable rather than serving half a picture.
     ctx.available = cov.status("invoices") != "unavailable"
     if not ctx.available:
         ctx.error = (cov.sources.get("invoices") or {}).get("error")
@@ -96,9 +173,22 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
                   pipe: dict, rel: dict | None, reviews: dict, events_next7: list[dict],
                   delivery: dict, social_accounts: list[dict] | None,
                   client_contact_id: str | None) -> dict:
+    """Assemble the ``details`` JSONB blob stored inside each daily snapshot.
+
+    While the top-level snapshot columns hold single numbers ("5 stale opps"),
+    ``details`` holds the drill-down rows behind those numbers — each with a
+    deep link back into the GHL app so an AM can jump straight to the record.
+    (JSONB is Postgres's binary JSON column type: one column, nested data.)
+
+    Called near the end of collect_location, after all metrics are computed.
+    Every list is truncated to DETAILS_CAP rows to keep row size bounded.
+    The keyword-only inputs are the raw/derived pieces produced earlier in
+    collect_location; output is a plain dict matching the spec 7.5 contract.
+    """
     def contact_link(contact_id):
         return metrics.link_contact(base, location_id, contact_id)
 
+    # Leads nobody has replied to yet, with hours elapsed since they came in.
     uncontacted = [{
         "contact_id": e.get("contact_id"),
         "name": e.get("contact_name"),
@@ -128,6 +218,8 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
                                                w.get("contact_id")),
     } for w in waiting[:DETAILS_CAP]]
 
+    # Opportunities carry only pipeline/stage IDs; translate them to names
+    # via the pipeline_map built earlier from the pipelines fetch.
     def pipeline_name(opp):
         entry = pipeline_map.get(str(opp.get("pipelineId")))
         return entry["name"] if entry else str(opp.get("pipelineId") or "?")
@@ -137,6 +229,8 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
         return (entry.get("stages") or {}).get(str(opp.get("pipelineStageId")),
                                                str(opp.get("pipelineStageId") or "?"))
 
+    # Stale opportunities: open deals nobody has touched recently, sorted
+    # worst-first so the longest-idle deal tops the dashboard list.
     stale_rows = []
     for item in pipe.get("per_opp", []):
         if not item["is_stale"]:
@@ -182,6 +276,8 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
         base, location_id, row.get("opp_id"), row.get("contact_id"))}
         for row in reviews.get("gap_detail", [])[:DETAILS_CAP]]
 
+    # Relationship block (SSP <-> client): only present when this location has
+    # a configured client contact AND the parent-account data was available.
     client_block = None
     if client_contact_id and rel is not None:
         client_block = {
@@ -229,12 +325,28 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
 
 def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentContext,
                      now_utc: datetime, run_date: date, max_pages: int | None) -> dict:
+    """Fetch and compute everything for ONE location (step 4 of the run).
+
+    Inputs: the subaccount config row, an authenticated GHL client for this
+    location's PIT, the store (for the gate's history read), the shared
+    parent context, and the run clock/date. ``max_pages`` caps pagination.
+
+    Output dict: token_invalid flag, the snapshot row (metrics + coverage +
+    details), lead_events rows, lead_history rows, and the gate verdict.
+    The caller decides what to persist; this function only *reads* the store.
+
+    A Coverage object rides along through every fetch, recording per-source
+    success/coverage notes so the dashboard can say "this number is partial"
+    instead of quietly showing a wrong value.
+    """
     location_id = sub["location_id"]
     base = app_base()
     cov = Coverage()
     thresholds = flags_mod.merged_thresholds(sub.get("thresholds"))
 
-    # G1: identity — a 401/403 here means the token itself is bad.
+    # G1: identity — fetch the location record and check it matches the
+    # configured id/name, proving the token belongs to the right account.
+    # A 401/403 here means the token itself is bad, so we bail immediately.
     try:
         loc_data = client.request("GET", f"/locations/{location_id}")
     except GHLAuthError as exc:
@@ -253,12 +365,17 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     )
     tz = metrics.get_tz((loc or {}).get("timezone") or sub.get("timezone"))
 
+    # Two time windows, both in the LOCATION's timezone: the 7-day reporting
+    # window and the 42-day history range that all longer metrics draw from.
     win_start, win_end = metrics.window_7d(now_utc, tz)
     history_start, history_end = metrics.rolling_window(now_utc, tz, HISTORY_DAYS)
 
+    # Users map (id -> display name) so details can show owner names.
     users = fetchers.fetch_users(client, cov, location_id)
     umap = fetchers.users_map(users)
 
+    # Pipelines: build {pipeline_id: {name, stages: {stage_id: name}}} for
+    # translating opportunity IDs into human-readable names later.
     pipelines = fetchers.fetch_pipelines(client, cov, location_id)
     pipeline_map = {}
     for p in pipelines:
@@ -270,17 +387,23 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                            for s in (p.get("stages") or []) if s.get("id") or s.get("_id")},
             }
 
+    # Opportunities: all open ones plus anything closed in the last 90 days
+    # (enough for win rate and days-to-close without paging forever).
     closed_cutoff_ms = int((now_utc - timedelta(days=CLOSED_OPP_DAYS)).timestamp() * 1000)
     opps = fetchers.fetch_opportunities(client, cov, location_id, closed_cutoff_ms,
                                         max_pages=max_pages)
 
+    # Conversations active in the last 14 days feed both the "waiting on a
+    # reply" scan and the missed-call scan below.
     since_14d = metrics.rolling_window(now_utc, tz, 14)[0]
     convos = fetchers.fetch_recent_conversations(client, cov, location_id,
                                                  int(since_14d.timestamp() * 1000),
                                                  max_pages=max_pages)
 
     # Missed inbound calls (Tier 2): message-level TYPE_CALL metadata on the
-    # call conversations in the recent scan.
+    # call conversations in the recent scan. Each conversation costs one extra
+    # messages request, so the scan stops at CALL_CONVO_CAP conversations and
+    # records in coverage whether the cap (or an error) truncated it.
     call_convos = [c for c in convos if metrics.is_call_conversation(c)]
     missed_calls: list[dict] = []
     call_errors = 0
@@ -300,7 +423,11 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                note=f"capped at {CALL_CONVO_CAP} call conversations" if len(call_convos) > CALL_CONVO_CAP else None)
     missed_calls.sort(key=lambda m: m["at"], reverse=True)
 
-    # One contacts fetch covers every window (7d, baseline, cohort, funnel, speed)
+    # One contacts fetch covers every window (7d, baseline, cohort, funnel, speed).
+    # Contacts are the most-paginated source, so instead of fetching per metric
+    # we pull the whole 42-day (HISTORY_DAYS) range once and slice it in memory:
+    # the 7d lead count, the 28d trailing baseline, the 14-42d review cohort,
+    # the 28d funnel, and the 14d speed-to-lead targets all come from this list.
     contacts_all = fetchers.fetch_contacts_range(
         client, cov, location_id,
         gte_iso=history_start.astimezone(timezone.utc).isoformat(),
@@ -308,15 +435,19 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         max_pages=max_pages)
     earliest_added = metrics.parse_ts(fetchers.fetch_earliest_contact_added(client, location_id))
 
+    # Contacts tagged as "review asked" — input for the review-proxy metrics.
     tagged = fetchers.fetch_tagged_contacts(client, cov, location_id, metrics.REVIEW_TAG,
                                             max_pages=max_pages)
 
+    # Website form submissions over the same 42-day range (local dates).
     submissions = fetchers.fetch_form_submissions(
         client, cov, location_id,
         start_date=history_start.astimezone(tz).date().isoformat(),
         end_date=history_end.astimezone(tz).date().isoformat(),
         max_pages=max_pages)
 
+    # Calendar events: 28 days back (show/no-show stats) + 7 days ahead
+    # (upcoming appointments list).
     calendars = fetchers.fetch_calendars(client, cov, location_id)
     events = fetchers.fetch_calendar_events(
         client, cov, location_id, calendars,
@@ -325,6 +456,9 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     events_next7 = [e for e in events
                     if (ts := metrics.parse_ts(e.get("startTime"))) is not None and ts > now_utc]
 
+    # Content-delivery sources (blogs, social) only apply when SSP actually
+    # sells those services to this client; otherwise they are recorded as
+    # skipped in coverage so "0 posts" is never mistaken for a problem.
     services = sub.get("services") or []
     delivery_applies = bool({"content", "social"} & set(services))
     social_accounts = None
@@ -345,7 +479,10 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         cov.record("social", skipped=True, note="content/social not in services; skipped")
         cov.record("social_accounts", skipped=True, note="content/social not in services; skipped")
 
-    # Exclusions, windows, and the live baseline
+    # Exclusions, windows, and the live baseline. filter_exclusions drops
+    # test/spam/internal contacts; leads_7d vs leads_7d_raw tells us how many
+    # were excluded. The baseline is the trailing weekly average this week's
+    # count is compared against (leads_delta_pct).
     kept_all, _ = metrics.filter_exclusions(contacts_all)
     leads_7d_raw = metrics.leads_in_window(contacts_all, win_start, win_end)
     leads_7d = metrics.leads_in_window(kept_all, win_start, win_end)
@@ -359,7 +496,12 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     form_stats = metrics.form_submission_stats(submissions, win_start, win_end,
                                                baseline["trailing_n"])
 
-    # Speed to lead: newest first, capped
+    # Speed to lead: how fast does anyone (and any *human*) respond to a new
+    # lead? Requires reading each lead's conversations + messages, which is
+    # one or more API calls per contact — so only the newest SPEED_CAP
+    # contacts from the last 14 days are examined, newest first. Errors on
+    # individual contacts are counted, not fatal; the cap and error count are
+    # recorded in coverage so the metric's completeness is visible.
     def created_key(c):
         return metrics.parse_ts(c.get("dateAdded")) or datetime.min.replace(tzinfo=timezone.utc)
 
@@ -392,6 +534,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     speed = metrics.speed_to_lead_metrics(lead_events, now_utc, win_start, win_end)
     speed["now_utc"] = now_utc
 
+    # Remaining metric computations — all pure functions over data fetched above.
     waiting = metrics.waiting_conversations(convos, now_utc, tz, since_utc=since_14d,
                                             min_hours=thresholds["convo_wait_hours"])
     active_7d = metrics.convos_active_7d(convos, win_start, win_end)
@@ -410,7 +553,11 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         cov.add_note("blogs", "no publish found in 90d")
     social_stats = metrics.social_account_stats(social_accounts)
 
-    # Relationship metrics come from the parent account
+    # Relationship metrics (is SSP's own relationship with this client
+    # healthy?) come from the PARENT account: invoices/events were indexed by
+    # contact id in build_parent_context, keyed here by this location's
+    # ssp_client_contact_id. Conversations with the client are the one piece
+    # fetched on demand. Each skip/failure reason lands in coverage.
     rel = None
     client_contact_id = sub.get("ssp_client_contact_id")
     if sub.get("is_parent"):
@@ -438,13 +585,19 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
 
     reviews = metrics.review_proxies(tagged, opps, now_utc)
 
+    # The gate: decide whether this snapshot is trustworthy enough to show.
+    # prev_dead is the last few gate-passed snapshots' activity counts — if
+    # activity was nonzero before but everything reads zero today, the far
+    # more likely story is a broken fetch than a business going silent, so
+    # the snapshot is written but HELD (gate_passed=False) with reasons.
     prev_dead = store.read_prev_dead(location_id, run_date)
     gate_passed, gate_reasons = metrics.gate_check(
         g1_ok, cov, len(leads_7d), active_7d, pipe["opps_created_7d"], prev_dead)
     if gate_reasons:
         cov.add_note("location" if not g1_ok else "opportunities", "; ".join(gate_reasons))
 
-    # 28-day funnel for the drilldown strip
+    # 28-day funnel for the drilldown strip: form submissions -> leads ->
+    # opportunities -> booked appointments -> won, all over the same window.
     cutoff_28 = now_utc - timedelta(days=28)
     funnel_28d = {
         "form_submissions": None if submissions is None else sum(
@@ -461,6 +614,8 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                    and (ts := metrics.parse_ts(o.get("lastStatusChangeAt"))) is not None and ts >= cutoff_28),
     }
 
+    # Flat metric columns for the snapshot row. None means "unknown /
+    # unavailable", deliberately distinct from a measured zero.
     metric_values = {
         "leads_new_7d": len(leads_7d),
         "leads_trailing_avg": baseline["leads_trailing_avg"],
@@ -534,6 +689,8 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         details["client"]["deep_link"] = metrics.link_contact(
             base, parent_ctx.location_id, client_contact_id)
 
+    # The snapshot row: one row per location per day (the upsert key), with
+    # gate verdict, coverage report, all metric columns, and the details blob.
     snapshot = {
         "location_id": location_id,
         "snapshot_date": run_date.isoformat(),
@@ -543,6 +700,8 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "details": details,
     }
 
+    # One durable row per examined lead (upserted by location+contact), so
+    # speed-to-lead history survives beyond the daily snapshot.
     lead_event_rows = [{
         "location_id": location_id,
         "contact_id": str(e["contact_id"]),
@@ -579,9 +738,22 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
 
 def peer_pass(store, subs_by_id: dict, run_date: date) -> dict[str, tuple[float | None, int | None]]:
     """Vertical medians over today's gate-passed client snapshots; fall back to
-    the whole active book when a vertical has < 4 non-null deltas."""
+    the whole active book when a vertical has < 4 non-null deltas.
+
+    Runs AFTER every location has been collected (step 5), because it needs
+    all of today's snapshots at once: "is this account's lead delta normal?"
+    only makes sense relative to its peers in the same vertical (industry,
+    e.g. pool_builder). The median is robust to one outlier account; the
+    whole-book fallback keeps small verticals from comparing against noise.
+
+    Reads today's snapshots from the store, writes each location's peer
+    median + peer count back onto its snapshot row, and returns
+    {location_id: (peer_median_delta_pct, peer_n)} for the in-memory pass.
+    """
     snaps = store.todays_snapshots(run_date)
     client_snaps = []
+    # Pair each snapshot with its vertical; the parent account is not a
+    # client so it never participates in peer comparisons.
     for snap in snaps:
         sub = subs_by_id.get(snap["location_id"])
         if not sub or sub.get("is_parent"):
@@ -599,6 +771,8 @@ def peer_pass(store, subs_by_id: dict, run_date: date) -> dict[str, tuple[float 
     for row in client_snaps:
         by_vertical.setdefault(row[1], []).append(row)
 
+    # Per vertical: use the vertical's own median when it has enough data,
+    # else the whole-book median, else record "no peer data" (None).
     for vertical, rows in by_vertical.items():
         vert_median, vert_n = metrics.peer_median(deltas(rows))
         if vert_median is not None:
@@ -617,12 +791,23 @@ def peer_pass(store, subs_by_id: dict, run_date: date) -> dict[str, tuple[float 
 
 # -- probe -------------------------------------------------------------------
 
+# PII redaction for probe output. The probe appends raw API samples to
+# VERIFICATION.md, which may get committed or shared — so anything that looks
+# like personal data is scrubbed first, belt and braces: by key name (email/
+# phone/address keys and message-body keys) AND by regex over string values.
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 PHONE_RE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
 BODY_KEYS = ("body", "lastmessagebody", "snippet", "message")
 
 
 def _redact(obj):
+    """Recursively scrub PII from probe samples before they hit disk.
+
+    Dict values under sensitive-looking keys become the literal marker
+    "«redacted»"; lists are truncated to 2 items (shape matters, volume does
+    not); free strings get email/phone patterns replaced. Everything else
+    passes through untouched.
+    """
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
@@ -640,6 +825,15 @@ def _redact(obj):
 
 
 def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
+    """Hit every endpoint the collector uses and return a Markdown report.
+
+    Runs only in --probe mode, before the fetchers are trusted against a real
+    account: it calls each endpoint once, records HTTP status plus a redacted
+    sample record, and ends with a manual checklist of field names to VERIFY
+    against fetchers.py/metrics.py assumptions. The report string is appended
+    to VERIFICATION.md by run(). No metrics are computed and nothing is
+    written to the database.
+    """
     location_id = sub["location_id"]
     lines = [f"\n## Probe: {sub.get('name')} ({location_id}) — {now_utc.isoformat(timespec='seconds')}\n"]
     month_ago = (now_utc - timedelta(days=30)).isoformat()
@@ -650,6 +844,9 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
     first_calendar_id: str | None = None
     first_blog_id: str | None = None
 
+    # Helper: make one request, append "### label / status / redacted sample"
+    # to the report, and echo progress to the terminal. `pick` selects which
+    # part of the response to sample (usually the first item of a list).
     def show(label: str, method: str, path: str, params=None, body=None, pick=None):
         status, data, error = client.try_request(method, path, params=params, json_body=body)
         lines.append(f"### {label}\n`{method} {path}` → **HTTP {status}**\n")
@@ -671,6 +868,10 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
             return items[0] if items else data
         return picker
 
+    # The probes below mirror the real fetch calls one-for-one. A few
+    # (contacts, conversations, calendars, blog sites) are inlined instead of
+    # using show() because they must also capture an id from the response —
+    # later probes (messages, events, posts) need a real record id to hit.
     print(f"Probing {sub.get('name')} ({location_id})")
     show("Location", "GET", f"/locations/{location_id}")
     show("Users", "GET", "/users/", params={"locationId": location_id}, pick=first_of("users", "data"))
@@ -817,6 +1018,14 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
 
 def backfill_location(sub: dict, client: GHLClient, store, now_utc: datetime,
                       weeks_back: int, max_pages: int | None, dry_run: bool) -> int:
+    """Rebuild ``weeks_back`` ISO weeks of lead_history straight from the CRM.
+
+    Runs only in --backfill mode — typically once when a location is first
+    onboarded, so the dashboard's weekly trend chart has history before the
+    daily runs have accumulated any. Fetches contacts + form submissions over
+    the whole span, buckets them into weekly rows, and upserts them (skipped
+    when dry_run). Returns the number of weekly rows produced.
+    """
     location_id = sub["location_id"]
     tz = metrics.get_tz(sub.get("timezone"))
     cov = Coverage()
@@ -846,6 +1055,7 @@ def backfill_location(sub: dict, client: GHLClient, store, now_utc: datetime,
 
 
 def resolve_location(subs: list[dict], key: str) -> dict | None:
+    """Match a --location argument (raw location_id or friendly slug)."""
     for sub in subs:
         if sub.get("location_id") == key or sub.get("slug") == key:
             return sub
@@ -854,6 +1064,13 @@ def resolve_location(subs: list[dict], key: str) -> dict | None:
 
 def run(argv: list[str] | None = None, store=None, client_factory=None,
         now_utc: datetime | None = None) -> int:
+    """Parse the CLI, dispatch to a mode, and drive the collection pipeline.
+
+    Returns the process exit code (0 ok / 2 partial / 1 setup failure — the
+    crash path lives in main() below). The keyword parameters exist for the
+    tests: they inject FakeStore, a FakeClient factory, and a frozen clock in
+    place of the real Supabase store, GHLClient, and "now".
+    """
     parser = argparse.ArgumentParser(prog="collector", description="GHL account health collector")
     parser.add_argument("--probe", action="store_true", help="verify endpoint shapes for one location")
     parser.add_argument("--dry-run", action="store_true", help="fetch and compute, write nothing")
@@ -867,6 +1084,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
                              "(with --dry-run: print instead of sending)")
     args = parser.parse_args(argv)
 
+    # Wire up real dependencies unless the tests injected fakes above.
     if store is None:
         from .store import Store
         store = Store()
@@ -875,6 +1093,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     now_utc = now_utc or datetime.now(timezone.utc)
     run_date = date.fromisoformat(args.date) if args.date else now_utc.astimezone(run_timezone()).date()
 
+    # Fail fast if our COLLECTOR_KEY is not the one Vault expects — better a
+    # clean abort than a run where every get_pit silently returns nothing.
     if not store.pit_key_ok():
         log("COLLECTOR_KEY rejected by pit_key_ok — aborting (check Vault bootstrap and env)")
         return 1
@@ -894,6 +1114,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         targets = [chosen]
 
     # -- probe mode -----------------------------------------------------------
+    # Verify endpoint shapes for one location (default: the parent) and
+    # append the redacted report to VERIFICATION.md. Writes nothing else.
     if args.probe:
         sub = targets[0] if args.location else (parent_sub or subs[0])
         token = store.get_pit(sub["location_id"])
@@ -909,6 +1131,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         return 0
 
     # -- digest mode ------------------------------------------------------------
+    # Build the per-AM summary from data already in the database (no GHL
+    # calls at all). With --dry-run the emails are printed instead of sent —
+    # the way to preview exactly what each AM would receive.
     if args.digest:
         data = store.read_portfolio(run_date)
         digests = digest_mod.build_digests(
@@ -927,6 +1152,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         return 0 if digest_failed == 0 else 2
 
     # -- backfill mode ----------------------------------------------------------
+    # Rebuild N weeks of lead_history per target location, then exit.
     if args.backfill:
         failed = 0
         for sub in targets:
@@ -943,6 +1169,10 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         return 0 if failed == 0 else 2
 
     # -- collection -----------------------------------------------------------
+    # The normal daily pipeline. A dry run never opens a run record; a real
+    # run registers itself first so a crash still leaves a "running" row as
+    # evidence. `clients` keeps every GHL client alive so request/429 totals
+    # can be summed at the end.
     run_id = None if args.dry_run else store.start_run()
     clients: list[GHLClient] = []
     results: dict[str, dict] = {}
@@ -950,6 +1180,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     ok = held = failed = 0
     errors: list[str] = []
 
+    # Build the shared parent context before touching any client location
+    # (parent-first ordering). If the parent is missing or has no token, the
+    # run still proceeds — relationship metrics just report unavailable.
     parent_ctx = ParentContext()
     if parent_sub:
         token = store.get_pit(parent_sub["location_id"])
@@ -966,12 +1199,16 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         parent_ctx.error = "no parent subaccount configured"
         log("no is_parent subaccount configured; relationship metrics unavailable")
 
+    # Collection order: parent first (when in scope), then client locations.
+    # The parent also gets its own snapshot — it just skips relationship
+    # metrics about itself.
     ordered = ([parent_sub] if parent_sub and (not args.location or parent_sub in targets) else [])
     ordered += [s for s in targets if not s.get("is_parent")]
 
     for sub in ordered:
         slug = sub.get("slug") or sub["location_id"]
         location_id = sub["location_id"]
+        # Nag (log only) when a PIT is approaching the 90-day rotation policy.
         rotated = sub.get("token_rotated_at")
         if rotated:
             try:
@@ -981,6 +1218,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             except ValueError:
                 pass
 
+        # Reuse the parent's client (already authenticated above); every other
+        # location gets its own client from its own PIT. A missing token is a
+        # per-location failure, not a run-stopper.
         if sub.get("is_parent") and parent_ctx.client is not None:
             client = parent_ctx.client
         else:
@@ -996,6 +1236,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             client = client_factory(token)
             clients.append(client)
 
+        # Per-location accounting: wall-clock seconds plus request/429 deltas
+        # on the client (deltas because the parent's client is shared). These
+        # land in the run's per-location details for cost/debug visibility.
         log(f"{slug}: collecting")
         started = time.monotonic()
         requests_before = client.requests_made
@@ -1017,6 +1260,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             "seconds": round(time.monotonic() - started, 1),
         }
 
+        # Auth failed mid-collection: record it on the subaccount so the
+        # dashboard (and pit status) shows exactly which token needs fixing.
         if result.get("token_invalid"):
             failed += 1
             errors.append(f"{slug}: token invalid ({result.get('error')})")
@@ -1026,6 +1271,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             run_details[location_id] = {**loc_detail, "status": "failed", "error": result.get("error")}
             continue
 
+        # Success: refresh token bookkeeping, then upsert all three outputs
+        # (snapshot, lead_events, lead_history). Upserts make reruns of the
+        # same date safe — idempotent, no duplicate rows.
         if not args.dry_run:
             rotated_at = None
             try:
@@ -1043,6 +1291,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             store.upsert_lead_history(location_id, result["lead_history"])
         results[location_id] = {**result, "sub": sub}
 
+        # Gate hold path: a held snapshot IS written (with gate_passed=False)
+        # so the data exists for debugging, but it counts toward exit code 2
+        # and the dashboard treats it as "no trustworthy data today".
         if result["gate_passed"]:
             ok += 1
             log(f"{slug}: snapshot written, gate passed")
@@ -1057,8 +1308,15 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         }
 
     # -- peer pass, flags, and change tracking -----------------------------------
+    # Order matters here: (1) peer medians need every snapshot written first;
+    # (2) flags need the peer numbers folded into each location's metrics;
+    # (3) change tracking diffs today's flag codes against those from 7 days
+    # ago to produce flags_new / flags_resolved for the digest and dashboard.
     subs_by_id = {s["location_id"]: s for s in subs}
     if args.dry_run:
+        # Dry run: nothing was persisted, so there are no stored snapshots to
+        # compute peers from. Print per-location metrics + flags (sans peer
+        # comparison) and stop.
         for location_id, result in results.items():
             sub = result["sub"]
             location_flags = flags_mod.compute_flags(
@@ -1076,6 +1334,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
 
     peers = peer_pass(store, subs_by_id, run_date)
     for location_id, result in results.items():
+        # Fold peer numbers in, compute flags, replace this date's flag rows,
+        # and stamp the new/resolved diff into the snapshot's details.
         peer_value, peer_n = peers.get(location_id, (None, None))
         result["metrics"]["peer_median_delta_pct"] = peer_value
         result["metrics"]["peer_n"] = peer_n
@@ -1092,7 +1352,11 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
             f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
 
-    # Monday digest (Tier 2): sent at the end of the Monday run when Resend is configured
+    # Monday digest (Tier 2): sent at the end of the Monday run when Resend is
+    # configured. weekday() == 0 means Monday, judged by the snapshot date —
+    # so the auto-send happens exactly once per week without a separate cron
+    # entry, and any other day skips this block entirely. (send_digests is a
+    # no-op that logs when RESEND_API_KEY / DIGEST_FROM are unset.)
     if run_date.weekday() == 0:
         data = store.read_portfolio(run_date)
         digests = digest_mod.build_digests(
@@ -1103,6 +1367,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             if sent or digest_failed:
                 log(f"digest: {sent} sent, {digest_failed} failed")
 
+    # Close out the run row: totals, an overall status (ok / partial /
+    # failed), and a truncated error summary including any 429 counts.
     requests_made = sum(c.requests_made for c in clients)
     rate_limited = sum(c.rate_limited for c in clients)
     status = "ok" if failed == 0 and held == 0 else ("failed" if ok == 0 and held == 0 else "partial")
@@ -1118,6 +1384,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
 
 
 def main() -> None:
+    """Console entry point: run() plus the exit-code contract for crashes."""
     try:
         sys.exit(run())
     except KeyboardInterrupt:

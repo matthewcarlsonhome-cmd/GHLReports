@@ -1,3 +1,8 @@
+// Runs.tsx — the operational health page: a log of the last 30 collector runs
+// (the nightly job that pulls data out of GoHighLevel) plus a token-health
+// report. This page answers "did last night's data collection actually work,
+// and which API tokens need attention?" — it's for the person running the
+// system, not for account managers.
 import { Fragment, useEffect, useState } from "react";
 
 import { DetailTable, EmptyState, Section, Skeleton } from "../components/ui";
@@ -5,14 +10,21 @@ import type { CollectorRunRow, SubaccountRow } from "../lib/database.types";
 import { fmtDateTime, fmtNum } from "../lib/format";
 import { supabase } from "../lib/supabase";
 
+// GHL Private Integration Tokens should be rotated ~quarterly; warn well
+// before the 90-day mark so rotation happens on schedule, not in a panic.
 const ROTATION_WARN_DAYS = 80;
 
+// Lists every account whose API token needs action: status not "ok" (missing
+// or invalid — no data can be collected) or older than the rotation warning.
+// Healthy accounts are filtered out entirely, so an empty table is good news.
 function TokenHealth({ subs }: { subs: SubaccountRow[] }) {
   const today = Date.now();
   const unhealthy = subs.filter((sub) => {
     if (!sub.active) return false;
     if (sub.token_status !== "ok") return true;
     if (!sub.token_rotated_at) return false;
+    // Token age in days: epoch milliseconds (ms since 1970-01-01 UTC, what
+    // Date.now()/getTime() return) divided by 86,400,000 ms per day.
     const age = (today - new Date(sub.token_rotated_at).getTime()) / 86400000;
     return age > ROTATION_WARN_DAYS;
   });
@@ -37,6 +49,8 @@ function TokenHealth({ subs }: { subs: SubaccountRow[] }) {
             },
             { header: "Rotated", cell: (r) => r.token_rotated_at ?? "never" },
             {
+              // The fix is literal instructions, keyed to the exact Vault
+              // secret name for this account.
               header: "Action",
               cell: (r) =>
                 r.token_status !== "ok"
@@ -51,11 +65,15 @@ function TokenHealth({ subs }: { subs: SubaccountRow[] }) {
 }
 
 export default function Runs() {
+  // runs === null means "still loading" (distinct from "loaded, empty" = []).
   const [runs, setRuns] = useState<CollectorRunRow[] | null>(null);
   const [subs, setSubs] = useState<SubaccountRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // ID of the run whose per-location breakdown row is open (one at a time).
   const [expanded, setExpanded] = useState<number | null>(null);
 
+  // One-time load on mount. Promise.all runs both queries concurrently; the
+  // IIFE wrapper exists because useEffect's callback itself can't be async.
   useEffect(() => {
     (async () => {
       const [runsRes, subsRes] = await Promise.all([
@@ -69,6 +87,7 @@ export default function Runs() {
     })();
   }, []);
 
+  // Run details key locations by raw ID; map to the human slug when we can.
   const nameFor = (locationId: string) =>
     subs.find((s) => s.location_id === locationId)?.slug ?? locationId;
 
@@ -92,13 +111,17 @@ export default function Runs() {
                     <th className="px-2 py-1.5 text-right font-medium">Held</th>
                     <th className="px-2 py-1.5 text-right font-medium">Failed</th>
                     <th className="px-2 py-1.5 text-right font-medium">Requests</th>
+                    {/* 429 = HTTP "Too Many Requests" (rate limited by GHL) */}
                     <th className="px-2 py-1.5 text-right font-medium">429s</th>
                     <th className="px-2 py-1.5 font-medium">Error</th>
                   </tr>
                 </thead>
                 <tbody>
+                  {/* Each run renders 1–2 <tr>s (summary + optional detail),
+                      so <Fragment key> groups them without extra DOM. */}
                   {runs.map((run) => (
                     <Fragment key={run.id}>
+                      {/* clicking a row toggles its per-location breakdown */}
                       <tr
                         className="cursor-pointer border-b border-grid/60 hover:bg-plane"
                         onClick={() => setExpanded(expanded === run.id ? null : run.id)}
@@ -122,6 +145,8 @@ export default function Runs() {
                           {run.error ?? "—"}
                         </td>
                       </tr>
+                      {/* expanded detail: a nested table spanning all columns,
+                          one row per collected location */}
                       {expanded === run.id && Object.keys(run.details ?? {}).length > 0 ? (
                         <tr className="border-b border-grid/60 bg-plane">
                           <td colSpan={9} className="px-3 py-2">

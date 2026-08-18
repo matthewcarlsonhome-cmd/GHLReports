@@ -9,6 +9,28 @@ PII boundary (spec hard rule): every record is projected through a whitelist
 before it leaves this module. Phone numbers, email addresses, message bodies,
 and address fields never reach the caller — presence booleans (`has_phone`)
 replace the values.
+
+How this fits in:
+    This is the middle layer: it turns GHLClient's raw JSON into small,
+    PII-safe dicts, and records how completely each API source was scanned
+    (Coverage). metrics.py then does pure arithmetic on these dicts.
+
+Key ideas to understand this file:
+  * Pagination: list endpoints return one "page" of results at a time
+    (up to PAGE_LIMIT items). We loop, asking for page 1, 2, 3... (or
+    advancing an offset/cursor) until a short page signals the end. A
+    "cursor" is a bookmark value from the last item of a page that tells
+    the API where the next page should start.
+  * Coverage: bookkeeping about how thoroughly each source was scanned —
+    complete, partial, unavailable, or skipped. Downstream gates use it to
+    decide whether the day's numbers are trustworthy enough to publish.
+  * Tolerant parsing: field names vary between GHL endpoints and API
+    versions, so we probe alternatives (`obj.get("a") or obj.get("b")`)
+    instead of assuming one spelling and crashing on the other.
+  * PII (personally identifiable information) and whitelist projection:
+    each `_clean_*` helper copies ONLY explicitly named fields into a new
+    dict. Anything not named — phone, email, message text — is dropped by
+    construction, so a new upstream field can never leak through.
 """
 
 from __future__ import annotations
@@ -35,6 +57,11 @@ class Coverage:
 
     def record(self, source: str, retrieved: int = 0, exhausted: bool = True,
                error: str | None = None, note: str | None = None, skipped: bool = False) -> None:
+        """Write (or overwrite) the scan result for one source.
+
+        `retrieved` = record count, `exhausted` = we read every page,
+        `error` = sanitized failure text, `note` = human-readable caveat.
+        """
         self.sources[source] = {
             "retrieved": retrieved,
             "exhausted": bool(exhausted),
@@ -44,12 +71,18 @@ class Coverage:
         }
 
     def add_note(self, source: str, note: str) -> None:
+        """Append a caveat to a source's note, creating the entry if needed."""
         entry = self.sources.setdefault(
             source, {"retrieved": 0, "exhausted": True, "error": None, "note": None, "skipped": False}
         )
         entry["note"] = f"{entry['note']}; {note}" if entry.get("note") else note
 
     def status(self, source: str) -> str:
+        """Collapse one source's entry to a single status word (see class doc).
+
+        Order matters: skipped beats everything, then unavailable (error and
+        nothing retrieved), then partial, then complete.
+        """
         entry = self.sources.get(source)
         if entry is None:
             return "missing"
@@ -62,24 +95,29 @@ class Coverage:
         return "complete"
 
     def counts(self) -> dict[str, int]:
+        """How many sources are in each status bucket."""
         out = {"complete": 0, "partial": 0, "unavailable": 0, "skipped": 0}
         for source in self.sources:
             out[self.status(source)] += 1
         return out
 
     def unavailable_count(self) -> int:
+        """Number of sources that errored with nothing retrieved (gate G2)."""
         return self.counts()["unavailable"]
 
     def partial_count(self) -> int:
+        """Number of sources partially scanned (gate G3)."""
         return self.counts()["partial"]
 
     def overall(self) -> str:
+        """One word for the whole run: 'complete' only if nothing went wrong."""
         c = self.counts()
         if c["unavailable"] or c["partial"]:
             return "partial"
         return "complete"
 
     def to_dict(self) -> dict:
+        """JSON-friendly dump: every entry with its derived status, plus totals."""
         return {
             "sources": {name: {**entry, "status": self.status(name)} for name, entry in self.sources.items()},
             "summary": self.counts(),
@@ -106,6 +144,8 @@ def _first_list(data: dict | list | None, *keys: str) -> list:
 
 
 def _get_id(obj: dict) -> str | None:
+    """Record id as a string. GHL is inconsistent: some endpoints say `id`,
+    others (Mongo-style) say `_id` — accept either."""
     val = obj.get("id") or obj.get("_id")
     return str(val) if val is not None else None
 
@@ -116,6 +156,14 @@ def _get_id(obj: dict) -> str | None:
 
 
 def _clean_contact(contact: dict) -> dict:
+    """Project a raw contact down to safe fields.
+
+    Note `has_phone`: we keep only the *fact* that a phone exists (needed for
+    the "unreachable leads" metric), never the number itself. Attribution is
+    likewise trimmed to three marketing-source keys.
+    """
+    # attributionSource is sometimes a dict, sometimes a list of dicts,
+    # sometimes absent — normalize to one trimmed dict or None.
     attribution = contact.get("attributionSource")
     if isinstance(attribution, list):
         attribution = attribution[0] if attribution and isinstance(attribution[0], dict) else None
@@ -139,6 +187,8 @@ def _clean_contact(contact: dict) -> dict:
 
 
 def _clean_conversation(convo: dict) -> dict:
+    """Conversation metadata only — who, when, which direction; never the
+    message text. `contactName`/`fullName` is another field-name variant."""
     return {
         "id": _get_id(convo),
         "contactId": convo.get("contactId"),
@@ -153,6 +203,12 @@ def _clean_conversation(convo: dict) -> dict:
 
 
 def _clean_message(message: dict) -> dict:
+    """Message envelope only: direction, timestamps, type — never the body.
+
+    For calls we also dig out a status word ("no-answer", "voicemail", ...)
+    used by the missed-call metric, trying meta.call.status first and then
+    the flatter meta.callStatus spelling.
+    """
     meta = message.get("meta") or {}
     call = meta.get("call") if isinstance(meta, dict) else None
     call_status = None
@@ -173,6 +229,13 @@ def _clean_message(message: dict) -> dict:
 
 
 def _clean_opportunity(opp: dict) -> dict:
+    """Deal (pipeline opportunity) projection: value, stage, status, and the
+    many "last changed" timestamps the idle/stuck metrics compare.
+
+    `_has_task_keys` records whether this API response contained task /
+    calendar-event keys at all — metrics use it to tell "no next step" apart
+    from "this account's API never returns next-step data".
+    """
     contact = opp.get("contact") or {}
     return {
         "id": _get_id(opp),
@@ -202,6 +265,8 @@ def _clean_opportunity(opp: dict) -> dict:
 
 
 def _clean_invoice(invoice: dict) -> dict:
+    """Invoice projection: number, status, due date, amounts, contact name.
+    Billing addresses and emails in contactDetails are dropped."""
     contact = invoice.get("contactDetails") or {}
     return {
         "_id": _get_id(invoice),
@@ -215,6 +280,8 @@ def _clean_invoice(invoice: dict) -> dict:
 
 
 def _clean_event(event: dict) -> dict:
+    """Calendar event projection. dateAdded vs createdAt is another naming
+    variant — one of them is the booking time (VERIFY, see appointment_metrics)."""
     return {
         "id": _get_id(event),
         "title": event.get("title"),
@@ -228,6 +295,8 @@ def _clean_event(event: dict) -> dict:
 
 
 def _clean_submission(submission: dict) -> dict:
+    """Form submission projection: ids and timestamp only. The submitted form
+    answers (names, emails, free text) are exactly what we must not keep."""
     return {
         "id": _get_id(submission),
         "formId": submission.get("formId"),
@@ -237,6 +306,12 @@ def _clean_submission(submission: dict) -> dict:
 
 
 def _clean_social_account(account: dict) -> dict:
+    """Social account projection with a normalized `expired` boolean.
+
+    "Disconnected" is spelled three ways across API versions: an isExpired
+    flag, an expired flag, or a status word. Try each in turn; None means
+    we genuinely could not tell.
+    """
     raw_status = account.get("status")
     expired = account.get("isExpired")
     if expired is None:
@@ -255,11 +330,14 @@ def _clean_social_account(account: dict) -> dict:
 
 
 def fetch_location(client: GHLClient, cov: Coverage, location_id: str) -> dict | None:
+    """Fetch the location (GHL's term for one sub-account) record itself.
+    Used for the G1 identity check — does the name match what we configured?"""
     try:
         data = client.request("GET", f"/locations/{location_id}")
     except GHLError as exc:
         cov.record("location", error=str(exc))
         return None
+    # Some responses wrap the record as {"location": {...}}, others return it bare.
     loc = data.get("location") if isinstance(data.get("location"), dict) else data
     cov.record("location", retrieved=1 if loc else 0,
                error=None if loc else "empty response")
@@ -267,6 +345,7 @@ def fetch_location(client: GHLClient, cov: Coverage, location_id: str) -> dict |
 
 
 def fetch_users(client: GHLClient, cov: Coverage, location_id: str) -> list[dict]:
+    """Team members of the location (raw; pass through users_map before storing)."""
     try:
         data = client.request("GET", "/users/", params={"locationId": location_id})
     except GHLError as exc:
@@ -292,6 +371,7 @@ def users_map(users: list[dict]) -> dict[str, str]:
 
 
 def fetch_pipelines(client: GHLClient, cov: Coverage, location_id: str) -> list[dict]:
+    """Pipeline definitions (stage names/ids) so stage ids can be labeled."""
     try:
         data = client.request("GET", "/opportunities/pipelines", params={"locationId": location_id})
     except GHLError as exc:
@@ -309,7 +389,11 @@ def fetch_opportunities(client: GHLClient, cov: Coverage, location_id: str,
                         closed_cutoff_ms: int, max_pages: int | None = None) -> list[dict]:
     """Open (all pages) plus won and lost stopped at the 90d cutoff. The date
     params are VERIFY; until --probe confirms them we page newest-first and
-    stop once lastStatusChangeAt passes the cutoff (spec 4.4)."""
+    stop once lastStatusChangeAt passes the cutoff (spec 4.4).
+
+    One paged scan per status (open, won, lost); a failure in one status
+    marks the whole source non-exhausted but keeps whatever was fetched.
+    """
     from .metrics import parse_ts  # local import: metrics stays I/O-free, fetchers may use its parsers
 
     out: list[dict] = []
@@ -336,11 +420,15 @@ def fetch_opportunities(client: GHLClient, cov: Coverage, location_id: str,
                 break
             batch = [_clean_opportunity(o) for o in _first_list(data, "opportunities", "data")]
             out.extend(batch)
+            # Closed deals: since we page newest-first, once the oldest deal
+            # on this page closed before the 90d cutoff, deeper pages are all
+            # older still — stop early instead of scanning years of history.
             if status in ("won", "lost") and batch:
                 oldest = min((parse_ts(o.get("lastStatusChangeAt")) for o in batch
                               if o.get("lastStatusChangeAt")), default=None)
                 if oldest is not None and oldest.timestamp() * 1000 < closed_cutoff_ms:
                     break
+            # A short page (fewer than PAGE_LIMIT rows) means there is no next page.
             if len(batch) < PAGE_LIMIT:
                 break
             if max_pages and page >= max_pages:
@@ -361,6 +449,12 @@ def fetch_opportunities(client: GHLClient, cov: Coverage, location_id: str,
 def _contacts_search(client: GHLClient, location_id: str, filters: list[dict],
                      max_pages: int | None, sort_field: str = "dateAdded",
                      direction: str = "desc") -> tuple[list[dict], bool, str | None, str | None]:
+    """Shared paged loop for POST /contacts/search (a read; see ghl_client).
+
+    Returns (cleaned contacts, exhausted?, error, note) so each caller can
+    record its own Coverage source name. Pagination is page-numbered: request
+    page 1, 2, 3... until a short page says we are done.
+    """
     out: list[dict] = []
     page = 1
     exhausted = False
@@ -394,6 +488,8 @@ def _contacts_search(client: GHLClient, location_id: str, filters: list[dict],
 def fetch_contacts_range(client: GHLClient, cov: Coverage, location_id: str,
                          gte_iso: str, lte_iso: str, max_pages: int | None = None,
                          source: str = "contacts") -> list[dict]:
+    """Contacts whose dateAdded falls in [gte_iso, lte_iso] (ISO 8601 strings —
+    the standard `2026-08-18T00:00:00Z` timestamp format)."""
     filters = [{"field": "dateAdded", "operator": "range", "value": {"gte": gte_iso, "lte": lte_iso}}]
     contacts, exhausted, error, note = _contacts_search(client, location_id, filters, max_pages)
     cov.record(source, retrieved=len(contacts), exhausted=exhausted, error=error, note=note)
@@ -402,7 +498,8 @@ def fetch_contacts_range(client: GHLClient, cov: Coverage, location_id: str,
 
 def fetch_earliest_contact_added(client: GHLClient, location_id: str):
     """dateAdded of the account's first contact (for trailing_n). None on any
-    failure — callers then assume the account is older than the baseline."""
+    failure — callers then assume the account is older than the baseline.
+    Implemented as a one-row search sorted oldest-first."""
     try:
         data = client.request("POST", "/contacts/search", json_body={
             "locationId": location_id,
@@ -419,6 +516,8 @@ def fetch_earliest_contact_added(client: GHLClient, location_id: str):
 
 def fetch_tagged_contacts(client: GHLClient, cov: Coverage, location_id: str,
                           tag: str, max_pages: int | None = None) -> list[dict]:
+    """Contacts carrying a given tag (e.g. review-request), sorted by
+    dateUpdated so the most recently touched come first."""
     filters = [{"field": "tags", "operator": "eq", "value": tag}]
     contacts, exhausted, error, note = _contacts_search(
         client, location_id, filters, max_pages, sort_field="dateUpdated")
@@ -469,7 +568,12 @@ def fetch_form_submissions(client: GHLClient, cov: Coverage, location_id: str,
 
 def fetch_recent_conversations(client: GHLClient, cov: Coverage, location_id: str,
                                since_ms: int, max_pages: int | None = None) -> list[dict]:
-    """Newest-first scan, stopping once lastMessageDate falls before since_ms."""
+    """Newest-first scan, stopping once lastMessageDate falls before since_ms.
+
+    since_ms is epoch milliseconds (milliseconds since 1970-01-01 UTC — the
+    unit GHL uses for lastMessageDate). Pagination is cursor-based: each next
+    request passes the last item's lastMessageDate as startAfterDate.
+    """
     out: list[dict] = []
     exhausted = False
     error = None
@@ -495,6 +599,9 @@ def fetch_recent_conversations(client: GHLClient, cov: Coverage, location_id: st
         if not batch:
             exhausted = True
             break
+        # Because results are newest-first, the first conversation older than
+        # since_ms means everything after it is older too. We still keep this
+        # page's items (harmless extras; metrics re-filter by window).
         stop = False
         for convo in batch:
             last = convo.get("lastMessageDate")
@@ -510,6 +617,8 @@ def fetch_recent_conversations(client: GHLClient, cov: Coverage, location_id: st
         if max_pages and page >= max_pages:
             note = f"page cap {max_pages} reached"
             break
+        # Advance the cursor to this page's last timestamp; without one we
+        # cannot ask for the next page, so record that we stopped early.
         start_after = batch[-1].get("lastMessageDate")
         if start_after is None:
             note = "pagination cursor missing; stopped early"
@@ -519,14 +628,21 @@ def fetch_recent_conversations(client: GHLClient, cov: Coverage, location_id: st
 
 
 def fetch_conversations_for_contact(client: GHLClient, location_id: str, contact_id: str) -> list[dict]:
-    """Used inside the speed-to-lead loop; caller aggregates coverage."""
+    """All conversations for one contact (single page — a contact rarely has
+    more than a handful). Used inside the speed-to-lead loop; caller
+    aggregates coverage and catches errors."""
     data = client.request("GET", "/conversations/search",
                           params={"locationId": location_id, "contactId": contact_id, "limit": PAGE_LIMIT})
     return [_clean_conversation(c) for c in _first_list(data, "conversations", "data")]
 
 
 def fetch_messages(client: GHLClient, conversation_id: str, max_pages: int = 3) -> list[dict]:
-    """Handles the documented nested `messages.messages` envelope and flat lists."""
+    """Messages of one conversation (cleaned; bodies stripped), a few pages max.
+
+    Handles the documented nested `messages.messages` envelope and flat lists.
+    Pagination cursor here is lastMessageId — the id of the last message we
+    saw — plus a nextPage boolean telling us whether to keep going.
+    """
     out: list[dict] = []
     page_token = None
     for _ in range(max_pages):
@@ -534,6 +650,8 @@ def fetch_messages(client: GHLClient, conversation_id: str, max_pages: int = 3) 
         if page_token:
             params["lastMessageId"] = page_token
         data = client.request("GET", f"/conversations/{conversation_id}/messages", params=params)
+        # The docs show {"messages": {"messages": [...], "nextPage": ...}};
+        # tolerate a flat {"messages": [...]} shape too.
         envelope = data.get("messages")
         if isinstance(envelope, dict):
             batch = _first_list(envelope, "messages", "data")
@@ -553,6 +671,7 @@ def fetch_messages(client: GHLClient, conversation_id: str, max_pages: int = 3) 
 
 
 def fetch_calendars(client: GHLClient, cov: Coverage, location_id: str) -> list[dict]:
+    """The location's calendar definitions (needed before fetching events)."""
     try:
         data = client.request("GET", "/calendars/", params={"locationId": location_id})
     except GHLError as exc:
@@ -566,6 +685,11 @@ def fetch_calendars(client: GHLClient, cov: Coverage, location_id: str) -> list[
 def fetch_calendar_events(client: GHLClient, cov: Coverage, location_id: str,
                           calendars: list[dict], start_ms: int, end_ms: int,
                           source: str = "calendar_events") -> list[dict]:
+    """Events across all calendars in [start_ms, end_ms] (epoch milliseconds).
+
+    The endpoint takes one calendar at a time, so we loop; individual
+    calendar failures are collected and the rest still count.
+    """
     out: list[dict] = []
     errors: list[str] = []
     for cal in calendars:
@@ -594,6 +718,8 @@ def fetch_calendar_events(client: GHLClient, cov: Coverage, location_id: str,
 
 def fetch_invoices(client: GHLClient, cov: Coverage, location_id: str,
                    max_pages: int | None = None) -> list[dict]:
+    """All invoices for the location, paged by offset (skip N rows) rather
+    than page number. altId/altType is how this endpoint scopes to a location."""
     out: list[dict] = []
     offset = 0
     exhausted = False
@@ -629,6 +755,8 @@ def fetch_invoices(client: GHLClient, cov: Coverage, location_id: str,
 
 
 def fetch_blog_sites(client: GHLClient, cov: Coverage, location_id: str) -> list[dict]:
+    """Blog sites for the location. On error, records coverage for "blogs"
+    directly since fetch_blog_posts will never run."""
     try:
         data = client.request("GET", "/blogs/site/all",
                               params={"locationId": location_id, "limit": BLOG_PAGE_LIMIT, "skip": 0})
@@ -640,6 +768,8 @@ def fetch_blog_sites(client: GHLClient, cov: Coverage, location_id: str) -> list
 
 def fetch_blog_posts(client: GHLClient, cov: Coverage, location_id: str,
                      sites: list[dict], max_pages: int | None = None) -> list[dict]:
+    """Published posts across every blog site, projected to title/status/dates.
+    Offset-paged per site, like invoices but with the smaller blog page size."""
     out: list[dict] = []
     errors: list[str] = []
     for site in sites:
@@ -676,6 +806,8 @@ def fetch_blog_posts(client: GHLClient, cov: Coverage, location_id: str,
 
 def fetch_social_posts(client: GHLClient, cov: Coverage, location_id: str,
                        from_iso: str, to_iso: str, max_pages: int | None = None) -> list[dict]:
+    """Social Planner posts in a date range (ISO 8601 bounds), skip-paged.
+    This POST is one of the whitelisted read-only search endpoints."""
     out: list[dict] = []
     skip = 0
     exhausted = False
@@ -714,6 +846,8 @@ def fetch_social_posts(client: GHLClient, cov: Coverage, location_id: str,
 
 
 def fetch_social_accounts(client: GHLClient, cov: Coverage, location_id: str) -> list[dict] | None:
+    """Connected social accounts, for the disconnected-account flag. Returns
+    None (not []) on failure so "unknown" is distinguishable from "none"."""
     try:
         data = client.request("GET", f"/social-media-posting/{location_id}/accounts")
     except GHLError as exc:
@@ -728,6 +862,8 @@ def fetch_social_accounts(client: GHLClient, cov: Coverage, location_id: str) ->
 
 
 def fetch_contact_tasks(client: GHLClient, contact_id: str) -> list[dict]:
+    """Tasks for one contact — the fallback when the opportunities endpoint
+    does not embed tasks (see _clean_opportunity's _has_task_keys)."""
     data = client.request("GET", f"/contacts/{contact_id}/tasks")
     return [{"id": _get_id(t), "title": t.get("title"), "dueDate": t.get("dueDate"),
              "completed": t.get("completed"), "assignedTo": t.get("assignedTo")}

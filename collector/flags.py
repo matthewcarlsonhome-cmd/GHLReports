@@ -5,12 +5,33 @@ Output rows match the `flags` table columns.
 
 Acknowledgements do not live here: v_portfolio weighs acked flags at zero via
 the flag_acks lateral join, so this module always emits the full truth.
+
+How this fits in:
+    The last step of the math layer. metrics.py produces numbers; this file
+    compares them to thresholds and emits flag rows the dashboard displays.
+    It never fetches or computes — only compares and formats.
+
+Key ideas to understand this file:
+  * Severity levels: "red" = act today, "amber" = worth attention, "info" =
+    context for the next conversation. Some flags escalate amber -> red as
+    the numbers worsen.
+  * Threshold overrides: DEFAULT_THRESHOLDS holds the global tuning knobs;
+    each account may override individual keys (merged_thresholds), so one
+    seasonal client's normal quiet spell doesn't page anyone.
+  * None-safety: a missing metric (None) means "unknown", and unknown never
+    fires a flag — every check first proves the metric exists.
+  * Why acknowledgements aren't here: emitting the full truth every run and
+    letting the database down-weight acked flags means a flag can never be
+    accidentally lost by being "already seen".
 """
 
 from __future__ import annotations
 
 from datetime import date, timedelta
 
+# Global tuning knobs, grouped by flag family. Per-account overrides replace
+# individual values (see merged_thresholds); a few entries are consumed by
+# metrics.py rather than here (marked "consumed by metrics").
 DEFAULT_THRESHOLDS = {
     # leads
     "lead_drop_pct": -40.0,           # delta at or below this is a drop
@@ -57,6 +78,12 @@ DEFAULT_THRESHOLDS = {
 
 
 def merged_thresholds(overrides: dict | None) -> dict:
+    """Defaults with per-account overrides applied on top.
+
+    Only keys that already exist in DEFAULT_THRESHOLDS and carry numeric
+    values are accepted — a typo'd or malformed override is silently ignored
+    rather than adding a knob nothing reads.
+    """
     merged = dict(DEFAULT_THRESHOLDS)
     for key, value in (overrides or {}).items():
         if key in merged and isinstance(value, (int, float)):
@@ -67,6 +94,12 @@ def merged_thresholds(overrides: dict | None) -> dict:
 def _flag(code: str, severity: str, title: str, action: str, detail: str | None = None,
           entity_type: str | None = None, entity_id: str | None = None,
           entity_name: str | None = None, deep_link: str | None = None) -> dict:
+    """Build one flag row (matches the `flags` table columns).
+
+    The entity_* fields optionally point at a concrete example record — the
+    oldest waiting conversation, the first unassigned lead — so the dashboard
+    can deep-link straight to it.
+    """
     return {
         "code": code,
         "severity": severity,
@@ -81,6 +114,7 @@ def _flag(code: str, severity: str, title: str, action: str, detail: str | None 
 
 
 def _fmt_money(value) -> str:
+    """Format as whole dollars with thousands separators; "$?" if not a number."""
     try:
         return f"${value:,.0f}"
     except (TypeError, ValueError):
@@ -89,10 +123,19 @@ def _fmt_money(value) -> str:
 
 def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                   sub: dict, today: date | None = None) -> list[dict]:
+    """Evaluate every flag rule against one account's metrics.
+
+    Inputs: the metrics dict, this account's threshold overrides, `details`
+    (example records with deep links, keyed by list name), and `sub` (the
+    subaccount row: services purchased, contract_end). Returns flag rows in
+    catalog order; an empty list means a healthy account.
+    """
     th = merged_thresholds(thresholds)
     services = sub.get("services") or []
     flags: list[dict] = []
 
+    # Pull the frequently reused metrics once. Any of these can be None
+    # ("unknown"), and None must never fire a flag.
     leads = metrics.get("leads_new_7d")
     trailing = metrics.get("leads_trailing_avg")
     delta = metrics.get("leads_delta_pct")
@@ -102,7 +145,11 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
     forms_7d = metrics.get("form_submissions_7d")
     forms_avg = metrics.get("form_submissions_trailing_avg")
 
-    # INTEGRATION_SUSPECT / LEADS_ZERO
+    # INTEGRATION_SUSPECT / LEADS_ZERO — mutually exclusive by construction.
+    # Everything at zero *at once* in an account that normally gets leads
+    # smells like a broken integration; zero leads alone (while conversations
+    # still flow) is merely a very bad week. Both need a real baseline
+    # (dormant_trailing_min) so dormant accounts stay quiet.
     integration_suspect = (
         leads == 0 and convos_active == 0 and opps_created == 0
         and (forms_7d == 0 or forms_7d is None)
@@ -119,7 +166,9 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             f"Zero leads vs {trailing:.1f} average. Check integration before calling.",
         ))
 
-    # FORM_SILENT
+    # FORM_SILENT — forms went quiet while leads still arrive from elsewhere,
+    # isolating the failure to the form/webhook. Suppressed when
+    # INTEGRATION_SUSPECT already covers the outage.
     if (forms_7d == 0 and forms_avg is not None
             and forms_avg >= th["form_silent_trailing_min"]
             and (leads or 0) > 0 and not integration_suspect):
@@ -129,7 +178,9 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             "check before the client notices.",
         ))
 
-    # LEADS_DROP / LEADS_DROP_SEASONAL
+    # LEADS_DROP / LEADS_DROP_SEASONAL — the peer comparison decides which:
+    # peers also down => seasonal (amber, talking point); peers held while
+    # this account dropped => account-specific problem (red).
     if delta is not None and delta <= th["lead_drop_pct"]:
         if peer is not None and peer <= th["peer_held_pct"]:
             flags.append(_flag(
@@ -146,7 +197,11 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 detail=None if peer is not None else "peers not yet available",
             ))
 
-    # SOURCE_DROP — per offending source, capped at 3
+    # SOURCE_DROP — per offending source, capped at 3. The total can look
+    # fine while one channel (e.g. Google Ads) silently died; only sources
+    # that are both sizable (weekly avg) and material (share of volume) can
+    # fire. Iterating biggest-source-first makes the cap keep the ones that
+    # matter most.
     by_source_now = metrics.get("leads_by_source_7d") or {}
     by_source_trailing = metrics.get("leads_by_source_trailing") or {}
     trailing_total = sum(by_source_trailing.values())
@@ -158,6 +213,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             continue
         if weekly_avg / trailing_total * 100.0 < th["source_share_pct"]:
             continue
+        # Fires when the source fell to <= 40% (source_drop_factor) of its
+        # usual weekly volume; a dead-zero source escalates to red.
         current = by_source_now.get(source, 0)
         if current <= th["source_drop_factor"] * weekly_avg:
             flags.append(_flag(
@@ -167,11 +224,15 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             ))
             source_flags += 1
 
-    # UNASSIGNED_LEADS
+    # UNASSIGNED_LEADS — fires on an absolute count OR a share of the week's
+    # leads, so both busy accounts (3+ strays) and quiet ones (1 of 3 leads
+    # ownerless) get caught.
     unassigned = metrics.get("leads_unassigned_7d")
     if unassigned is not None and leads is not None:
         share = unassigned / leads * 100.0 if leads else 0.0
         if unassigned >= th["unassigned_min"] or (leads and share >= th["unassigned_share_pct"] and unassigned > 0):
+            # `or [{}]` gives an empty-dict fallback so .get() calls below
+            # are safe when the details list is empty (same trick throughout).
             first = (details.get("unassigned_leads") or [{}])[0]
             flags.append(_flag(
                 "UNASSIGNED_LEADS", "amber", "New leads with no owner",
@@ -180,7 +241,7 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 entity_name=first.get("name"), deep_link=first.get("deep_link"),
             ))
 
-    # LEADS_UNREACHABLE
+    # LEADS_UNREACHABLE — too many new leads with no phone number.
     missing_phone = metrics.get("leads_missing_phone_pct_7d")
     if missing_phone is not None and missing_phone >= th["missing_phone_pct"]:
         flags.append(_flag(
@@ -188,7 +249,10 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             f"{missing_phone:.0f}% of new leads have no phone number. Check form fields.",
         ))
 
-    # SLOW_RESPONSE
+    # SLOW_RESPONSE — two independent triggers: N leads sitting uncontacted
+    # for 24h+, or a high share of leads that only ever got automated
+    # replies (the ratio needs no_human_min_leads to be meaningful).
+    # Either trigger crossing its "red" threshold escalates the severity.
     uncontacted = metrics.get("leads_uncontacted_24h")
     no_human = metrics.get("leads_no_human_touch_7d")
     ratio = None
@@ -211,7 +275,9 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             entity_name=first.get("name"), deep_link=first.get("deep_link"),
         ))
 
-    # CONVOS_WAITING
+    # CONVOS_WAITING — customers who spoke last and are still waiting
+    # (weekend-adjusted hours, computed in metrics). Red once the longest
+    # wait passes a full day.
     waiting = metrics.get("convos_waiting")
     max_hours = metrics.get("convos_waiting_max_hours")
     if waiting:
@@ -225,7 +291,9 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             entity_name=oldest.get("contact"), deep_link=oldest.get("deep_link"),
         ))
 
-    # STALE_PIPELINE
+    # STALE_PIPELINE — fires on count (at least stale_min deals AND at least
+    # stale_frac of the open pipeline, via the max()) or on dollars at risk.
+    # Money at stake is what makes it red.
     stale = metrics.get("opps_stale")
     stale_value = metrics.get("opps_stale_value") or 0
     opps_open = metrics.get("opps_open") or 0
@@ -242,7 +310,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 entity_name=first.get("name"), deep_link=first.get("deep_link"),
             ))
 
-    # HIGH_NOSHOW
+    # HIGH_NOSHOW — appointment no-show rate over 28d (None below 5 outcomes,
+    # so it can't fire on tiny samples).
     noshow = metrics.get("noshow_rate_28d")
     if noshow is not None and noshow >= th["noshow_rate_pct"]:
         flags.append(_flag(
@@ -250,7 +319,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             f"{noshow:.0f}% no-show over 28 days. Confirmation and reminder flow needs attention.",
         ))
 
-    # NO_DELIVERY
+    # NO_DELIVERY — our own output gap, only for accounts paying for
+    # content/social. Ambers at two quiet weeks, reds at a month.
     days_since = metrics.get("days_since_last_publish")
     delivery_applies = bool({"content", "social"} & set(services))
     if delivery_applies and days_since is not None and days_since >= th["no_delivery_days"]:
@@ -260,7 +330,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             f"Nothing published in {days_since} days. Our gap; fix before the client notices.",
         ))
 
-    # SOCIAL_DISCONNECTED
+    # SOCIAL_DISCONNECTED — always red: a dead connection silently drops
+    # every scheduled post until someone reconnects it.
     expired = metrics.get("social_accounts_expired")
     if "social" in services and expired:
         flags.append(_flag(
@@ -269,7 +340,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             "Reconnect in Social Planner.",
         ))
 
-    # PAST_DUE
+    # PAST_DUE — unpaid SSP invoices; red when old (past_due_red_days) or
+    # large (past_due_red_amount).
     past_due = metrics.get("invoices_past_due")
     if past_due:
         amount = metrics.get("invoices_past_due_amount") or 0
@@ -284,7 +356,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             entity_name=oldest.get("number"),
         ))
 
-    # NO_CLIENT_TOUCH
+    # NO_CLIENT_TOUCH — quiet client relationship AND nothing on the
+    # calendar; a booked meeting suppresses the flag entirely.
     last_touch = metrics.get("client_last_touch_days")
     next_appt = metrics.get("client_next_appt_at")
     if last_touch is not None and last_touch >= th["client_touch_days"] and not next_appt:
@@ -294,9 +367,13 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             f"No client contact in {last_touch} days, nothing scheduled. Book a check-in.",
         ))
 
-    # RENEWAL_SOON — info, amber if the account also has any red
+    # RENEWAL_SOON — info, amber if the account also has any red (renewal
+    # talks while things are visibly broken deserve extra attention, which
+    # is why this check runs after every other flag).
     contract_end = sub.get("contract_end")
     if contract_end and today:
+        # contract_end may arrive as a date or an ISO string; bad strings
+        # simply disable the check.
         try:
             end_date = contract_end if isinstance(contract_end, date) else date.fromisoformat(str(contract_end))
         except ValueError:
@@ -308,7 +385,8 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 f"Renewal in {(end_date - today).days} days. Book the review now.",
             ))
 
-    # REVIEW_ASK_GAP
+    # REVIEW_ASK_GAP — recent wins whose contact never got the review-request
+    # tag. Info only: an opportunity, not a fire.
     gap = metrics.get("review_ask_gap")
     if gap is not None and gap >= th["review_gap_min"]:
         flags.append(_flag(

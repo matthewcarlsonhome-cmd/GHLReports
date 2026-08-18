@@ -4,6 +4,33 @@ reads: "now" is always passed in so runs and tests are reproducible.
 All timestamps are parsed to timezone-aware UTC datetimes; window math happens
 in the location's local timezone. Missing data yields None (rendered "Unknown"
 upstream), never zero.
+
+How this fits in:
+    fetchers.py hands this module clean, PII-safe dicts; everything here is
+    plain arithmetic on those dicts, and flags.py turns the resulting
+    metrics into alerts.
+
+Key ideas to understand this file:
+  * Injected clock: no function ever calls "what time is it now?" itself —
+    `now_utc` is always a parameter. That makes every computation
+    reproducible: tests (and re-runs) pass a fixed timestamp and get the
+    exact same answer every time.
+  * Timezone-aware datetimes: a Python datetime can be "naive" (no
+    timezone) or "aware" (carries one). Naive/aware values cannot be
+    compared, so parse_ts() makes everything aware (UTC by default), and
+    business-day logic converts to the location's local zone.
+  * Timestamp formats: inputs arrive as ISO 8601 strings
+    ("2026-08-18T14:00:00Z"), epoch seconds, or epoch milliseconds
+    (seconds/milliseconds since 1970-01-01 UTC); parse_ts accepts all three.
+  * The 7-full-local-day window: "this week" means the 7 complete local
+    calendar days ending yesterday at 23:59:59. Today is excluded because
+    it is still in progress — including a partial day would make every
+    metric look like a drop.
+  * Baseline: the 28 days *before* that window, split into four weekly
+    buckets and averaged. "Is this week down?" is always asked relative to
+    the account's own recent history, not an absolute number.
+  * Cohort: a group selected by when they were created (e.g. contacts added
+    14-42 days ago), then followed to see what happened to them.
 """
 
 from __future__ import annotations
@@ -14,10 +41,13 @@ from zoneinfo import ZoneInfo
 
 DEFAULT_TZ = "America/Chicago"
 
+# Contacts whose name contains one of these whole words are test/demo data,
+# excluded from every metric (see _has_excluded_word for the whole-word rule).
 EXCLUDE_WORDS = {"test", "testing", "demo", "sample"}
 EXCLUDE_TAG = "internal-staff"
 REVIEW_TAG = "review-request"
 
+# Message `source` values that tell a human touch apart from an automated one.
 HUMAN_SOURCES = {"app", "manual", "user"}
 AUTOMATION_SOURCES = {"workflow", "campaign", "bulk_actions", "api"}
 
@@ -32,7 +62,13 @@ MISSED_CALL_STATUSES = {"no-answer", "noanswer", "no_answer", "missed", "busy", 
 
 
 def parse_ts(value) -> datetime | None:
-    """Tolerant timestamp parse: ISO 8601 (with/without Z), epoch ms, epoch s."""
+    """Tolerant timestamp parse: ISO 8601 (with/without Z), epoch ms, epoch s.
+
+    Always returns an *aware* UTC datetime or None — never raises, never
+    returns naive. The `> 1e11` test distinguishes epoch milliseconds from
+    epoch seconds (1e11 seconds is the year 5138, so any number that large
+    must be milliseconds).
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -58,6 +94,8 @@ def parse_ts(value) -> datetime | None:
 
 
 def get_tz(tz_name: str | None) -> ZoneInfo:
+    """Resolve an IANA timezone name (e.g. "America/Denver"), falling back to
+    the default on None, typos, or unknown names — never raises."""
     try:
         return ZoneInfo(tz_name or DEFAULT_TZ)
     except Exception:
@@ -65,7 +103,12 @@ def get_tz(tz_name: str | None) -> ZoneInfo:
 
 
 def window_7d(now_utc: datetime, tz: ZoneInfo) -> tuple[datetime, datetime]:
-    """7 full local days ending yesterday 23:59:59, as aware datetimes."""
+    """7 full local days ending yesterday 23:59:59, as aware datetimes.
+
+    "Local" is the account's timezone: convert now to local, find local
+    midnight, then step back one second for the window end and seven days
+    for the start. Today is deliberately excluded (see module docstring).
+    """
     local_now = now_utc.astimezone(tz)
     today_start = datetime.combine(local_now.date(), dtime.min, tzinfo=tz)
     end = today_start - timedelta(seconds=1)
@@ -75,7 +118,11 @@ def window_7d(now_utc: datetime, tz: ZoneInfo) -> tuple[datetime, datetime]:
 
 def baseline_weeks(win_start: datetime) -> list[tuple[datetime, datetime]]:
     """The four 7-day buckets of the baseline window [win_start-28d, win_start),
-    oldest first."""
+    oldest first.
+
+    Each tuple is (start, end) where end is exclusive; the [::-1] flips the
+    newest-first construction into oldest-first order.
+    """
     return [
         (win_start - timedelta(days=7 * (i + 1)), win_start - timedelta(days=7 * i))
         for i in range(4)
@@ -90,10 +137,12 @@ def rolling_window(now_utc: datetime, tz: ZoneInfo, days: int) -> tuple[datetime
 
 
 def in_window(ts: datetime | None, start: datetime, end: datetime) -> bool:
+    """True if ts exists and lies in [start, end] (both bounds inclusive)."""
     return ts is not None and start <= ts <= end
 
 
 def iso_week_start(day: date) -> date:
+    """The Monday of the ISO week containing `day` (weekday() is Mon=0)."""
     return day - timedelta(days=day.weekday())
 
 
@@ -101,6 +150,13 @@ def iso_week_start(day: date) -> date:
 
 
 def _has_excluded_word(name: str | None) -> bool:
+    """True if the name contains an EXCLUDE_WORDS entry as a *whole word*.
+
+    Whole-word matching is the point: we split on non-alphanumeric characters
+    and compare complete tokens, so "Test" and "demo-account" are excluded
+    but a real customer named "Testani" survives (a plain substring check
+    would wrongly drop them).
+    """
     if not name:
         return False
     words = "".join(c if c.isalnum() else " " for c in name.lower()).split()
@@ -108,6 +164,8 @@ def _has_excluded_word(name: str | None) -> bool:
 
 
 def is_excluded(contact: dict) -> bool:
+    """Should this contact be dropped from all metrics? True for test-word
+    names and for anyone tagged as internal staff."""
     if _has_excluded_word(contact.get("firstName")) or _has_excluded_word(contact.get("lastName")):
         return True
     tags = contact.get("tags") or []
@@ -115,6 +173,8 @@ def is_excluded(contact: dict) -> bool:
 
 
 def filter_exclusions(contacts: list[dict]) -> tuple[list[dict], int]:
+    """Split contacts into (kept, excluded_count); the count is reported so
+    an unusually high exclusion rate is visible."""
     kept = [c for c in contacts if not is_excluded(c)]
     return kept, len(contacts) - len(kept)
 
@@ -123,6 +183,9 @@ def filter_exclusions(contacts: list[dict]) -> tuple[list[dict], int]:
 
 
 def median(values: list[float]) -> float | None:
+    """Middle value when sorted (mean of the two middles for even counts);
+    None for an empty list. Preferred over the mean because one extreme
+    outlier can't drag it."""
     vals = sorted(values)
     if not vals:
         return None
@@ -133,7 +196,13 @@ def median(values: list[float]) -> float | None:
 
 
 def percentile(values: list[float], pct: float) -> float | None:
-    """Nearest-rank percentile: ceil(p/100 * n)."""
+    """Nearest-rank percentile: ceil(p/100 * n).
+
+    "p90 = 12 min" means 90% of values are at or below 12 minutes. The
+    nearest-rank method always returns an actual observed value (no
+    interpolation): sort, then take the value at rank ceil(p% of n),
+    clamped to a valid index.
+    """
     vals = sorted(values)
     if not vals:
         return None
@@ -145,11 +214,14 @@ def percentile(values: list[float], pct: float) -> float | None:
 
 
 def contact_name(contact: dict) -> str:
+    """Best display name: first+last, else company, else a placeholder."""
     name = " ".join(p for p in [contact.get("firstName"), contact.get("lastName")] if p)
     return name or contact.get("companyName") or contact.get("name") or "(no name)"
 
 
 def contact_source(contact: dict) -> str:
+    """Where the lead came from: the explicit source field first, then the
+    marketing attribution (session source / UTM), else "unknown"."""
     source = contact.get("source")
     if source:
         return str(source)
@@ -162,10 +234,12 @@ def contact_source(contact: dict) -> str:
 
 
 def leads_in_window(contacts: list[dict], start: datetime, end: datetime) -> list[dict]:
+    """Contacts created (dateAdded) inside the window."""
     return [c for c in contacts if in_window(parse_ts(c.get("dateAdded")), start, end)]
 
 
 def leads_by_source(contacts: list[dict]) -> dict[str, int]:
+    """Count of leads per source, e.g. {"google": 5, "facebook": 2}."""
     out: dict[str, int] = {}
     for contact in contacts:
         source = contact_source(contact)
@@ -178,13 +252,23 @@ def baseline_stats(contacts: list[dict], win_start: datetime,
     """Live baseline from CRM history (spec 4.1): the 28 days before the 7d
     window, bucketed into four weeks. A week counts toward trailing_n only if
     the account existed during it (earliest contact before the week's end);
-    with no earliest date the account is assumed older than the baseline."""
+    with no earliest date the account is assumed older than the baseline.
+
+    Returns the trailing weekly average, how many weeks it rests on
+    (trailing_n), and a per-source weekly average. Averages need at least 2
+    countable weeks; below that they are None/{} — too little history to
+    call anything a "drop".
+    """
     weeks = baseline_weeks(win_start)
     weekly_counts: list[int] = []
     weekly_sources: list[dict[str, int]] = []
     trailing_n = 0
     for week_start, week_end in weeks:
+        # A week only counts if the account existed during it — otherwise a
+        # brand-new account would average in phantom zero-weeks.
         countable = earliest_added is None or earliest_added < week_end
+        # week_end is exclusive; subtracting one second makes it work with
+        # the inclusive in_window() check.
         bucket = [c for c in contacts
                   if in_window(parse_ts(c.get("dateAdded")), week_start, week_end - timedelta(seconds=1))]
         if countable:
@@ -193,6 +277,8 @@ def baseline_stats(contacts: list[dict], win_start: datetime,
             weekly_sources.append(leads_by_source(bucket))
     trailing_avg = (sum(weekly_counts) / len(weekly_counts)) if trailing_n >= 2 else None
 
+    # Same idea per source: total each source across the countable weeks,
+    # then divide by trailing_n for a weekly average.
     source_totals: dict[str, float] = {}
     for bucket_sources in weekly_sources:
         for source, count in bucket_sources.items():
@@ -209,16 +295,24 @@ def baseline_stats(contacts: list[dict], win_start: datetime,
 
 
 def leads_delta_pct(leads_new_7d: int, trailing_avg: float | None) -> float | None:
+    """Percent change of this week vs the baseline average.
+
+    None when the baseline is missing or under 3 leads/week — with numbers
+    that small, "2 leads instead of 1" would read as +100%, pure noise.
+    """
     if trailing_avg is None or trailing_avg < 3:
         return None
     return round((leads_new_7d - trailing_avg) / trailing_avg * 100.0, 1)
 
 
 def leads_unassigned(contacts_7d: list[dict]) -> list[dict]:
+    """New leads that no team member owns — nobody is responsible for calling."""
     return [c for c in contacts_7d if not c.get("assignedTo")]
 
 
 def missing_phone_pct(contacts_7d: list[dict]) -> float | None:
+    """Percent of new leads with no phone number (via the has_phone boolean).
+    None below 5 leads — a percentage of 2 people is meaningless."""
     if len(contacts_7d) < 5:
         return None
     missing = sum(1 for c in contacts_7d if not c.get("has_phone"))
@@ -228,7 +322,11 @@ def missing_phone_pct(contacts_7d: list[dict]) -> float | None:
 def form_submission_stats(submissions: list[dict] | None, win_start: datetime,
                           win_end: datetime, trailing_n: int) -> dict:
     """7d count and baseline weekly average from a single fetch covering both
-    windows. None submissions = source unavailable = both metrics null."""
+    windows. None submissions = source unavailable = both metrics null.
+
+    `trailing_n` (from baseline_stats) says how many baseline weeks the
+    account actually existed for; we only average over those.
+    """
     if submissions is None:
         return {"form_submissions_7d": None, "form_submissions_trailing_avg": None}
     current = sum(1 for s in submissions
@@ -245,6 +343,8 @@ def form_submission_stats(submissions: list[dict] | None, win_start: datetime,
 
 
 def peer_median(deltas: list[float]) -> tuple[float | None, int]:
+    """Median lead-delta across peer accounts, used to tell "everyone is down"
+    (seasonal) from "just this account is down". None under 4 peers."""
     vals = [d for d in deltas if d is not None]
     if len(vals) < 4:
         return None, len(vals)
@@ -255,6 +355,12 @@ def peer_median(deltas: list[float]) -> tuple[float | None, int]:
 
 
 def classify_outbound(message: dict) -> str:
+    """Was this outbound message sent by a human or an automation?
+
+    A userId means a person clicked send. Otherwise the message `source`
+    decides; anything unrecognized is "unknown", which downstream treats as
+    "we can't tell humans from bots for this account".
+    """
     if message.get("userId"):
         return "human"
     source = str(message.get("source") or "").strip().lower()
@@ -266,13 +372,20 @@ def classify_outbound(message: dict) -> str:
 
 
 def _is_outbound(message: dict) -> bool:
+    """True if the message went from the business to the lead."""
     return str(message.get("direction") or "").strip().lower() == "outbound"
 
 
 def lead_event(contact: dict, messages: list[dict]) -> dict:
     """First-touch record for one contact across all its conversations' messages.
-    Names, IDs, and timestamps only — never phone, email, or message text."""
+    Names, IDs, and timestamps only — never phone, email, or message text.
+
+    "First touch" = the earliest outbound message of any kind; "first human
+    touch" = the earliest one a person sent. Both are also expressed as
+    minutes since the contact was created (the speed-to-lead numbers).
+    """
     created = parse_ts(contact.get("dateAdded"))
+    # Timestamped outbound messages, oldest first.
     outbound = [(parse_ts(m.get("dateAdded")), m) for m in messages if _is_outbound(m)]
     outbound = [(ts, m) for ts, m in outbound if ts is not None]
     outbound.sort(key=lambda pair: pair[0])
@@ -283,6 +396,7 @@ def lead_event(contact: dict, messages: list[dict]) -> dict:
     first_human_at = human[0][0] if human else None
 
     def minutes_since(ts):
+        """Minutes from contact creation to ts; None if either side is missing."""
         if ts is None or created is None:
             return None
         return round((ts - created).total_seconds() / 60.0, 1)
@@ -302,10 +416,17 @@ def lead_event(contact: dict, messages: list[dict]) -> dict:
 
 def speed_to_lead_metrics(events: list[dict], now_utc: datetime,
                           win_start: datetime, win_end: datetime) -> dict:
-    """Uncontacted / no-human-touch counts and median/p90 minutes over the 7d window."""
+    """Uncontacted / no-human-touch counts and median/p90 minutes over the 7d window.
+
+    `kinds_known` guards the human-vs-automation split: if every classified
+    first touch came back "unknown", this account's data can't support the
+    distinction, so human-only metrics report None instead of a bogus zero.
+    """
     kinds_seen = {e.get("first_outbound_kind") for e in events if e.get("first_outbound_at")}
     kinds_known = bool(kinds_seen) and kinds_seen != {"unknown"}
 
+    # Only leads at least 24h old can be called "uncontacted for 24h" —
+    # a lead created an hour ago hasn't had a fair chance yet.
     cutoff_24h = now_utc - timedelta(hours=24)
     in_win = [e for e in events if in_window(e.get("created_at"), win_start, win_end)]
     aged = [e for e in in_win if e.get("created_at") and e["created_at"] <= cutoff_24h]
@@ -318,6 +439,8 @@ def speed_to_lead_metrics(events: list[dict], now_utc: datetime,
             if e.get("first_outbound_at") is not None and e.get("first_human_touch_at") is None
         ]
 
+    # Speed samples: prefer time-to-human when we can identify humans,
+    # otherwise fall back to time-to-any-response.
     if kinds_known:
         samples = [e["first_human_touch_minutes"] for e in in_win
                    if e.get("first_human_touch_minutes") is not None]
@@ -340,12 +463,18 @@ def speed_to_lead_metrics(events: list[dict], now_utc: datetime,
 
 def wait_clock_start(inbound_utc: datetime, tz: ZoneInfo) -> datetime:
     """Inbound landing Friday >=17:00 local, or Sat/Sun, starts the clock the
-    following Monday 09:00 local; otherwise the clock starts at arrival."""
+    following Monday 09:00 local; otherwise the clock starts at arrival.
+
+    The weekend rule keeps Monday reports fair: without it, every message
+    that arrived Saturday would show 40+ "waiting hours" that nobody was
+    expected to be working.
+    """
     local = inbound_utc.astimezone(tz)
     wd = local.weekday()  # Mon=0 .. Sun=6
     weekendish = (wd == 4 and local.hour >= 17) or wd in (5, 6)
     if not weekendish:
         return inbound_utc
+    # Days until Monday: Friday evening -> +3, Saturday -> +2, Sunday -> +1.
     days_to_monday = {4: 3, 5: 2, 6: 1}[wd]
     monday = local.date() + timedelta(days=days_to_monday)
     start_local = datetime.combine(monday, dtime(hour=9), tzinfo=tz)
@@ -353,13 +482,21 @@ def wait_clock_start(inbound_utc: datetime, tz: ZoneInfo) -> datetime:
 
 
 def waiting_hours(last_inbound_utc: datetime, now_utc: datetime, tz: ZoneInfo) -> float:
+    """Hours a customer has been waiting for a reply, weekend-adjusted.
+    Clamped at 0: a Saturday message hasn't "waited" yet on Sunday, since
+    its clock only starts Monday 09:00."""
     start = wait_clock_start(last_inbound_utc, tz)
     return max(0.0, round((now_utc - start).total_seconds() / 3600.0, 1))
 
 
 def waiting_conversations(conversations: list[dict], now_utc: datetime, tz: ZoneInfo,
                           since_utc: datetime, min_hours: float = 4.0) -> list[dict]:
-    """Conversations whose last message is inbound and has waited >= min_hours."""
+    """Conversations whose last message is inbound and has waited >= min_hours.
+
+    "Last message is inbound" means the customer spoke last and is still
+    waiting on us. Result is sorted longest-waiting first so the worst case
+    leads the report.
+    """
     out = []
     for convo in conversations:
         direction = str(convo.get("lastMessageDirection") or "").strip().lower()
@@ -384,15 +521,24 @@ def waiting_conversations(conversations: list[dict], now_utc: datetime, tz: Zone
 
 
 def convos_active_7d(conversations: list[dict], start: datetime, end: datetime) -> int:
+    """How many conversations had any message during the window."""
     return sum(1 for c in conversations if in_window(parse_ts(c.get("lastMessageDate")), start, end))
 
 
 # -- pipeline ------------------------------------------------------------
 
+# Candidate "last activity" timestamps on an opportunity, best-first. Not
+# every account populates every field, so idle time uses the newest one found.
 IDLE_FIELDS = ("lastActionDate", "lastStatusChangeAt", "updatedAt")
 
 
 def opp_idle(opp: dict, now_utc: datetime) -> tuple[float | None, str | None]:
+    """(days since the deal was last touched, which field said so).
+
+    Takes the *most recent* of the IDLE_FIELDS timestamps — using the most
+    generous evidence of activity avoids calling a deal stale unfairly.
+    (None, None) if no field parses.
+    """
     best_ts, best_field = None, None
     for field in IDLE_FIELDS:
         ts = parse_ts(opp.get(field))
@@ -404,6 +550,7 @@ def opp_idle(opp: dict, now_utc: datetime) -> tuple[float | None, str | None]:
 
 
 def opp_days_in_stage(opp: dict, now_utc: datetime) -> float | None:
+    """Days since the deal last moved to a different pipeline stage."""
     ts = parse_ts(opp.get("lastStageChangeAt"))
     if ts is None:
         return None
@@ -411,6 +558,12 @@ def opp_days_in_stage(opp: dict, now_utc: datetime) -> float | None:
 
 
 def opp_next_step(opp: dict, now_utc: datetime, feature_available: bool) -> str:
+    """Does this deal have a planned next step?
+
+    "task" = an open task exists, "event" = a future appointment exists,
+    "none" = neither (the bad case), "unknown" = this account's API never
+    returns task data so we cannot judge (feature_available is False).
+    """
     if not feature_available:
         return "unknown"
     tasks = opp.get("tasks") or []
@@ -427,7 +580,14 @@ def opp_next_step(opp: dict, now_utc: datetime, feature_available: bool) -> str:
 def pipeline_metrics(opps: list[dict], now_utc: datetime,
                      win_start: datetime, win_end: datetime,
                      stale_days: float = 14.0, stuck_days: float = 30.0) -> dict:
+    """All pipeline health numbers in one pass over the opportunities.
+
+    Terms: "stale" = open deal untouched for stale_days+; "stuck" = open deal
+    sitting in the same stage for stuck_days+; win rate and days-to-close use
+    the deals closed in the last 90 days.
+    """
     open_opps = [o for o in opps if str(o.get("status") or "").lower() == "open"]
+    # True if any API response included task/event keys (see _clean_opportunity).
     feature_available = any(o.get("_has_task_keys") for o in opps)
 
     stale, stale_value = [], 0.0
@@ -438,6 +598,8 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
     per_opp: list[dict] = []
 
     for opp in open_opps:
+        # A missing or zero dollar value both count as "missing" — a $0 deal
+        # can't be prioritized either.
         value = opp.get("monetaryValue")
         numeric_value = float(value) if isinstance(value, (int, float)) else None
         if numeric_value:
@@ -470,6 +632,7 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
         })
 
     def closed_in(status: str, start: datetime, end: datetime) -> list[dict]:
+        """Deals with this closed status whose status change fell in the range."""
         return [o for o in opps
                 if str(o.get("status") or "").lower() == status
                 and in_window(parse_ts(o.get("lastStatusChangeAt")), start, end)]
@@ -477,6 +640,8 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
     won_7d = len(closed_in("won", win_start, win_end))
     lost_7d = len(closed_in("lost", win_start, win_end))
 
+    # Win rate needs at least 5 closed deals; below that a single deal would
+    # swing the percentage by 20+ points.
     cutoff_90 = now_utc - timedelta(days=90)
     won_90 = closed_in("won", cutoff_90, now_utc)
     lost_90 = closed_in("lost", cutoff_90, now_utc)
@@ -519,9 +684,15 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
 
 def lead_to_opp_pct(contacts: list[dict], opps: list[dict], now_utc: datetime) -> float | None:
     """Of contacts created 14 to 42 days ago, the percent with any opportunity
-    whose contact id matches and createdAt >= the contact's dateAdded."""
+    whose contact id matches and createdAt >= the contact's dateAdded.
+
+    The cohort (see module docstring) deliberately excludes the last 14 days:
+    those leads haven't had time to convert yet, and counting them would
+    understate the conversion rate. None under 5 cohort members.
+    """
     start = now_utc - timedelta(days=42)
     end = now_utc - timedelta(days=14)
+    # contact id -> when they were added (needed for the createdAt >= check).
     cohort = {}
     for contact in contacts:
         added = parse_ts(contact.get("dateAdded"))
@@ -547,7 +718,12 @@ def appointment_metrics(events: list[dict], now_utc: datetime,
                         win_start: datetime, win_end: datetime) -> dict:
     """From client-calendar events fetched [-28d, +7d]. Booked = created field
     in the 7d window (VERIFY dateAdded vs createdAt); showed/no-show by
-    appointmentStatus on events that started in the last 28 days."""
+    appointmentStatus on events that started in the last 28 days.
+
+    Two different windows on purpose: bookings are judged on the 7d report
+    window, but show/no-show needs the longer 28d span to accumulate enough
+    finished appointments. The rate needs 5+ outcomes, else None.
+    """
     booked_7d = sum(1 for e in events
                     if in_window(parse_ts(e.get("dateAdded")), win_start, win_end))
     cutoff_28 = now_utc - timedelta(days=28)
@@ -574,11 +750,17 @@ def appointment_metrics(events: list[dict], now_utc: datetime,
 
 
 def _publish_ts(post: dict) -> datetime | None:
+    """Best-available publish time for a post, trying three field names."""
     return parse_ts(post.get("publishedAt") or post.get("createdAt") or post.get("updatedAt"))
 
 
 def delivery_metrics(blog_posts: list[dict], social_posts: list[dict],
                      now_utc: datetime, services: list[str]) -> dict:
+    """Are we (the agency) actually publishing content for this client?
+
+    Only applies to accounts paying for content/social services; for others
+    every value is None so no false "nothing published" alarm can fire.
+    """
     applicable = bool({"content", "social"} & set(services or []))
     if not applicable:
         return {
@@ -592,6 +774,7 @@ def delivery_metrics(blog_posts: list[dict], social_posts: list[dict],
     cutoff_30 = now_utc - timedelta(days=30)
     cutoff_7 = now_utc - timedelta(days=7)
 
+    # Pair each post with its parsed publish timestamp, dropping unparseable ones.
     blog_stamps = [(ts, p) for p in blog_posts if (ts := _publish_ts(p)) is not None]
     social_stamps = [(ts, p) for p in social_posts if (ts := _publish_ts(p)) is not None]
 
@@ -624,6 +807,8 @@ def delivery_metrics(blog_posts: list[dict], social_posts: list[dict],
 
 
 def social_account_stats(accounts: list[dict] | None) -> dict:
+    """Connected/expired social account counts; None input (fetch failed)
+    yields None metrics, not zeros."""
     if accounts is None:
         return {"social_accounts_total": None, "social_accounts_expired": None}
     expired = sum(1 for a in accounts if a.get("expired"))
@@ -632,10 +817,14 @@ def social_account_stats(accounts: list[dict] | None) -> dict:
 
 # -- relationship (from the SSP parent account) --------------------------
 
+# Invoice statuses that can never be "past due" — already paid, cancelled,
+# or never actually issued.
 PAST_DUE_EXCLUDED_STATUSES = {"paid", "void", "draft", "deleted"}
 
 
 def past_due_invoices(invoices: list[dict], today: date) -> list[dict]:
+    """Unpaid invoices whose due date has passed, most-overdue first.
+    Compares calendar dates, not times: an invoice due today is not yet late."""
     out = []
     for inv in invoices:
         status = str(inv.get("status") or "").strip().lower()
@@ -661,6 +850,12 @@ def past_due_invoices(invoices: list[dict], today: date) -> list[dict]:
 
 def relationship_metrics(client_invoices: list[dict], client_conversations: list[dict],
                          client_events: list[dict], now_utc: datetime, today: date) -> dict:
+    """Health of the agency-client relationship itself (billing + contact).
+
+    Inputs come from the agency's own parent account, where the client is a
+    contact. A "touch" is any conversation activity or a past meeting; a
+    future meeting counts as the next scheduled appointment instead.
+    """
     overdue = past_due_invoices(client_invoices, today)
     amount = sum(inv["amount_due"] for inv in overdue if inv["amount_due"] is not None)
 
@@ -669,6 +864,8 @@ def relationship_metrics(client_invoices: list[dict], client_conversations: list
         ts = parse_ts(convo.get("lastMessageDate"))
         if ts is not None:
             touches.append(ts)
+    # Split calendar events on "now": past ones are touches, future ones are
+    # upcoming appointments.
     future_events: list[datetime] = []
     for event in client_events:
         ts = parse_ts(event.get("startTime"))
@@ -697,6 +894,12 @@ def relationship_metrics(client_invoices: list[dict], client_conversations: list
 
 
 def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datetime) -> dict:
+    """Indirect review-process signals (we can't see actual reviews via API).
+
+    Two proxies: contacts tagged for a review ask that haven't been touched
+    in 7+ days (the ask stalled), and deals won in the last 30 days whose
+    contact never got the review tag at all (the ask never happened).
+    """
     cutoff_7 = now_utc - timedelta(days=7)
     cutoff_30 = now_utc - timedelta(days=30)
 
@@ -739,6 +942,8 @@ def review_proxies(tagged_contacts: list[dict], opps: list[dict], now_utc: datet
 
 
 def is_call_conversation(convo: dict) -> bool:
+    """Cheap pre-filter: does this conversation look phone-related? Checks
+    both type fields since either may carry e.g. "TYPE_CALL"."""
     kind = f"{convo.get('lastMessageType') or ''} {convo.get('type') or ''}".upper()
     return "CALL" in kind
 
@@ -746,7 +951,11 @@ def is_call_conversation(convo: dict) -> bool:
 def missed_calls_in_window(convo: dict, messages: list[dict],
                            start: datetime, end: datetime) -> list[dict]:
     """Inbound call messages nobody answered, within the window. One row per
-    missed call: conversation/contact identifiers and a timestamp only."""
+    missed call: conversation/contact identifiers and a timestamp only.
+
+    A "missed call" = call-type message + inbound + a call_status in the
+    MISSED_CALL_STATUSES vocabulary ("no-answer", "voicemail", ...).
+    """
     out = []
     for message in messages:
         if "CALL" not in str(message.get("type") or "").upper():
@@ -773,6 +982,7 @@ def missed_calls_in_window(convo: dict, messages: list[dict],
 
 
 def flags_changed(today_codes: list[str], prior_codes: list[str]) -> tuple[list[str], list[str]]:
+    """Set-diff of flag codes vs the previous run: (newly raised, resolved)."""
     today_set, prior_set = set(today_codes), set(prior_codes)
     return sorted(today_set - prior_set), sorted(prior_set - today_set)
 
@@ -781,6 +991,9 @@ def flags_changed(today_codes: list[str], prior_codes: list[str]) -> tuple[list[
 
 
 def location_name_matches(api_name: str | None, configured_name: str) -> bool:
+    """G1 identity check: is our configured name a case-insensitive substring
+    of the API's location name? Guards against a token that quietly points at
+    the wrong account."""
     if not api_name:
         return False
     return configured_name.strip().lower() in api_name.strip().lower()
@@ -789,7 +1002,17 @@ def location_name_matches(api_name: str | None, configured_name: str) -> bool:
 def gate_check(g1_ok: bool, coverage, leads_new_7d: int | None,
                convos_active: int | None, opps_created: int | None,
                prev_dead: list[tuple]) -> tuple[bool, list[str]]:
-    """G1 identity, G2 <2 unavailable, G3 <2 partial, G4 sudden all-zero."""
+    """Should today's numbers be published at all? Returns (ok, reasons).
+
+    Four gates, all must pass — G1 identity, G2 <2 unavailable, G3 <2
+    partial, G4 sudden all-zero:
+      G1: the token points at the location we think it does.
+      G2: fewer than 2 data sources completely unavailable.
+      G3: fewer than 2 data sources only partially scanned.
+      G4: an all-zero read (no leads, conversations, or opportunities) is
+          only believable if the last 3 runs were also all-zero; a *sudden*
+          all-zero usually means the fetch broke, not the business.
+    """
     reasons: list[str] = []
     if not g1_ok:
         reasons.append("G1: location identity check failed")
@@ -798,6 +1021,8 @@ def gate_check(g1_ok: bool, coverage, leads_new_7d: int | None,
     if coverage.partial_count() >= 2:
         reasons.append(f"G3: {coverage.partial_count()} partial scans")
 
+    # G4: prev_dead rows are (leads, convos, opps) tuples from prior runs,
+    # newest first; `x or 0` treats None (unknown) the same as zero.
     all_zero = (leads_new_7d or 0) == 0 and (convos_active or 0) == 0 and (opps_created or 0) == 0
     if all_zero:
         prev_all_zero = (
@@ -817,7 +1042,12 @@ def gate_check(g1_ok: bool, coverage, leads_new_7d: int | None,
 def weekly_lead_history(contacts: list[dict], submissions: list[dict] | None,
                         tz: ZoneInfo, weeks: list[date]) -> list[dict]:
     """Bucket kept contacts (and form submissions when available) into ISO
-    weeks; `weeks` is a list of Monday dates to emit rows for."""
+    weeks; `weeks` is a list of Monday dates to emit rows for.
+
+    Each timestamp is converted to the location's local date before picking
+    its Monday, so a Sunday-11pm lead lands in the local week, not UTC's.
+    form_submissions stays None when the source was unavailable.
+    """
     wanted = set(weeks)
     lead_buckets: dict[date, list[dict]] = {w: [] for w in wanted}
     for contact in contacts:
@@ -846,9 +1076,12 @@ def weekly_lead_history(contacts: list[dict], submissions: list[dict] | None,
 
 
 # -- deep links ----------------------------------------------------------
+# URL builders for the GHL web app, so a flag can jump straight to the
+# record it's about. Each falls back to a broader page when ids are missing.
 
 
 def link_contact(base: str, location_id: str, contact_id: str | None) -> str:
+    """Contact detail page, or the dashboard if we have no contact id."""
     if not contact_id:
         return link_dashboard(base, location_id)
     return f"{base}/v2/location/{location_id}/contacts/detail/{contact_id}"
@@ -856,6 +1089,7 @@ def link_contact(base: str, location_id: str, contact_id: str | None) -> str:
 
 def link_conversation(base: str, location_id: str, conversation_id: str | None,
                       contact_id: str | None = None) -> str:
+    """Conversation view, falling back to the contact, then the dashboard."""
     if conversation_id:
         return f"{base}/v2/location/{location_id}/conversations/conversations/{conversation_id}"
     return link_contact(base, location_id, contact_id)
@@ -863,10 +1097,12 @@ def link_conversation(base: str, location_id: str, conversation_id: str | None,
 
 def link_opportunity(base: str, location_id: str, opp_id: str | None,
                      contact_id: str | None = None) -> str:
+    """Opportunity in the pipeline list, falling back like link_conversation."""
     if opp_id:
         return f"{base}/v2/location/{location_id}/opportunities/list?opportunityId={opp_id}"
     return link_contact(base, location_id, contact_id)
 
 
 def link_dashboard(base: str, location_id: str) -> str:
+    """The location's main dashboard — the last-resort link target."""
     return f"{base}/v2/location/{location_id}/dashboard"

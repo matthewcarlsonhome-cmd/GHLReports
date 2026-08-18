@@ -1,9 +1,22 @@
+// database.types.ts — TypeScript mirrors of every table and view this app reads.
+//
 // Hand-written to match supabase/migrations/0001_init.sql (spec v3 section 6).
 // Regenerate with `supabase gen types typescript` once the project exists, or
 // keep this in sync by hand — the SQL migration is the source of truth.
+//
+// Reading tips for newcomers:
+// - These are compile-time-only declarations; nothing here runs in the browser.
+//   Query results come back as untyped JSON and get cast to these interfaces.
+// - "X | null" mirrors a NULLable SQL column. Null consistently means "the
+//   collector could not measure this" — distinct from 0 (see lib/format.ts).
+// - Suffixes encode the measurement window: _7d = last 7 days, _28d = 28 days,
+//   _90d = 90 days, _30d = 30 days.
 
 import type { Details } from "./details";
 
+// Per-snapshot record of how completely each GHL API source was fetched.
+// The UI turns this into the complete/partial quality badge and the
+// "Coverage and caveats" table on the Account page.
 export type Coverage = {
   sources: Record<
     string,
@@ -19,6 +32,9 @@ export type Coverage = {
   summary: { complete: number; partial: number; unavailable: number; skipped: number };
 };
 
+// One row per GHL sub-account (client) we track: identity, ownership (AM =
+// account manager), commercial data (MRR, contract end), and API-token health.
+// `is_parent` marks SSP's own agency account, filtered out of most views.
 export interface SubaccountRow {
   location_id: string;
   name: string;
@@ -39,6 +55,9 @@ export interface SubaccountRow {
   created_at: string;
 }
 
+// One daily collector capture for one account: every metric the dashboard
+// shows, frozen at capture time. `gate_passed` = false means the data-quality
+// gate rejected the numbers; `details` is the big drill-down blob (details.ts).
 export interface SnapshotRow {
   id: number;
   location_id: string;
@@ -101,6 +120,9 @@ export interface SnapshotRow {
   details: Details;
 }
 
+// One raised issue on one snapshot: a stable machine `code` (e.g.
+// SLOW_RESPONSE), a severity, human-readable text, and an optional deep link
+// to the offending record in GHL.
 export interface FlagRow {
   id: number;
   location_id: string;
@@ -117,6 +139,8 @@ export interface FlagRow {
   created_at: string;
 }
 
+// An acknowledgement: "person X saw flag `code` on this account and snoozed it
+// until snooze_until". One of the two insert-only write paths (lib/writes.ts).
 export interface FlagAckRow {
   id: number;
   location_id: string;
@@ -127,6 +151,7 @@ export interface FlagAckRow {
   snooze_until: string;
 }
 
+// A free-text note on an account — the other insert-only write path.
 export interface AccountNoteRow {
   id: number;
   location_id: string;
@@ -135,6 +160,9 @@ export interface AccountNoteRow {
   created_at: string;
 }
 
+// One row per new lead, tracking response timing: when it arrived, when the
+// first outbound touch happened, and whether that touch was a human or an
+// automation. Feeds the speed-to-lead histogram and the after-hours heatmap.
 export interface LeadEventRow {
   location_id: string;
   contact_id: string;
@@ -149,6 +177,8 @@ export interface LeadEventRow {
   updated_at: string;
 }
 
+// Weekly lead totals per account — the series behind the sparklines and the
+// stacked leads-by-source chart.
 export interface LeadHistoryRow {
   location_id: string;
   week_start: string;
@@ -157,6 +187,7 @@ export interface LeadHistoryRow {
   form_submissions: number | null;
 }
 
+// Per-location stats nested inside a collector run's `details` JSON.
 export type RunLocationDetail = {
   status?: string;
   gate?: string[];
@@ -166,6 +197,8 @@ export type RunLocationDetail = {
   error?: string | null;
 };
 
+// One nightly collector execution: counts of accounts that succeeded / were
+// gate-held / failed, API request totals, and per-location detail (Runs page).
 export interface CollectorRunRow {
   id: number;
   started_at: string;
@@ -180,8 +213,12 @@ export interface CollectorRunRow {
   error: string | null;
 }
 
+// The three portfolio buckets an account can land in.
 export type PortfolioState = "no_data" | "attention" | "steady";
 
+// One row of the v_portfolio database VIEW — subaccount + latest snapshot +
+// flag counts pre-joined server-side, so the Portfolio page needs one query.
+// `attention_score` ranks accounts; `state` buckets them into page sections.
 export interface PortfolioRow {
   location_id: string;
   name: string;
@@ -240,6 +277,8 @@ export interface PortfolioRow {
   calls_missed_7d: number | null;
 }
 
+// One row of the v_history VIEW: a slim per-day slice of past snapshots used
+// for the Account page's trend charts (delta vs baseline, etc.).
 export interface HistoryRow {
   location_id: string;
   snapshot_date: string;
