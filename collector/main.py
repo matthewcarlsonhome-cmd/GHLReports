@@ -1189,7 +1189,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     clients: list[GHLClient] = []
     results: dict[str, dict] = {}
     run_details: dict[str, dict] = {}
-    ok = held = failed = 0
+    ok = held = failed = pending = 0
     errors: list[str] = []
 
     # Build the shared parent context before touching any client location
@@ -1238,12 +1238,17 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         else:
             token = store.get_pit(location_id)
             if not token:
-                log(f"{slug}: no PIT stored — marking token_status=none")
+                # An account with no PIT yet is an ONBOARDING state, not a
+                # failure: with a book of clients being onboarded over weeks,
+                # counting these as failures would make every nightly run
+                # alert (exit 2) and drown out real problems. It stays fully
+                # visible — token_status='none' in the portfolio and a
+                # "no_token" row in /runs — it just doesn't trip the alarm.
+                log(f"{slug}: no PIT stored yet — awaiting onboarding")
                 if not args.dry_run:
                     store.set_token_status(location_id, "none")
-                failed += 1
-                errors.append(f"{slug}: token missing")
-                run_details[location_id] = {"status": "failed", "error": "token missing"}
+                pending += 1
+                run_details[location_id] = {"status": "no_token", "error": "token not yet in Vault"}
                 continue
             client = client_factory(token)
             clients.append(client)
@@ -1390,7 +1395,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     if run_id is not None:
         store.finish_run(run_id, status, ok, held, failed, requests_made, rate_limited,
                          error_summary, details=run_details)
-    log(f"done: {ok} ok, {held} held, {failed} failed, "
+    pending_note = f"{pending} awaiting token, " if pending else ""
+    log(f"done: {ok} ok, {held} held, {failed} failed, {pending_note}"
         f"{requests_made} requests ({rate_limited} rate limited)")
     return 0 if failed == 0 and held == 0 else 2
 

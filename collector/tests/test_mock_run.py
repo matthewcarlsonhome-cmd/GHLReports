@@ -221,14 +221,19 @@ def test_g4_dead_account_exemption():
     assert store.snapshots[("locA", "2026-08-18")]["gate_passed"] is True
 
 
-def test_missing_token_marks_location_failed():
+def test_missing_token_is_pending_not_failed():
+    # An account with no PIT yet is "awaiting onboarding": still visible
+    # (token_status='none', a no_token row in run details) but it must NOT
+    # fail the run — otherwise every night alerts until the whole client
+    # book is onboarded, drowning out real failures.
     store = FakeStore(subs=[PARENT_SUB, CLIENT_SUB],
                       pits={"locP": "tok-locP"})  # no PIT for locA
     exit_code = run_with(store, make_factory())
-    assert exit_code == 2
+    assert exit_code == 0
     assert store.token_status["locA"] == ("none", None)
     assert ("locA", "2026-08-18") not in store.snapshots
-    assert store.runs[-1]["failed"] == 1
+    assert store.runs[-1]["failed"] == 0
+    assert store.runs[-1]["details"]["locA"]["status"] == "no_token"
 
 
 def test_digest_mode_builds_from_stored_data(capsys):
