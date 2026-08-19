@@ -8,6 +8,17 @@ import type { Coverage, PortfolioRow } from "./database.types";
 
 export const UNKNOWN = "Unknown";
 
+// GHL lets clients decorate pipeline/stage names with emoji ("🔥 New Lead ⚡").
+// Strip pictographs (plus stray variation selectors / zero-width joiners) so
+// axis labels and table cells read as plain text.
+export function stripDecor(value: string | null | undefined): string {
+  if (!value) return "";
+  return value
+    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // Plain integer with thousands separators ("1,234").
 export function fmtNum(value: number | null | undefined): string {
   if (value === null || value === undefined) return UNKNOWN;

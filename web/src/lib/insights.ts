@@ -3,7 +3,7 @@
 // portfolio row (no model, no scoring) so every sentence is traceable to a
 // metric, and two people reading the same data always see the same words.
 import type { PortfolioRow } from "./database.types";
-import { fmtHours, fmtMoney } from "./format";
+import { fmtHours, fmtMoney, stripDecor } from "./format";
 
 export interface AccountInsight {
   row: PortfolioRow;
@@ -52,7 +52,7 @@ export function buildAccountInsight(row: PortfolioRow): AccountInsight {
   push(row.opps_moved_30d === 0 && (row.opps_open ?? 0) >= 10,
     `pipeline frozen — none of ${row.opps_open} open deals moved in 30 days`);
   push(row.bottleneck_stage !== null && (row.bottleneck_value_usd ?? 0) >= 10000,
-    `${fmtMoney(row.bottleneck_value_usd)} idle in "${row.bottleneck_stage}"`);
+    `${fmtMoney(row.bottleneck_value_usd)} idle in "${stripDecor(row.bottleneck_stage)}"`);
   push((row.opps_stale ?? 0) > 0,
     `${row.opps_stale} stale deal${row.opps_stale === 1 ? "" : "s"}`
     + (row.opps_stale_value ? ` (${fmtMoney(row.opps_stale_value)})` : ""));

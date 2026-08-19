@@ -68,6 +68,7 @@ import {
   fmtMoney,
   fmtNum,
   fmtPct,
+  stripDecor,
   UNKNOWN,
 } from "../lib/format";
 import { supabase } from "../lib/supabase";
@@ -437,17 +438,27 @@ export default function Account() {
       })),
   [data]);
 
-  // Pipeline-stage chart rows: prefix the stage with its pipeline name only
-  // when the account runs more than one pipeline.
-  const stageChart = useMemo(() => {
+  // Pipeline-stage chart rows, grouped per pipeline so each row's label is
+  // the stage name alone (GHL's emoji decorations stripped — clients write
+  // names like "🔥 New Lead ⚡" and those wreck axis labels). Every group
+  // shares one x-scale (max) so a small pipeline can't read as a big one.
+  const stageGroups = useMemo(() => {
     const stages = data?.snapshot?.details?.pipeline_stages ?? [];
-    const multi = new Set(stages.map((s) => s.pipeline)).size > 1;
-    return stages.map((s) => ({
-      label: multi ? `${s.pipeline} · ${s.stage}` : s.stage,
-      active: s.count - s.stale_count,
-      idle: s.stale_count,
-      value: s.value,
-    }));
+    type StageRow = { stage: string; active: number; idle: number; total: number };
+    const byPipeline = new Map<string, StageRow[]>();
+    for (const s of stages) {
+      const pipeline = stripDecor(s.pipeline) || "(unnamed pipeline)";
+      if (!byPipeline.has(pipeline)) byPipeline.set(pipeline, []);
+      byPipeline.get(pipeline)!.push({
+        stage: stripDecor(s.stage) || "(unnamed stage)",
+        active: s.count - s.stale_count,
+        idle: s.stale_count,
+        total: s.count,
+      });
+    }
+    const groups = [...byPipeline.entries()].map(([pipeline, rows]) => ({ pipeline, rows }));
+    const max = Math.max(0, ...groups.flatMap((g) => g.rows.map((r) => r.total)));
+    return { groups, max };
   }, [data]);
 
   // Early returns for the error and loading states keep the main JSX below
@@ -851,34 +862,72 @@ export default function Account() {
       {/* Open deals by stage: where the pipeline is bunched, how much of
           each stage is idle (chart), plus the velocity/value table and the
           bottleneck callout — the "start the pipeline review here" section. */}
-      {snapshot && !noData && stageChart.length > 0 ? (
+      {snapshot && !noData && stageGroups.groups.length > 0 ? (
         <Section title="Open deals by pipeline stage">
           <div className="rounded border border-grid bg-surface p-3">
             {details?.pipeline_bottleneck ? (
               <p className="mb-2 text-xs">
                 <span className="rounded bg-status-warning/20 px-1.5 py-0.5 font-medium text-ink">
                   Bottleneck: {fmtMoney(details.pipeline_bottleneck.stale_value)} idle in
-                  {" "}"{details.pipeline_bottleneck.stage}"
+                  {" "}"{stripDecor(details.pipeline_bottleneck.stage)}"
                   {" "}({details.pipeline_bottleneck.stale_count} deal{details.pipeline_bottleneck.stale_count === 1 ? "" : "s"})
                 </span>
               </p>
             ) : null}
-            <ResponsiveContainer width="100%" height={Math.max(130, stageChart.length * 34 + 50)}>
-              <BarChart layout="vertical" data={stageChart}
-                        margin={{ top: 4, right: 24, bottom: 0, left: 8 }}>
-                <CartesianGrid stroke={GRID} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} allowDecimals={false} />
-                <YAxis type="category" dataKey="label" width={150}
-                       tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} />
-                <Tooltip contentStyle={{ fontSize: 11, borderColor: GRID }}
-                         formatter={(value: number, name: string) => [value, name]} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="active" name="active (touched <14d)" stackId="st" fill={SERIES}
-                     stroke={SURFACE} strokeWidth={2} maxBarSize={18} />
-                <Bar dataKey="idle" name="idle 14d+" stackId="st" fill={IDLE_COLOR}
-                     stroke={SURFACE} strokeWidth={2} maxBarSize={18} />
-              </BarChart>
-            </ResponsiveContainer>
+            {/* One compact chart per pipeline: stage names alone on the axis
+                (single line each), a heading carrying the pipeline name, a
+                SHARED x-domain across groups so bar lengths stay comparable,
+                and the open-deal total at the end of every bar so the rows
+                dwarfed by a 700-deal stage are still readable. The x-axis
+                renders once, under the last group. */}
+            {stageGroups.groups.map((g, gi) => {
+              const last = gi === stageGroups.groups.length - 1;
+              const open = g.rows.reduce((total, r) => total + r.total, 0);
+              return (
+                <div key={g.pipeline} className={gi > 0 ? "mt-3" : undefined}>
+                  {stageGroups.groups.length > 1 ? (
+                    <p className="mb-1 text-xs font-medium text-ink">
+                      {g.pipeline}{" "}
+                      <span className="font-normal text-muted">
+                        — {fmtNum(open)} open
+                      </span>
+                    </p>
+                  ) : null}
+                  <ResponsiveContainer width="100%" height={g.rows.length * 30 + (last ? 28 : 6)}>
+                    <BarChart layout="vertical" data={g.rows}
+                              margin={{ top: 0, right: 40, bottom: 0, left: 8 }}>
+                      <CartesianGrid stroke={GRID} horizontal={false} />
+                      <XAxis type="number" hide={!last} domain={[0, Math.max(4, stageGroups.max)]}
+                             tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} allowDecimals={false} />
+                      <YAxis type="category" dataKey="stage" width={150} interval={0}
+                             tick={{ fontSize: 11, fill: INK2 }} stroke={GRID}
+                             tickFormatter={(v: string) => (v.length > 22 ? `${v.slice(0, 21)}…` : v)} />
+                      <Tooltip contentStyle={{ fontSize: 11, borderColor: GRID }}
+                               formatter={(value: number, name: string) => [value, name]} />
+                      <Bar dataKey="active" name="active (touched <14d)" stackId="st" fill={SERIES}
+                           stroke={SURFACE} strokeWidth={2} maxBarSize={16} isAnimationActive={false} />
+                      <Bar dataKey="idle" name="idle 14d+" stackId="st" fill={IDLE_COLOR}
+                           stroke={SURFACE} strokeWidth={2} maxBarSize={16} isAnimationActive={false}>
+                        <LabelList dataKey="total" position="right"
+                                   style={{ fontSize: 10, fill: INK2 }} />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })}
+            {/* Shared legend for every group (two series, never color alone). */}
+            <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-2">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: SERIES }} />
+                active (touched &lt;14d)
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: IDLE_COLOR }} />
+                idle 14d+
+              </span>
+              <span className="text-muted">bar-end number = open deals in stage</span>
+            </p>
             {/* stage velocity & value: the numbers behind the bars */}
             {details?.pipeline_stages?.length ? (
               <div className="mt-2">
@@ -886,10 +935,10 @@ export default function Account() {
                   empty="No open deals."
                   columns={[
                     { header: "Stage", cell: (s) => (
-                        <>{s.stage}{s.orphan
+                        <>{stripDecor(s.stage)}{s.orphan
                           ? <span className="ml-1 rounded bg-status-critical/10 px-1 text-xxs text-status-critical">deleted stage</span>
                           : null}</>) },
-                    { header: "Pipeline", cell: (s) => s.pipeline },
+                    { header: "Pipeline", cell: (s) => stripDecor(s.pipeline) },
                     { header: "Open", cell: (s) => fmtNum(s.count), numeric: true },
                     { header: "Idle 14d+", cell: (s) => fmtNum(s.stale_count), numeric: true },
                     { header: "Value", cell: (s) => fmtMoney(s.value), numeric: true },

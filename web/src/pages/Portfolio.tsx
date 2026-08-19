@@ -19,7 +19,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Sparkline } from "../components/Sparkline";
 import { EmptyState, QualityBadge, Section, SeverityChip, Skeleton, StateIcon } from "../components/ui";
 import type { FlagRow, LeadHistoryRow, PortfolioRow, PortfolioState } from "../lib/database.types";
-import { dataQuality, fmtDate, fmtHours, fmtMinutes, fmtMoney, fmtNum, fmtPct, UNKNOWN } from "../lib/format";
+import { dataQuality, fmtDate, fmtHours, fmtMinutes, fmtMoney, fmtNum, fmtPct, stripDecor, UNKNOWN } from "../lib/format";
 import { type Band, bandOf, humanizeCode } from "../lib/grade";
 import { buildAccountInsight } from "../lib/insights";
 import { supabase } from "../lib/supabase";
@@ -375,7 +375,7 @@ export default function Portfolio() {
         uncontacted: row.leads_uncontacted_24h, waiting: row.convos_waiting,
         stale: row.opps_stale, moves: row.opps_moved_30d,
         bottleneck: row.bottleneck_stage
-          ? `${row.bottleneck_stage} ($${row.bottleneck_value_usd ?? 0})` : "",
+          ? `${stripDecor(row.bottleneck_stage)} ($${row.bottleneck_value_usd ?? 0})` : "",
         forms_silent: row.forms_silent_ct,
         publish: row.days_since_last_publish, client_touch: row.client_last_touch_days,
         unassigned: row.leads_unassigned_7d, noshow: row.noshow_rate_28d,
@@ -427,7 +427,7 @@ export default function Portfolio() {
       case "moves": return noData || row.opps_moved_30d === null ? "—" : fmtNum(row.opps_moved_30d);
       case "bottleneck":
         return noData || !row.bottleneck_stage ? "—"
-          : `${row.bottleneck_stage} (${fmtMoney(row.bottleneck_value_usd)})`;
+          : `${stripDecor(row.bottleneck_stage)} (${fmtMoney(row.bottleneck_value_usd)})`;
       case "forms_silent": return noData || row.forms_silent_ct === null ? "—" : fmtNum(row.forms_silent_ct);
       case "publish": return noData ? "—" : fmtNum(row.days_since_last_publish);
       case "client_touch": return noData ? "—" : fmtNum(row.client_last_touch_days);
