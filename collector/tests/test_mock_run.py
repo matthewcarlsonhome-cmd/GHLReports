@@ -78,6 +78,17 @@ def test_happy_path_metrics_gate_and_flags():
     assert snap["opps_lost_7d"] == 1
     assert snap["opps_created_7d"] == 1
     assert snap["opps_moved_30d"] == 3   # o2 created 8/12, o3 won 8/15, o4 lost 8/16; o1 untouched since 7/1
+
+    # chart aggregates (uncapped, over the full opportunity set)
+    stages = snap["details"]["pipeline_stages"]
+    assert [(s["stage"], s["count"], s["stale_count"]) for s in stages] == [("New", 1, 0), ("Quote", 1, 1)]
+    aging = {b["bucket"]: b["count"] for b in snap["details"]["deal_aging"]}
+    assert aging["0-7d"] == 1        # o2, active yesterday
+    assert aging["15-30d"] == 1      # o1, idle since Jul 20
+    closed_weeks = snap["details"]["closed_weekly"]
+    assert len(closed_weeks) == 12
+    by_week = {w["week_start"]: (w["won"], w["lost"]) for w in closed_weeks}
+    assert by_week["2026-08-10"] == (1, 1)   # o3 won Aug 15, o4 lost Aug 16
     assert snap["win_rate_90d"] is None              # won+lost = 2 < 5
     assert snap["median_days_to_close_90d"] == 14.0  # o3: Aug 1 -> Aug 15
     assert snap["lead_to_opp_28d_pct"] == 0.0        # 27-contact cohort, no matching opps

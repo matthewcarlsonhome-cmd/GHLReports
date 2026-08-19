@@ -137,5 +137,21 @@ export type Details = {
     status: string;
     deep_link: string;
   }[]; // Tier 2 — absent on snapshots collected before it shipped
+  // Per-form/survey health summary (silent lists feed the flags; the full
+  // rows live in the form_health table). Absent on older snapshots.
+  form_health?: {
+    forms_total: number;
+    surveys_total: number;
+    forms_silent: { form_id: string; name: string; last_submission_at: string | null }[];
+    surveys_silent: { form_id: string; name: string; last_submission_at: string | null }[];
+    workflows: { total: number; published: number } | null;
+  };
+  // Chart aggregates — computed over the FULL opportunity set (never the
+  // capped example lists above). All absent on older snapshots.
+  pipeline_stages?: {
+    pipeline: string; stage: string; count: number; stale_count: number; value: number;
+  }[];
+  deal_aging?: { bucket: string; count: number; value: number }[];
+  closed_weekly?: { week_start: string; won: number; lost: number }[];
   ghl_dashboard_url: string; // deep link to the native GHL dashboard for ads
 };

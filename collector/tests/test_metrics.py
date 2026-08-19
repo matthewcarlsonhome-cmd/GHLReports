@@ -337,6 +337,55 @@ def test_gate_g4_sudden_zero_vs_dormant():
     assert not ok  # not enough history to prove dormancy
 
 
+def test_deal_aging_buckets():
+    per_opp = [
+        {"idle_days": 2.0, "value": 1000.0},
+        {"idle_days": 10.0, "value": None},
+        {"idle_days": 29.0, "value": 500.0},
+        {"idle_days": 200.0, "value": 250.0},
+        {"idle_days": None, "value": 100.0},   # undeterminable -> 'unknown', never guessed
+    ]
+    by = {r["bucket"]: r for r in metrics.deal_aging_buckets(per_opp)}
+    assert by["0-7d"]["count"] == 1 and by["0-7d"]["value"] == 1000.0
+    assert by["8-14d"]["count"] == 1 and by["8-14d"]["value"] == 0.0
+    assert by["15-30d"]["count"] == 1
+    assert by["31-90d"]["count"] == 0
+    assert by["90d+"]["count"] == 1
+    assert by["unknown"]["count"] == 1
+    # the unknown bucket disappears entirely when empty
+    buckets = {r["bucket"] for r in metrics.deal_aging_buckets([{"idle_days": 1.0, "value": 0}])}
+    assert "unknown" not in buckets
+
+
+def test_stage_distribution_orders_by_pipeline_stage():
+    pmap = {"p1": {"name": "Sales", "stages": {"s1": "New", "s2": "Quote"}}}
+    per_opp = [
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s2"}, "is_stale": True, "value": 100.0},
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s1"}, "is_stale": False, "value": 50.0},
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s2"}, "is_stale": False, "value": None},
+    ]
+    rows = metrics.stage_distribution(per_opp, pmap)
+    assert [(r["stage"], r["count"], r["stale_count"], r["value"]) for r in rows] == [
+        ("New", 1, 0, 50.0), ("Quote", 2, 1, 100.0)]
+
+
+def test_weekly_closed():
+    from datetime import datetime, timezone
+    now = datetime(2026, 8, 18, 15, 0, tzinfo=timezone.utc)
+    tz = metrics.get_tz("America/Chicago")
+    opps = [
+        {"status": "won", "lastStatusChangeAt": "2026-08-15T12:00:00Z"},
+        {"status": "lost", "lastStatusChangeAt": "2026-08-16T12:00:00Z"},
+        {"status": "won", "lastStatusChangeAt": "2020-01-01T12:00:00Z"},  # out of range
+        {"status": "open", "lastStatusChangeAt": "2026-08-16T12:00:00Z"},  # not closed
+    ]
+    rows = metrics.weekly_closed(opps, tz, now, weeks=12)
+    assert len(rows) == 12
+    assert rows[-1]["week_start"] == "2026-08-17" and rows[-1] == {"week_start": "2026-08-17", "won": 0, "lost": 0}
+    week = next(r for r in rows if r["week_start"] == "2026-08-10")
+    assert week["won"] == 1 and week["lost"] == 1
+
+
 def test_classify_form():
     from datetime import date
     tue = date(2026, 8, 18)  # a Tuesday

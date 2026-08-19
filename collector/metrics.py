@@ -604,6 +604,92 @@ def opp_days_in_stage(opp: dict, now_utc: datetime) -> float | None:
     return max(0.0, (now_utc - ts).total_seconds() / 86400.0)
 
 
+# -- chart aggregates (docs: per-account visualizations) ------------------
+# These three feed the drilldown charts. All are small aggregates computed
+# over the FULL opportunity set (never the capped detail lists), so an
+# account with 1,000 deals charts all 1,000.
+
+# Idle-time buckets for the deal-aging chart, in display order. Upper bounds
+# are exclusive ("0-7d" means idle < 8 whole days).
+AGE_BUCKETS = [("0-7d", 8), ("8-14d", 15), ("15-30d", 31), ("31-90d", 91), ("90d+", None)]
+
+
+def deal_aging_buckets(per_opp: list[dict]) -> list[dict]:
+    """Open deals grouped by how long they've been idle: [{bucket, count,
+    value}] in age order. Deals whose idle time can't be determined get an
+    explicit 'unknown' bucket (only present when non-empty) — never folded
+    into a real bucket."""
+    rows = [{"bucket": label, "count": 0, "value": 0.0} for label, _ in AGE_BUCKETS]
+    unknown = {"bucket": "unknown", "count": 0, "value": 0.0}
+    for item in per_opp:
+        idle = item.get("idle_days")
+        value = item.get("value") or 0.0
+        if idle is None:
+            target = unknown
+        else:
+            target = rows[-1]
+            for row, (_, upper) in zip(rows, AGE_BUCKETS):
+                if upper is not None and idle < upper:
+                    target = row
+                    break
+        target["count"] += 1
+        target["value"] += value
+    for row in rows + [unknown]:
+        row["value"] = round(row["value"], 2)
+    return rows + ([unknown] if unknown["count"] else [])
+
+
+def stage_distribution(per_opp: list[dict], pipeline_map: dict) -> list[dict]:
+    """Open deals per pipeline stage, fresh vs idle: [{pipeline, stage,
+    count, stale_count, value}] in each pipeline's own stage order (unknown
+    stages last) — the 'everything is bunched in Quote and dead' picture."""
+    # Stage order index from the pipeline map (dicts preserve insertion order).
+    order: dict[tuple[str, str], int] = {}
+    for pid, entry in pipeline_map.items():
+        for position, sid in enumerate(entry.get("stages") or {}):
+            order[(str(pid), str(sid))] = position
+
+    agg: dict[tuple[str, str], dict] = {}
+    for item in per_opp:
+        opp = item["opp"]
+        pid = str(opp.get("pipelineId") or "?")
+        sid = str(opp.get("pipelineStageId") or "?")
+        entry = pipeline_map.get(pid) or {}
+        row = agg.setdefault((pid, sid), {
+            "pipeline": entry.get("name") or pid,
+            "stage": (entry.get("stages") or {}).get(sid, sid),
+            "count": 0, "stale_count": 0, "value": 0.0,
+        })
+        row["count"] += 1
+        if item.get("is_stale"):
+            row["stale_count"] += 1
+        row["value"] += item.get("value") or 0.0
+    for row in agg.values():
+        row["value"] = round(row["value"], 2)
+    return [agg[key] for key in sorted(agg, key=lambda k: (k[0], order.get(k, 999)))]
+
+
+def weekly_closed(opps: list[dict], tz, now_utc: datetime, weeks: int = 12) -> list[dict]:
+    """Won/lost counts per ISO week, oldest first: [{week_start, won, lost}].
+    Every week in the range appears (zeros included) so quiet weeks show as
+    honest gaps. The closed-deal fetch reaches back 90 days, so the default
+    12 weeks is fully covered."""
+    this_week = iso_week_start(now_utc.astimezone(tz).date())
+    starts = [this_week - timedelta(days=7 * i) for i in range(weeks - 1, -1, -1)]
+    index = {start: {"week_start": start.isoformat(), "won": 0, "lost": 0} for start in starts}
+    for opp in opps:
+        status = str(opp.get("status") or "").lower()
+        if status not in ("won", "lost"):
+            continue
+        closed_at = parse_ts(opp.get("lastStatusChangeAt"))
+        if closed_at is None:
+            continue
+        week = iso_week_start(closed_at.astimezone(tz).date())
+        if week in index:
+            index[week][status] += 1
+    return [index[start] for start in starts]
+
+
 def opp_next_step(opp: dict, now_utc: datetime, feature_available: bool) -> str:
     """Does this deal have a planned next step?
 
@@ -730,6 +816,8 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
     return {
         "opps_open": len(open_opps),
         "opps_open_value": round(open_value, 2),
+        # (chart aggregates below are built separately from per_opp / opps —
+        # see stage_distribution, deal_aging_buckets, weekly_closed)
         "opps_stale": len(stale),
         "opps_stale_value": round(stale_value, 2),
         "opps_stuck": stuck,

@@ -714,6 +714,14 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         lead_events=lead_events, unassigned=unassigned, waiting=waiting, pipe=pipe,
         rel=rel, reviews=reviews, events_next7=events_next7, delivery=delivery,
         social_accounts=social_accounts, client_contact_id=client_contact_id)
+    # Chart aggregates (per-account visualizations): stage distribution,
+    # deal aging, and weekly won/lost. Small summaries over the FULL
+    # opportunity set — unlike the example lists above, these are never
+    # capped, so the charts stay honest at any pipeline size.
+    details["pipeline_stages"] = metrics.stage_distribution(pipe["per_opp"], pipeline_map)
+    details["deal_aging"] = metrics.deal_aging_buckets(pipe["per_opp"])
+    details["closed_weekly"] = metrics.weekly_closed(opps, tz, now_utc)
+
     details["missed_calls"] = [{
         "conversation_id": m.get("conversation_id"),
         "contact_id": m.get("contact_id"),

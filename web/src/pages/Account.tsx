@@ -22,7 +22,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ComposedChart,
+  LabelList,
   Legend,
   Line,
   LineChart,
@@ -79,6 +81,15 @@ const GRID = "#e1e0d9";
 const INK2 = "#52514e";
 // Categorical slots for the stacked source chart (validated palette order)
 const SOURCE_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#c3c2b7"];
+// Deal-aging chart: sequential single-hue ramp (light -> dark = young -> old
+// idle time); gray is reserved for the explicit "unknown" bucket. Status
+// colors for the won/lost and stage charts (icons/labels always accompany).
+const AGING_COLORS = ["#c9ddf4", "#93bce9", "#5b99dd", "#2a78d6", "#1a4f96"];
+const AGING_UNKNOWN = "#c3c2b7";
+const WON_COLOR = "#0ca30c";
+const LOST_COLOR = "#d03b3b";
+const IDLE_COLOR = "#fab219";
+const SURFACE = "#fcfcfb";
 
 // Response-time buckets for the speed-to-lead histogram. Buckets widen as
 // times grow (log-ish scale) because the difference between 5m and 15m
@@ -108,6 +119,13 @@ const FLAG_TABLE: Record<string, string> = {
 
 // Everything the page loads, bundled so a single setData() swap keeps all
 // pieces consistent with each other (no half-updated renders).
+// Slim slice of a week-old snapshot, for the change scorecard. Selecting
+// only these columns keeps the extra query light (no details blob).
+type PrevSnapshot = Pick<SnapshotRow,
+  "snapshot_date" | "gate_passed" | "leads_new_7d" | "form_submissions_7d"
+  | "speed_to_lead_median_min" | "calls_missed_7d" | "convos_waiting"
+  | "leads_uncontacted_24h" | "opps_moved_30d" | "opps_won_7d">;
+
 type Loaded = {
   sub: SubaccountRow;
   snapshot: SnapshotRow | null;
@@ -119,6 +137,8 @@ type Loaded = {
   leadEvents: LeadEventRow[];
   formHealth: FormHealthRow[];
   tagCheck: TagCheckRow | null;
+  prevSnapshot: PrevSnapshot | null;
+  prevFormHealth: FormHealthRow[];
 };
 
 // Expand/collapse wrapper for the detail tables. `defaultOpen` is only the
@@ -130,6 +150,74 @@ type Loaded = {
 function cappedTitle(label: string, total: number | null | undefined, shown: number): string {
   if (total === null || total === undefined || total <= shown) return `${label} (${shown})`;
   return `${label} (${total} — top ${shown} shown)`;
+}
+
+// The weekly change scorecard: this week vs the newest gate-passed snapshot
+// at least six days older. Deliberately a TABLE, not a chart — nine numbers
+// with direction arrows read faster than nine tiny charts. The arrow color
+// follows whether the change is good for that metric (fewer missed calls =
+// good, fewer leads = bad), and the arrow+sign carry the signal so color is
+// never the only channel.
+function ChangeScorecard({ snapshot, prev, silentNow, silentPrev, showForms }: {
+  snapshot: SnapshotRow; prev: PrevSnapshot;
+  silentNow: number; silentPrev: number; showForms: boolean;
+}) {
+  const rows: { label: string; now: number | null; was: number | null;
+                betterWhen: "higher" | "lower"; fmt?: (v: number | null) => string }[] = [
+    { label: "New leads (7d)", now: snapshot.leads_new_7d, was: prev.leads_new_7d, betterWhen: "higher" },
+    { label: "Form submissions (7d)", now: snapshot.form_submissions_7d, was: prev.form_submissions_7d, betterWhen: "higher" },
+    { label: "Speed to lead (median)", now: snapshot.speed_to_lead_median_min, was: prev.speed_to_lead_median_min, betterWhen: "lower", fmt: fmtMinutes },
+    { label: "Missed calls (7d)", now: snapshot.calls_missed_7d, was: prev.calls_missed_7d, betterWhen: "lower" },
+    { label: "Leads uncontacted >24h", now: snapshot.leads_uncontacted_24h, was: prev.leads_uncontacted_24h, betterWhen: "lower" },
+    { label: "Conversations waiting", now: snapshot.convos_waiting, was: prev.convos_waiting, betterWhen: "lower" },
+    { label: "Deals moved (30d)", now: snapshot.opps_moved_30d, was: prev.opps_moved_30d, betterWhen: "higher" },
+    { label: "Deals won (7d)", now: snapshot.opps_won_7d, was: prev.opps_won_7d, betterWhen: "higher" },
+    ...(showForms
+      ? [{ label: "Silent forms", now: silentNow, was: silentPrev, betterWhen: "lower" as const }]
+      : []),
+  ];
+  return (
+    <div className="overflow-x-auto rounded border border-grid bg-surface">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-grid text-left text-xxs uppercase tracking-wide text-muted">
+            <th className="px-3 py-1.5 font-medium">Metric</th>
+            <th className="px-3 py-1.5 text-right font-medium">This week</th>
+            <th className="px-3 py-1.5 text-right font-medium">{fmtDate(prev.snapshot_date)}</th>
+            <th className="px-3 py-1.5 text-right font-medium">Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ label, now, was, betterWhen, fmt }) => {
+            const show = (value: number | null) =>
+              value === null ? UNKNOWN : fmt ? fmt(value) : fmtNum(value);
+            let change: ReactNode = <span className="text-muted">—</span>;
+            if (now !== null && was !== null) {
+              const diff = now - was;
+              if (diff === 0) {
+                change = <span className="text-muted">→ no change</span>;
+              } else {
+                const improved = betterWhen === "higher" ? diff > 0 : diff < 0;
+                change = (
+                  <span className={improved ? "font-medium text-status-good-text" : "font-medium text-status-critical"}>
+                    {diff > 0 ? "▲" : "▼"} {diff > 0 ? "+" : "−"}{fmt ? fmt(Math.abs(diff)) : fmtNum(Math.abs(diff))}
+                  </span>
+                );
+              }
+            }
+            return (
+              <tr key={label} className="border-b border-grid/60 last:border-0">
+                <td className="px-3 py-1.5 text-ink-2">{label}</td>
+                <td className="px-3 py-1.5 text-right tabular font-medium">{show(now)}</td>
+                <td className="px-3 py-1.5 text-right tabular text-ink-2">{show(was)}</td>
+                <td className="px-3 py-1.5 text-right">{change}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function Collapsible({ title, defaultOpen, children }: {
@@ -215,6 +303,31 @@ export default function Account() {
         .order("checked_at", { ascending: false }).limit(1),
     ]);
 
+    // Week-over-week comparison for the change scorecard: the newest
+    // gate-passed snapshot at least 6 days older than the latest, so the
+    // comparison survives a missed night. Sequential because the second
+    // query (last week's silent-form count) needs the found date.
+    let prevSnapshot: PrevSnapshot | null = null;
+    let prevFormHealth: FormHealthRow[] = [];
+    if (snapshot) {
+      const cutoff = new Date(new Date(snapshot.snapshot_date).getTime() - 6 * 86400 * 1000)
+        .toISOString().slice(0, 10);
+      const { data: prevRows } = await supabase.from("snapshots")
+        .select("snapshot_date,gate_passed,leads_new_7d,form_submissions_7d,"
+          + "speed_to_lead_median_min,calls_missed_7d,convos_waiting,"
+          + "leads_uncontacted_24h,opps_moved_30d,opps_won_7d")
+        .eq("location_id", locationId).eq("gate_passed", true)
+        .lte("snapshot_date", cutoff)
+        .order("snapshot_date", { ascending: false }).limit(1);
+      prevSnapshot = ((prevRows ?? []) as unknown as PrevSnapshot[])[0] ?? null;
+      if (prevSnapshot) {
+        const { data: prevFh } = await supabase.from("form_health").select("*")
+          .eq("location_id", locationId)
+          .eq("snapshot_date", prevSnapshot.snapshot_date);
+        prevFormHealth = (prevFh ?? []) as FormHealthRow[];
+      }
+    }
+
     setData({
       sub: subRows[0] as SubaccountRow,
       snapshot,
@@ -226,6 +339,8 @@ export default function Account() {
       leadEvents: (eventsRes.data ?? []) as LeadEventRow[],
       formHealth: (formHealthRes.data ?? []) as FormHealthRow[],
       tagCheck: ((tagRes.data ?? []) as TagCheckRow[])[0] ?? null,
+      prevSnapshot,
+      prevFormHealth,
     });
   }, [locationId]);
 
@@ -308,6 +423,31 @@ export default function Account() {
       count: samples.filter(
         (minutes) => minutes <= bin.max && (i === 0 || minutes > HISTOGRAM_BINS[i - 1].max),
       ).length,
+    }));
+  }, [data]);
+
+  // Speed-to-lead trend: the nightly median from every gate-passed snapshot
+  // in v_history (12 weeks). Plotted as-is — the honest daily series, not a
+  // derived weekly average of medians.
+  const speedTrend = useMemo(() =>
+    (data?.history ?? [])
+      .filter((row) => row.gate_passed && row.speed_to_lead_median_min !== null)
+      .map((row) => ({
+        date: row.snapshot_date.slice(5, 10),
+        minutes: row.speed_to_lead_median_min,
+      })),
+  [data]);
+
+  // Pipeline-stage chart rows: prefix the stage with its pipeline name only
+  // when the account runs more than one pipeline.
+  const stageChart = useMemo(() => {
+    const stages = data?.snapshot?.details?.pipeline_stages ?? [];
+    const multi = new Set(stages.map((s) => s.pipeline)).size > 1;
+    return stages.map((s) => ({
+      label: multi ? `${s.pipeline} · ${s.stage}` : s.stage,
+      active: s.count - s.stale_count,
+      idle: s.stale_count,
+      value: s.value,
     }));
   }, [data]);
 
@@ -569,6 +709,19 @@ export default function Account() {
         </div>
       ) : null}
 
+      {/* 4b. the weekly change scorecard — this week vs ~a week ago */}
+      {snapshot && !noData && data.prevSnapshot ? (
+        <Section title={`This week vs ${fmtDate(data.prevSnapshot.snapshot_date)}`}>
+          <ChangeScorecard
+            snapshot={snapshot}
+            prev={data.prevSnapshot}
+            silentNow={data.formHealth.filter((f) => f.status === "silent").length}
+            silentPrev={data.prevFormHealth.filter((f) => f.status === "silent").length}
+            showForms={data.formHealth.length > 0 || data.prevFormHealth.length > 0}
+          />
+        </Section>
+      ) : null}
+
       {/* 5. funnel strip */}
       {details ? (
         <Section title="Funnel (28d)">
@@ -647,6 +800,111 @@ export default function Account() {
             </ResponsiveContainer>
           </div>
         </div>
+      ) : null}
+
+      {/* 6b. pipeline & trend charts. Each renders only when its data
+          exists, so old snapshots (pre-aggregates) simply show nothing. */}
+
+      {/* Won/lost by week: diverging bars around zero — wins up in green,
+          losses down in red, both named in the legend (never color alone). */}
+      {snapshot && !noData && details?.closed_weekly?.some((w) => w.won || w.lost) ? (
+        <Section title="Deals won & lost by week (12 wk)">
+          <div className="rounded border border-grid bg-surface p-3">
+            <ResponsiveContainer width="100%" height={170}>
+              <BarChart
+                data={details.closed_weekly.map((w) => ({
+                  week: w.week_start.slice(5), won: w.won, lost: -w.lost }))}
+                margin={{ top: 4, right: 8, bottom: 0, left: -24 }}
+              >
+                <CartesianGrid stroke={GRID} vertical={false} />
+                <XAxis dataKey="week" tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} />
+                <YAxis tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} allowDecimals={false}
+                       tickFormatter={(v: number) => String(Math.abs(v))} />
+                <ReferenceLine y={0} stroke={INK2} />
+                <Tooltip contentStyle={{ fontSize: 11, borderColor: GRID }}
+                         formatter={(value: number, name: string) => [Math.abs(value), name]} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="won" name="won" stackId="wl" fill={WON_COLOR}
+                     stroke={SURFACE} strokeWidth={1} maxBarSize={26} />
+                <Bar dataKey="lost" name="lost" stackId="wl" fill={LOST_COLOR}
+                     stroke={SURFACE} strokeWidth={1} maxBarSize={26} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Section>
+      ) : null}
+
+      {/* Speed-to-lead trend: single series, so the title is the legend. */}
+      {speedTrend.length >= 2 ? (
+        <Section title={`${speedLabel} — nightly median, minutes`}>
+          <div className="rounded border border-grid bg-surface p-3">
+            <ResponsiveContainer width="100%" height={150}>
+              <LineChart data={speedTrend} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
+                <CartesianGrid stroke={GRID} vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} minTickGap={24} />
+                <YAxis tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 11, borderColor: GRID }}
+                         formatter={(value: number) => [fmtMinutes(value), "median"]} />
+                <Line type="monotone" dataKey="minutes" stroke={SERIES} strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Section>
+      ) : null}
+
+      {/* Open deals by stage: where the pipeline is bunched, and how much of
+          each stage is idle. Height scales with the stage count. */}
+      {snapshot && !noData && stageChart.length > 0 ? (
+        <Section title="Open deals by pipeline stage">
+          <div className="rounded border border-grid bg-surface p-3">
+            <ResponsiveContainer width="100%" height={Math.max(130, stageChart.length * 34 + 50)}>
+              <BarChart layout="vertical" data={stageChart}
+                        margin={{ top: 4, right: 24, bottom: 0, left: 8 }}>
+                <CartesianGrid stroke={GRID} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} allowDecimals={false} />
+                <YAxis type="category" dataKey="label" width={150}
+                       tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} />
+                <Tooltip contentStyle={{ fontSize: 11, borderColor: GRID }}
+                         formatter={(value: number, name: string) => [value, name]} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="active" name="active (touched <14d)" stackId="st" fill={SERIES}
+                     stroke={SURFACE} strokeWidth={2} maxBarSize={18} />
+                <Bar dataKey="idle" name="idle 14d+" stackId="st" fill={IDLE_COLOR}
+                     stroke={SURFACE} strokeWidth={2} maxBarSize={18} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Section>
+      ) : null}
+
+      {/* Deal aging: idle-time buckets, light-to-dark = young-to-old (one
+          hue for magnitude); gray marks the explicit unknown bucket. */}
+      {snapshot && !noData && details?.deal_aging?.some((b) => b.count > 0) ? (
+        <Section title="Open deals by idle time">
+          <div className="rounded border border-grid bg-surface p-3">
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart data={details.deal_aging} margin={{ top: 16, right: 8, bottom: 0, left: -24 }}>
+                <CartesianGrid stroke={GRID} vertical={false} />
+                <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} />
+                <YAxis tick={{ fontSize: 10, fill: INK2 }} stroke={GRID} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 11, borderColor: GRID }}
+                         formatter={(value: number, _name, item) =>
+                           [`${value} deal${value === 1 ? "" : "s"} · ${fmtMoney((item?.payload as { value?: number })?.value ?? null)}`, "idle"]} />
+                <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={56}>
+                  <LabelList dataKey="count" position="top" style={{ fontSize: 10, fill: INK2 }} />
+                  {details.deal_aging.map((bucket, index) => (
+                    <Cell key={bucket.bucket}
+                          fill={bucket.bucket === "unknown" ? AGING_UNKNOWN
+                            : AGING_COLORS[Math.min(index, AGING_COLORS.length - 1)]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <p className="mt-1 text-xxs text-muted">
+              Darker = idle longer. Hover a bar for the dollar value sitting in that bucket.
+            </p>
+          </div>
+        </Section>
       ) : null}
 
       {leadEvents.length > 0 ? (
