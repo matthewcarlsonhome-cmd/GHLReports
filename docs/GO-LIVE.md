@@ -141,12 +141,14 @@ Still in the Supabase dashboard:
    Integration:
    - Name: `ssp-health-readonly`
    - Scopes — **read-only/view only**, check these modules: locations,
-     users, contacts, conversations (+ messages), opportunities, calendars
-     (+ events), invoices, forms, **surveys**, **workflows (view)**, blogs
-     (list + posts), social planner (posts + accounts). **Never** any write
-     scope, campaigns, payments, saas, or snapshots. (Surveys and Workflows
-     view power the per-form health checks; a token missing them still
-     works — those two checks just show "scope not yet granted".)
+     users, contacts, conversations (+ messages), opportunities,
+     **pipelines**, calendars (+ events), invoices, forms, **surveys**,
+     **workflows (view)**, blogs (list + posts), social planner (posts +
+     accounts). **Never** any write scope, campaigns, payments, saas, or
+     snapshots. (Surveys and Workflows view power the per-form health
+     checks; Pipelines view guarantees the stage-structure fetch; a token
+     missing any of these still works — the affected checks just show
+     "scope not yet granted".)
    - Copy the token (it is shown once).
 4. Back in Supabase **Vault → Add new secret**:
    - Name: `ghl_pit_ZnckuEDPIcWu8fn72ppi` (exactly — that is the SSP
