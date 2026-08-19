@@ -250,14 +250,20 @@ class Store:
             "snapshot_date", snapshot_date.isoformat()).execute()
 
     def read_prev_dead(self, location_id: str, snapshot_date: date) -> list[tuple]:
-        """Activity counts from the last 3 gate-passed snapshots before today.
+        """Activity counts from the last 3 snapshots before today, held ones
+        included.
 
         Input for the gate's dead-source check: if these show activity but
-        today reads all zeros, today's fetch probably broke.
+        today reads all zeros, today's fetch probably broke. Held snapshots
+        count on purpose — a genuinely quiet account's first all-zero read is
+        held by G4, and if held reads never counted, three quiet days could
+        never prove dormancy and the account would stay held forever. The
+        gate itself requires MEASURED zeros in these rows (None fails), so a
+        broken fetch still can't pass itself.
         """
         result = self.client.table("snapshots").select(
             "leads_new_7d,convos_active_7d,opps_created_7d,snapshot_date"
-        ).eq("location_id", location_id).eq("gate_passed", True).lt(
+        ).eq("location_id", location_id).lt(
             "snapshot_date", snapshot_date.isoformat()
         ).order("snapshot_date", desc=True).limit(3).execute()
         return [(row.get("leads_new_7d"), row.get("convos_active_7d"), row.get("opps_created_7d"))

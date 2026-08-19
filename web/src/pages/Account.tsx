@@ -110,7 +110,6 @@ const FLAG_TABLE: Record<string, string> = {
   UNASSIGNED_LEADS: "unassigned",
   CONVOS_WAITING: "waiting",
   STALE_PIPELINE: "stale",
-  PAST_DUE: "past_due",
   SOCIAL_DISCONNECTED: "social",
   REVIEW_ASK_GAP: "reviews",
   HIGH_NOSHOW: "appts",
@@ -687,9 +686,6 @@ export default function Account() {
                     context="created, staged, or closed"
                     tone={snapshot.opps_moved_30d === 0 && (snapshot.opps_open ?? 0) >= 10
                       ? "bad" : undefined} />
-          <StatTile label="Past due (SSP)" value={fmtMoney(snapshot.invoices_past_due_amount)}
-                    context={`${fmtNum(snapshot.invoices_past_due)} invoices`}
-                    tone={(snapshot.invoices_past_due ?? 0) > 0 ? "bad" : undefined} />
           <StatTile label="Days since publish" value={fmtNum(snapshot.days_since_last_publish)}
                     tone={(snapshot.days_since_last_publish ?? 0) >= 14 ? "bad" : undefined} />
           <StatTile label="Client last touch"
@@ -1084,18 +1080,6 @@ export default function Account() {
           <Collapsible title={`Missing value (${details.missing_value_opps.length})`} defaultOpen={false}>
             <DetailTable rows={details.missing_value_opps} empty="Every open deal has a dollar value."
               columns={[{ header: "Opportunity", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> }]} />
-          </Collapsible>
-
-          <Collapsible title={`Past-due invoices — SSP to client (${details.past_due_invoices.length})`}
-                       defaultOpen={firingTables.has("past_due")}>
-            <DetailTable rows={details.past_due_invoices} empty="Nothing past due."
-              columns={[
-                { header: "Invoice", cell: (r) => r.number ?? r.invoice_id },
-                { header: "Status", cell: (r) => r.status },
-                { header: "Due", cell: (r) => fmtDate(r.due_date) },
-                { header: "Days over", cell: (r) => r.days_over, numeric: true },
-                { header: "Amount", cell: (r) => fmtMoney(r.amount_due), numeric: true },
-              ]} />
           </Collapsible>
 
           <Collapsible title={`Appointments next 7 days (${details.appts_next_7d.length})`}

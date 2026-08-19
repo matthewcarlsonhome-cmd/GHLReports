@@ -125,8 +125,6 @@ def test_happy_path_metrics_gate_and_flags():
     assert snap["social_accounts_expired"] == 0
 
     # relationship
-    assert snap["invoices_past_due"] == 1
-    assert snap["invoices_past_due_amount"] == 3000.0
     assert snap["client_last_touch_days"] == 8
     assert snap["client_next_appt_at"] is not None
     assert snap["review_asks_stale"] == 1
@@ -163,7 +161,6 @@ def test_happy_path_metrics_gate_and_flags():
         "SOURCE_DROP": "amber",         # facebook 4/wk -> 1
         "CONVOS_WAITING": "red",        # 25h >= 24h
         "STALE_PIPELINE": "red",        # $30k stale >= $25k
-        "PAST_DUE": "red",              # $3,000 >= $2,500
         "FORM_WENT_SILENT": "amber",    # formA2 (Hot Tub Brochure)
         "SURVEY_WENT_SILENT": "amber",  # survA1 (Post-Install Survey)
         "PIPELINE_BOTTLENECK": "info",  # $30k idle in Quote
@@ -197,7 +194,7 @@ def test_flags_new_and_resolved_against_seeded_prior_week():
     })
     assert run_with(store, make_factory()) == 0
     snap = store.snapshots[("locA", "2026-08-18")]
-    assert snap["flags_new"] == ["FORM_WENT_SILENT", "LEADS_DROP", "PAST_DUE",
+    assert snap["flags_new"] == ["FORM_WENT_SILENT", "LEADS_DROP",
                                  "PIPELINE_BOTTLENECK", "SOURCE_DROP", "STALE_PIPELINE",
                                  "SURVEY_WENT_SILENT"]
     assert snap["flags_resolved"] == ["NO_DELIVERY"]

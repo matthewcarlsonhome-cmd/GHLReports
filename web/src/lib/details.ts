@@ -6,7 +6,7 @@
 //
 // How to read this file: it is one big type declaration, no runtime code. Each
 // property matches a drill-down table on the Account page (uncontacted leads,
-// stale opps, past-due invoices, ...). "deep_link" fields are URLs straight
+// stale opps, waiting conversations, ...). "deep_link" fields are URLs straight
 // into the matching record in GoHighLevel, so every table row is clickable.
 // Timestamps are ISO strings; durations are pre-computed by the collector
 // (hours_since, days_idle, ...) so the UI never re-derives them.
@@ -68,15 +68,6 @@ export type Details = {
     deep_link: string;
   }[];
   missing_value_opps: { opp_id: string; name: string; deep_link: string }[];
-  // Invoices SSP has issued to this client that are past their due date.
-  past_due_invoices: {
-    invoice_id: string;
-    number: string | null;
-    amount_due: number | null;
-    due_date: string;
-    days_over: number;
-    status: string;
-  }[];
   appts_next_7d: {
     id: string;
     title: string;

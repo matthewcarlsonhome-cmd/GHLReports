@@ -50,7 +50,6 @@ SCOPE_HINTS = [
     ("/conversations", "conversations/message.readonly"),
     ("/calendars/events", "calendars/events.readonly"),
     ("/calendars", "calendars.readonly"),
-    ("/invoices", "invoices.readonly"),
     ("/blogs/site", "blogs/list.readonly"),
     ("/blogs/posts", "blogs/post.readonly"),
     ("/social-media-posting", "socialplanner/post.readonly"),

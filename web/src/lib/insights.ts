@@ -56,8 +56,6 @@ export function buildAccountInsight(row: PortfolioRow): AccountInsight {
   push((row.opps_stale ?? 0) > 0,
     `${row.opps_stale} stale deal${row.opps_stale === 1 ? "" : "s"}`
     + (row.opps_stale_value ? ` (${fmtMoney(row.opps_stale_value)})` : ""));
-  push((row.invoices_past_due ?? 0) > 0,
-    `past due ${fmtMoney(row.invoices_past_due_amount)}`);
   push((row.leads_unassigned_7d ?? 0) > 0,
     `${row.leads_unassigned_7d} unassigned lead${row.leads_unassigned_7d === 1 ? "" : "s"}`);
   push((row.social_accounts_expired ?? 0) > 0,

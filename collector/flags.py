@@ -73,8 +73,6 @@ DEFAULT_THRESHOLDS = {
     "no_delivery_days": 14,
     "no_delivery_red_days": 30,
     # relationship
-    "past_due_red_days": 30,
-    "past_due_red_amount": 2500.0,
     "client_touch_days": 30,
     "client_touch_red_days": 45,
     "renewal_days": 60,
@@ -397,22 +395,6 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             "SOCIAL_DISCONNECTED", "red", "Social account disconnected",
             f"{expired} social account(s) disconnected; scheduled posts are silently failing. "
             "Reconnect in Social Planner.",
-        ))
-
-    # PAST_DUE — unpaid SSP invoices; red when old (past_due_red_days) or
-    # large (past_due_red_amount).
-    past_due = metrics.get("invoices_past_due")
-    if past_due:
-        amount = metrics.get("invoices_past_due_amount") or 0
-        oldest = (details.get("past_due_invoices") or [{}])[0]
-        oldest_days = oldest.get("days_over") or 0
-        severity = "red" if oldest_days > th["past_due_red_days"] or amount >= th["past_due_red_amount"] else "amber"
-        flags.append(_flag(
-            "PAST_DUE", severity, "SSP invoices past due",
-            f"{_fmt_money(amount)} past due, oldest {oldest_days}d. "
-            "Coordinate with billing before the next call.",
-            entity_type="invoice", entity_id=oldest.get("invoice_id"),
-            entity_name=oldest.get("number"),
         ))
 
     # NO_CLIENT_TOUCH — quiet client relationship AND nothing on the

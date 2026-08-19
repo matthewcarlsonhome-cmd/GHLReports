@@ -23,7 +23,7 @@ Key ideas to understand this file
   the right fixture, so the fetchers exercise their real parsing logic
   against realistic payload shapes — without network, tokens, or flakiness.
 * The fixture world has exactly two locations: "locA", a client account with
-  rich data, and "locP", the SSP parent account (invoices, client contact
+  rich data, and "locP", the SSP parent account (client contact events and
   conversations). Any other location id gets empty-but-valid responses.
 * Scenario knobs: ``empty_locs`` makes a location return successful empty
   reads (testing the G4 dead-source gate), ``forms_override`` swaps the
@@ -166,8 +166,6 @@ def make_routes(empty_locs: set[str] | None = None,
             return load("calendars.json") if loc == "locA" else load("parent_calendars.json")
         if path == "/calendars/events":
             return load("events_next7.json") if loc == "locA" else load("parent_events.json")
-        if path == "/invoices/":
-            return load("parent_invoices.json") if params.get("altId") == "locP" else {"invoices": []}
         if path == "/blogs/site/all":
             return load("blog_sites.json") if loc == "locA" else {"data": []}
         if path == "/blogs/posts/all":
@@ -248,8 +246,8 @@ class FakeStore:
     Each Postgres table becomes a plain dict keyed the way the real table's
     upsert key works (e.g. snapshots by (location_id, date)), which makes the
     real code's idempotent-upsert behavior hold here too. Constructor args
-    seed pre-existing state: subaccount config rows, prior gate-passed
-    activity (prev_dead), last week's flag codes (prior_flags), and stored
+    seed pre-existing state: subaccount config rows, prior snapshots'
+    activity counts (prev_dead), last week's flag codes (prior_flags), and stored
     tokens (pits, defaulting to "tok-<location_id>" for every sub). After a
     run, tests assert directly on the .snapshots / .flags / .runs dicts.
     """

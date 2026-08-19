@@ -283,22 +283,6 @@ def test_missed_calls_classification_and_window():
     assert missed[0]["status"] == "no-answer"
 
 
-# -- invoices -----------------------------------------------------------------
-
-def test_past_due_invoices_status_and_amount_fallback():
-    today = NOW.astimezone(CT).date()
-    invoices = [
-        {"_id": "i1", "status": "sent", "dueDate": "2026-07-30T00:00:00Z", "amountDue": 3000, "total": 3000},
-        {"_id": "i2", "status": "paid", "dueDate": "2026-07-01T00:00:00Z", "amountDue": 0, "total": 100},
-        {"_id": "i3", "status": "overdue", "dueDate": "2026-08-01T00:00:00Z", "total": 500},
-        {"_id": "i4", "status": "sent", "dueDate": "2026-09-01T00:00:00Z", "amountDue": 250},
-    ]
-    overdue = metrics.past_due_invoices(invoices, today)
-    assert {inv["invoice_id"] for inv in overdue} == {"i1", "i3"}
-    i3 = next(inv for inv in overdue if inv["invoice_id"] == "i3")
-    assert i3["amount_due"] == 500.0  # total fallback when amountDue absent
-
-
 # -- gate ---------------------------------------------------------------------
 
 class CovStub:
@@ -335,6 +319,11 @@ def test_gate_g4_sudden_zero_vs_dormant():
 
     ok, reasons = metrics.gate_check(True, CovStub(), 0, 0, 0, [(0, 0, 0)] * 2)
     assert not ok  # not enough history to prove dormancy
+
+    # Prior rows must be MEASURED zeros: a None (source never fetched) does
+    # not prove dormancy, so three broken-fetch days can't open the gate.
+    ok, reasons = metrics.gate_check(True, CovStub(), 0, 0, 0, [(0, None, 0)] * 3)
+    assert not ok and any("G4" in r for r in reasons)
 
 
 def test_deal_aging_buckets():
@@ -482,3 +471,7 @@ def test_location_name_matches():
     assert metrics.location_name_matches("AAA Pools & Spas", "AAA Pools and Spas")
     assert metrics.location_name_matches("AAA Pools and Spas", "AAA Pools & Spas")
     assert metrics.location_name_matches("AAA Pools&Spas LLC", "AAA Pools and Spas")
+    # GHL often stores a curly apostrophe (U+2019) where the roster was typed
+    # with a straight one — both directions must match.
+    assert metrics.location_name_matches("Campbell’s Pool and Spa", "Campbell's Pool and Spa")
+    assert metrics.location_name_matches("Campbell's Pool and Spa", "Campbell’s Pool and Spa")

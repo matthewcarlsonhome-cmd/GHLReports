@@ -4,6 +4,14 @@ Owner: Matthew Carlson, Small Screen Producer (SSP)
 Audience: Claude Code (implementer). Users: SSP account managers.
 Date: August 18, 2026. Supersedes Spec v2.x, Addendum v2.1, and the token-strategy note; everything from them is folded in here. This is the only document to paste.
 
+> **Post-spec amendment (2026-08-19):** everything invoice/payment-related in
+> this spec is RETIRED — the `invoices.readonly` scope, the invoice fetcher,
+> `invoices_past_due` / `invoices_past_due_amount`, the `PAST_DUE` flag, and
+> the past-due drilldown table were removed by product decision (migration
+> `0007_remove_invoices.sql`). This app tracks marketing/CRM health only,
+> never billing. This document is kept as the historical build spec;
+> `docs/ARCHITECTURE.md` describes the system as built.
+
 ---
 
 ## 0. Instructions to the implementer

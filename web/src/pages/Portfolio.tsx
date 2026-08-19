@@ -42,7 +42,6 @@ const EXPANDED_COLUMNS = [
   { key: "moves", label: "Moves 30d" },
   { key: "bottleneck", label: "Bottleneck" },
   { key: "forms_silent", label: "Silent forms" },
-  { key: "past_due", label: "Past due" },
   { key: "publish", label: "Since publish" },
   { key: "client_touch", label: "Client touch" },
   { key: "unassigned", label: "Unassigned" },
@@ -378,7 +377,6 @@ export default function Portfolio() {
         bottleneck: row.bottleneck_stage
           ? `${row.bottleneck_stage} ($${row.bottleneck_value_usd ?? 0})` : "",
         forms_silent: row.forms_silent_ct,
-        past_due: row.invoices_past_due_amount,
         publish: row.days_since_last_publish, client_touch: row.client_last_touch_days,
         unassigned: row.leads_unassigned_7d, noshow: row.noshow_rate_28d,
         lead_opp: row.lead_to_opp_28d_pct, win_rate: row.win_rate_90d,
@@ -431,9 +429,6 @@ export default function Portfolio() {
         return noData || !row.bottleneck_stage ? "—"
           : `${row.bottleneck_stage} (${fmtMoney(row.bottleneck_value_usd)})`;
       case "forms_silent": return noData || row.forms_silent_ct === null ? "—" : fmtNum(row.forms_silent_ct);
-      case "past_due":
-        return noData || row.invoices_past_due === null ? "—"
-          : row.invoices_past_due > 0 ? fmtMoney(row.invoices_past_due_amount) : "$0";
       case "publish": return noData ? "—" : fmtNum(row.days_since_last_publish);
       case "client_touch": return noData ? "—" : fmtNum(row.client_last_touch_days);
       case "unassigned": return noData ? "—" : fmtNum(row.leads_unassigned_7d);

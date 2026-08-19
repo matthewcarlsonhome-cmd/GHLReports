@@ -33,7 +33,6 @@ wrong field name costs a column, not the night's data.
 | `GET /conversations/{id}/messages` | nested `messages.messages[]` (flat also handled); `direction`, `dateAdded`, `source`, `userId`; `body` dropped at the boundary | UNVERIFIED — the `source` vocabulary decides human-vs-automation; if it can't be established, kinds stay `unknown` and the UI labels the metric "automation included" |
 | `GET /calendars/` | `calendars[{id,name}]` | UNVERIFIED |
 | `GET /calendars/events` | needs `calendarId`; `startTime`/`endTime` epoch ms; `appointmentStatus` (expected `new, confirmed, showed, noshow, cancelled, invalid`); created field `dateAdded` → `createdAt` fallback | UNVERIFIED — status vocabulary and created-field name drive the appointment metrics |
-| `GET /invoices/` | `altId`/`altType=location`, offset paging; `status`, `dueDate`, `amountDue`→`total` fallback, `contactDetails.id` | UNVERIFIED — live status vocabulary |
 | `GET /blogs/site/all` | `data[]` (also `sites`/`blogs` keys handled) | UNVERIFIED |
 | `GET /blogs/posts/all` | `blogs[]`/`posts[]`; `publishedAt` | UNVERIFIED |
 | `POST /social-media-posting/{loc}/posts/list` | `results.posts[]` or flat `posts[]`; `publishedAt`→`createdAt` fallback | UNVERIFIED |
@@ -88,7 +87,6 @@ retry/backoff and halves on repeated 429 — verify against live
 - [ ] do `date`/`endDate` filter opportunities on `lastStatusChangeAt`?
 - [ ] message `source` / `userId` values seen (list them; update the
       HUMAN_SOURCES / AUTOMATION_SOURCES sets in `collector/metrics.py`)?
-- [ ] invoice `status` values seen?
 - [ ] forms/submissions envelope as parsed?
 - [ ] calendar event created field (`dateAdded` vs `createdAt`) and
       `appointmentStatus` values (update SHOWED/NOSHOW sets in metrics.py)?

@@ -112,8 +112,6 @@ export interface SnapshotRow {
   days_since_last_publish: number | null;
   social_accounts_total: number | null;
   social_accounts_expired: number | null;
-  invoices_past_due: number | null;
-  invoices_past_due_amount: number | null;
   client_last_touch_days: number | null;
   client_next_appt_at: string | null;
   review_asks_stale: number | null;
@@ -264,8 +262,6 @@ export interface PortfolioRow {
   noshow_rate_28d: number | null;
   days_since_last_publish: number | null;
   social_accounts_expired: number | null;
-  invoices_past_due: number | null;
-  invoices_past_due_amount: number | null;
   client_last_touch_days: number | null;
   client_next_appt_at: string | null;
   flags_new: string[] | null;

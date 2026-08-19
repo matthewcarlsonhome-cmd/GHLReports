@@ -7,8 +7,8 @@ candidates so the ID can be copied into subaccounts.ssp_client_contact_id.
 
 How this fits in
 ----------------
-Relationship metrics (past-due invoices, last touch, next appointment with a
-client) come from SSP's own CRM — the "parent" account — where each client
+Relationship metrics (last touch, next appointment with a client) come from
+SSP's own CRM — the "parent" account — where each client
 company exists as a contact. The collector links a client location to that
 contact through the subaccounts.ssp_client_contact_id column, and this
 one-shot admin CLI is how a human finds the right id to put there during

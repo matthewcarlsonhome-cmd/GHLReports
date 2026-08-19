@@ -1036,48 +1036,15 @@ def social_account_stats(accounts: list[dict] | None) -> dict:
 
 # -- relationship (from the SSP parent account) --------------------------
 
-# Invoice statuses that can never be "past due" — already paid, cancelled,
-# or never actually issued.
-PAST_DUE_EXCLUDED_STATUSES = {"paid", "void", "draft", "deleted"}
 
-
-def past_due_invoices(invoices: list[dict], today: date) -> list[dict]:
-    """Unpaid invoices whose due date has passed, most-overdue first.
-    Compares calendar dates, not times: an invoice due today is not yet late."""
-    out = []
-    for inv in invoices:
-        status = str(inv.get("status") or "").strip().lower()
-        if status in PAST_DUE_EXCLUDED_STATUSES:
-            continue
-        due = parse_ts(inv.get("dueDate"))
-        if due is None or due.date() >= today:
-            continue
-        amount = inv.get("amountDue")
-        if not isinstance(amount, (int, float)):
-            amount = inv.get("total")
-        out.append({
-            "invoice_id": inv.get("_id") or inv.get("id"),
-            "number": inv.get("invoiceNumber"),
-            "amount_due": float(amount) if isinstance(amount, (int, float)) else None,
-            "due_date": due.date().isoformat(),
-            "days_over": (today - due.date()).days,
-            "status": status,
-        })
-    out.sort(key=lambda inv: inv["days_over"], reverse=True)
-    return out
-
-
-def relationship_metrics(client_invoices: list[dict], client_conversations: list[dict],
-                         client_events: list[dict], now_utc: datetime, today: date) -> dict:
-    """Health of the agency-client relationship itself (billing + contact).
+def relationship_metrics(client_conversations: list[dict],
+                         client_events: list[dict], now_utc: datetime) -> dict:
+    """Health of the agency-client relationship itself (recency of contact).
 
     Inputs come from the agency's own parent account, where the client is a
     contact. A "touch" is any conversation activity or a past meeting; a
     future meeting counts as the next scheduled appointment instead.
     """
-    overdue = past_due_invoices(client_invoices, today)
-    amount = sum(inv["amount_due"] for inv in overdue if inv["amount_due"] is not None)
-
     touches: list[datetime] = []
     for convo in client_conversations:
         ts = parse_ts(convo.get("lastMessageDate"))
@@ -1100,12 +1067,9 @@ def relationship_metrics(client_invoices: list[dict], client_conversations: list
     last_touch_days = int((now_utc - last_touch).total_seconds() // 86400) if last_touch else None
 
     return {
-        "invoices_past_due": len(overdue),
-        "invoices_past_due_amount": round(amount, 2) if overdue else 0.0,
         "client_last_touch_days": last_touch_days,
         "client_next_appt_at": next_appt,
         "client_last_touch_at": last_touch,
-        "past_due_detail": overdue,
     }
 
 
@@ -1209,11 +1173,25 @@ def flags_changed(today_codes: list[str], prior_codes: list[str]) -> tuple[list[
 # -- gate ----------------------------------------------------------------
 
 
+# Unicode apostrophe/quote variants folded to the ASCII apostrophe before
+# comparing names: GHL's UI often stores a curly ’ (U+2019) where the roster
+# was typed with a straight ' — "Campbell’s" must match "Campbell's".
+_APOSTROPHE_VARIANTS = str.maketrans({
+    "‘": "'",  # ‘ left single quote
+    "’": "'",  # ’ right single quote (the common curly apostrophe)
+    "ʼ": "'",  # ʼ modifier letter apostrophe
+    "`": "'",  # ` grave accent
+    "´": "'",  # ´ acute accent
+})
+
+
 def _normalize_name(name: str) -> str:
-    """Lowercase, treat '&' and the word 'and' as the same, collapse runs of
-    whitespace — so cosmetic spelling differences don't fail the identity
-    gate ("AAA Pools & Spas" vs a configured "AAA Pools and Spas")."""
-    lowered = name.strip().lower().replace("&", " and ")
+    """Lowercase, fold curly apostrophes to straight, treat '&' and the word
+    'and' as the same, collapse runs of whitespace — so cosmetic spelling
+    differences don't fail the identity gate ("AAA Pools & Spas" vs a
+    configured "AAA Pools and Spas", "Campbell’s" vs "Campbell's")."""
+    lowered = name.strip().lower().translate(_APOSTROPHE_VARIANTS)
+    lowered = lowered.replace("&", " and ")
     return " ".join(lowered.split())
 
 
@@ -1250,12 +1228,16 @@ def gate_check(g1_ok: bool, coverage, leads_new_7d: int | None,
         reasons.append(f"G3: {coverage.partial_count()} partial scans")
 
     # G4: prev_dead rows are (leads, convos, opps) tuples from prior runs,
-    # newest first; `x or 0` treats None (unknown) the same as zero.
+    # newest first. For TODAY'S read, `x or 0` treats None (unknown) as zero.
+    # Prior rows must be MEASURED zeros (None fails): held snapshots count
+    # toward proving dormancy, but only when their fetches actually ran —
+    # otherwise three days of broken fetches could masquerade as a quiet
+    # business.
     all_zero = (leads_new_7d or 0) == 0 and (convos_active or 0) == 0 and (opps_created or 0) == 0
     if all_zero:
         prev_all_zero = (
             len(prev_dead) >= 3
-            and all((row[0] or 0) == 0 and (row[1] or 0) == 0 and (row[2] or 0) == 0
+            and all(row[0] == 0 and row[1] == 0 and row[2] == 0
                     for row in prev_dead[:3])
         )
         if not prev_all_zero:

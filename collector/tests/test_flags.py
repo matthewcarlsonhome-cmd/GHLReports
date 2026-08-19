@@ -26,7 +26,6 @@ def base_metrics(**overrides):
         "appts_booked_7d": 3, "appts_showed_28d": 8, "appts_noshow_28d": 1, "noshow_rate_28d": 11.1,
         "blogs_published_30d": 4, "social_published_7d": 3, "days_since_last_publish": 2,
         "social_accounts_total": 2, "social_accounts_expired": 0,
-        "invoices_past_due": 0, "invoices_past_due_amount": 0.0,
         "client_last_touch_days": 5, "client_next_appt_at": "2026-08-21T12:00:00Z",
         "review_asks_stale": 0, "review_ask_gap": 0,
     }
@@ -207,19 +206,6 @@ def test_social_disconnected():
     assert codes(compute({"social_accounts_expired": 1})).get("SOCIAL_DISCONNECTED") == "red"
     ads_only = {**SUB, "services": ["ads"]}
     assert "SOCIAL_DISCONNECTED" not in codes(compute({"social_accounts_expired": 1}, sub=ads_only))
-
-
-def test_past_due_severity_by_age_and_amount():
-    details_old = {"past_due_invoices": [{"invoice_id": "i1", "number": "42",
-                                          "days_over": 45, "amount_due": 100.0}]}
-    details_new = {"past_due_invoices": [{"invoice_id": "i2", "number": "43",
-                                          "days_over": 5, "amount_due": 100.0}]}
-    assert codes(compute({"invoices_past_due": 1, "invoices_past_due_amount": 100.0},
-                         details=details_old)).get("PAST_DUE") == "red"
-    assert codes(compute({"invoices_past_due": 1, "invoices_past_due_amount": 3000.0},
-                         details=details_new)).get("PAST_DUE") == "red"
-    assert codes(compute({"invoices_past_due": 1, "invoices_past_due_amount": 100.0},
-                         details=details_new)).get("PAST_DUE") == "amber"
 
 
 def test_no_client_touch_suppressed_by_next_appt():

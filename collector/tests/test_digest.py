@@ -26,7 +26,7 @@ SNAPSHOTS = {
 FLAGS = {
     "l1": [
         {"code": "LEADS_DROP", "severity": "red", "action": "Leads down 60% vs baseline. Call."},
-        {"code": "PAST_DUE", "severity": "amber", "action": "$3,000 past due."},
+        {"code": "CONVOS_WAITING", "severity": "amber", "action": "3 conversations waiting."},
         {"code": "REVIEW_ASK_GAP", "severity": "info", "action": "2 wins missing review asks."},
     ],
 }
@@ -61,7 +61,7 @@ def test_no_data_accounts_are_called_out():
 
 
 def test_acked_flags_drop_out():
-    digests = build(acked={"l1": {"LEADS_DROP", "PAST_DUE"}})
+    digests = build(acked={"l1": {"LEADS_DROP", "CONVOS_WAITING"}})
     lisa = digests["lisa@smallscreenproducer.com"]
     assert lisa["subject"] == "Account health — all steady"
     assert "Steady (2)" in lisa["text"]

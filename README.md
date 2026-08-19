@@ -203,10 +203,10 @@ Do them in order.
    — inside that subaccount: Settings → Private Integrations → Create new
    Integration, name `ssp-health-readonly`, **read-only scopes only**:
    `locations`, `users`, `contacts`, `conversations` (+ messages),
-   `opportunities`, `pipelines`, `calendars` (+ events), `invoices`,
+   `opportunities`, `pipelines`, `calendars` (+ events),
    `forms`, `surveys`, `workflows` (view), `blogs` (list + posts),
-   `social planner` (posts + accounts). Never any write scope, campaigns,
-   payments write, saas, or snapshots.
+   `social planner` (posts + accounts). Never any write scope, and nothing
+   billing-related — no invoices, payments, campaigns, saas, or snapshots.
    For each: Vault → Add new secret: Name **exactly**
    `ghl_pit_<location_id>` (the GHL location ID, not the slug), Secret =
    the PIT, Description = the client name. Close the GHL tab — the token

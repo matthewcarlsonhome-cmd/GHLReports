@@ -1,6 +1,6 @@
 """Collector entry point. Run sequence per spec section 7.2 (v3):
 
-1. start run + pit_key_ok   2. load subaccounts   3. parent first (invoices,
+1. start run + pit_key_ok   2. load subaccounts   3. parent first (calendar
 events, users)   4. each client subaccount: fetch -> metrics -> snapshot +
 lead_events + lead_history   5. peer pass: vertical medians, then flags and
 flags_new/flags_resolved per location   6. finish run with per-location
@@ -26,9 +26,9 @@ In plain English, one normal daily run does this:
    misconfigured machine fails fast instead of half-running.
 2. Load the subaccount list: one row per client location, plus one special
    "parent" account, which is SSP's own CRM.
-3. Collect the parent FIRST, because client-relationship data (invoices,
-   meetings with the client) lives in the parent account, indexed there by
-   each client's contact id.
+3. Collect the parent FIRST, because client-relationship data (meetings and
+   conversations with the client) lives in the parent account, indexed there
+   by each client's contact id.
 4. Collect each client location: fetch -> compute metrics -> write a daily
    snapshot row, per-lead speed-to-lead rows, and weekly history rows.
 5. Run the "peer pass": once every snapshot is written, compute the median
@@ -105,10 +105,10 @@ class ParentContext:
     """Data pulled once from the SSP parent account and shared by every client.
 
     The parent account is SSP's own CRM: each client company is a *contact*
-    there, and the invoices SSP sends and the meetings SSP books with clients
-    hang off those contacts. Fetching invoices/events once and indexing them
-    by contact id means each client location later does a cheap dict lookup
-    (via its configured ssp_client_contact_id) instead of its own API calls.
+    there, and the meetings SSP books with clients hang off those contacts.
+    Fetching events once and indexing them by contact id means each client
+    location later does a cheap dict lookup (via its configured
+    ssp_client_contact_id) instead of its own API calls.
 
     ``available`` is False when the parent could not be fetched; client
     relationship metrics are then reported as unavailable, not as zeros.
@@ -119,34 +119,24 @@ class ParentContext:
         self.error: str | None = None
         self.location_id: str | None = None
         self.client: GHLClient | None = None
-        self.invoices_by_contact: dict[str, list[dict]] = {}
         self.events_by_contact: dict[str, list[dict]] = {}
 
 
 def build_parent_context(parent_sub: dict, client: GHLClient, now_utc: datetime,
                          max_pages: int | None) -> ParentContext:
-    """Fetch parent-account invoices and calendar events, indexed by contact id.
+    """Fetch parent-account calendar events, indexed by contact id.
 
     Runs once, before any client location is collected (step 3 of the run
-    sequence). ``max_pages`` caps pagination the same way it does elsewhere.
-    Returns a ParentContext whose ``available`` flag reflects whether the
-    invoice fetch actually worked.
+    sequence). Returns a ParentContext whose ``available`` flag reflects
+    whether the calendar-events fetch actually worked.
     """
     ctx = ParentContext()
     ctx.location_id = parent_sub["location_id"]
     ctx.client = client
     cov = Coverage()
 
-    # Group every invoice under the client contact it was billed to, so a
-    # location later asks "invoices for MY client contact id" in O(1).
-    invoices = fetchers.fetch_invoices(client, cov, ctx.location_id, max_pages=max_pages)
-    for inv in invoices:
-        contact = (inv.get("contactDetails") or {}).get("id")
-        if contact:
-            ctx.invoices_by_contact.setdefault(str(contact), []).append(inv)
-
-    # Same idea for calendar events: +/- 60 days around now covers both the
-    # "last touch" lookback and the "next appointment" lookahead metrics.
+    # Calendar events +/- 60 days around now cover both the "last touch"
+    # lookback and the "next appointment" lookahead metrics.
     calendars = fetchers.fetch_calendars(client, cov, ctx.location_id)
     start_ms = int((now_utc - timedelta(days=60)).timestamp() * 1000)
     end_ms = int((now_utc + timedelta(days=60)).timestamp() * 1000)
@@ -157,11 +147,14 @@ def build_parent_context(parent_sub: dict, client: GHLClient, now_utc: datetime,
         if contact:
             ctx.events_by_contact.setdefault(str(contact), []).append(event)
 
-    # Invoices are the load-bearing source here; if they failed, mark the
-    # whole context unavailable rather than serving half a picture.
-    ctx.available = cov.status("invoices") != "unavailable"
+    # Calendar events are the load-bearing source here; if the calendar list
+    # or the events fetch failed, mark the whole context unavailable rather
+    # than serving half a picture.
+    ctx.available = (cov.status("calendars") != "unavailable"
+                     and cov.status("parent_events") != "unavailable")
     if not ctx.available:
-        ctx.error = (cov.sources.get("invoices") or {}).get("error")
+        ctx.error = ((cov.sources.get("parent_events") or {}).get("error")
+                     or (cov.sources.get("calendars") or {}).get("error"))
     return ctx
 
 
@@ -307,7 +300,6 @@ def build_details(*, location_id: str, base: str, umap: dict, pipeline_map: dict
         "waiting_convos": waiting_rows,
         "stale_opps": stale_rows[:DETAILS_CAP],
         "missing_value_opps": missing_value_rows,
-        "past_due_invoices": (rel or {}).get("past_due_detail", [])[:DETAILS_CAP],
         "appts_next_7d": appts,
         "recent_publishes": delivery.get("recent_publishes", [])[:DETAILS_CAP],
         "social_accounts": (social_accounts or [])[:DETAILS_CAP],
@@ -591,7 +583,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
             })
 
     # Relationship metrics (is SSP's own relationship with this client
-    # healthy?) come from the PARENT account: invoices/events were indexed by
+    # healthy?) come from the PARENT account: calendar events were indexed by
     # contact id in build_parent_context, keyed here by this location's
     # ssp_client_contact_id. Conversations with the client are the one piece
     # fetched on demand. Each skip/failure reason lands in coverage.
@@ -604,7 +596,6 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     elif not parent_ctx.available:
         cov.record("relationship", error=f"parent account unavailable: {parent_ctx.error}")
     else:
-        client_invoices = parent_ctx.invoices_by_contact.get(str(client_contact_id), [])
         client_events = parent_ctx.events_by_contact.get(str(client_contact_id), [])
         try:
             client_convos = fetchers.fetch_conversations_for_contact(
@@ -613,20 +604,19 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         except GHLError as exc:
             client_convos = []
             rel_error = str(exc)
-        rel = metrics.relationship_metrics(
-            client_invoices, client_convos, client_events, now_utc,
-            now_utc.astimezone(tz).date())
+        rel = metrics.relationship_metrics(client_convos, client_events, now_utc)
         cov.record("relationship",
-                   retrieved=len(client_invoices) + len(client_convos) + len(client_events),
+                   retrieved=len(client_convos) + len(client_events),
                    exhausted=rel_error is None, error=rel_error)
 
     reviews = metrics.review_proxies(tagged, opps, now_utc)
 
     # The gate: decide whether this snapshot is trustworthy enough to show.
-    # prev_dead is the last few gate-passed snapshots' activity counts — if
-    # activity was nonzero before but everything reads zero today, the far
+    # prev_dead is the last few snapshots' activity counts (held included) —
+    # if activity was nonzero before but everything reads zero today, the far
     # more likely story is a broken fetch than a business going silent, so
     # the snapshot is written but HELD (gate_passed=False) with reasons.
+    # Three consecutive measured-zero days prove dormancy and the gate opens.
     prev_dead = store.read_prev_dead(location_id, run_date)
     gate_passed, gate_reasons = metrics.gate_check(
         g1_ok, cov, len(leads_7d), active_7d, pipe["opps_created_7d"], prev_dead)
@@ -699,8 +689,6 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "days_since_last_publish": delivery["days_since_last_publish"],
         "social_accounts_total": social_stats["social_accounts_total"],
         "social_accounts_expired": social_stats["social_accounts_expired"],
-        "invoices_past_due": rel["invoices_past_due"] if rel else None,
-        "invoices_past_due_amount": rel["invoices_past_due_amount"] if rel else None,
         "client_last_touch_days": rel["client_last_touch_days"] if rel else None,
         "client_next_appt_at": rel["client_next_appt_at"].isoformat()
         if rel and rel["client_next_appt_at"] else None,
@@ -1054,10 +1042,6 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
     else:
         lines.append("### Calendar events\n- skipped: no calendar found\n")
 
-    show("Invoices", "GET", "/invoices/",
-         params={"altId": location_id, "altType": "location", "limit": 2, "offset": 0},
-         pick=first_of("invoices", "data"))
-
     status, data, error = client.try_request("GET", "/blogs/site/all",
                                              params={"locationId": location_id, "limit": 2, "skip": 0})
     lines.append(f"### Blog sites\n`GET /blogs/site/all` → **HTTP {status}**\n")
@@ -1102,7 +1086,6 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
         "- [ ] `tasks` / `calendarEvents` populated on opportunities/search?\n"
         "- [ ] do `date`/`endDate` filter opportunities (compare open vs won calls)?\n"
         "- [ ] message `source` / `userId` values seen (update HUMAN/AUTOMATION sets in metrics.py)?\n"
-        "- [ ] invoice `status` values seen?\n"
         "- [ ] forms/submissions envelope as parsed?\n"
         "- [ ] calendar event created field (`dateAdded` vs `createdAt`) and `appointmentStatus` values?\n"
         "- [ ] blog / social envelope keys as parsed?\n"

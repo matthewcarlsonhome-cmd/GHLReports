@@ -266,21 +266,6 @@ def _clean_opportunity(opp: dict) -> dict:
     }
 
 
-def _clean_invoice(invoice: dict) -> dict:
-    """Invoice projection: number, status, due date, amounts, contact name.
-    Billing addresses and emails in contactDetails are dropped."""
-    contact = invoice.get("contactDetails") or {}
-    return {
-        "_id": _get_id(invoice),
-        "invoiceNumber": invoice.get("invoiceNumber"),
-        "status": invoice.get("status"),
-        "dueDate": invoice.get("dueDate"),
-        "total": invoice.get("total"),
-        "amountDue": invoice.get("amountDue"),
-        "contactDetails": {"id": contact.get("id"), "name": contact.get("name")},
-    }
-
-
 def _clean_event(event: dict) -> dict:
     """Calendar event projection. dateAdded vs createdAt is another naming
     variant — one of them is the booking time (VERIFY, see appointment_metrics)."""
@@ -848,44 +833,6 @@ def fetch_calendar_events(client: GHLClient, cov: Coverage, location_id: str,
     return out
 
 
-# -- invoices ------------------------------------------------------------
-
-
-def fetch_invoices(client: GHLClient, cov: Coverage, location_id: str,
-                   max_pages: int | None = None) -> list[dict]:
-    """All invoices for the location, paged by offset (skip N rows) rather
-    than page number. altId/altType is how this endpoint scopes to a location."""
-    out: list[dict] = []
-    offset = 0
-    exhausted = False
-    error = None
-    note = None
-    page = 0
-    while True:
-        try:
-            data = client.request("GET", "/invoices/", params={
-                "altId": location_id,
-                "altType": "location",
-                "limit": PAGE_LIMIT,
-                "offset": offset,
-            })
-        except GHLError as exc:
-            error = str(exc)
-            break
-        batch = [_clean_invoice(i) for i in _first_list(data, "invoices", "data")]
-        out.extend(batch)
-        page += 1
-        if len(batch) < PAGE_LIMIT:
-            exhausted = True
-            break
-        if max_pages and page >= max_pages:
-            note = f"page cap {max_pages} reached"
-            break
-        offset += PAGE_LIMIT
-    cov.record("invoices", retrieved=len(out), exhausted=exhausted, error=error, note=note)
-    return out
-
-
 # -- blogs / social ------------------------------------------------------
 
 
@@ -904,7 +851,7 @@ def fetch_blog_sites(client: GHLClient, cov: Coverage, location_id: str) -> list
 def fetch_blog_posts(client: GHLClient, cov: Coverage, location_id: str,
                      sites: list[dict], max_pages: int | None = None) -> list[dict]:
     """Published posts across every blog site, projected to title/status/dates.
-    Offset-paged per site, like invoices but with the smaller blog page size."""
+    Offset-paged per site (skip N rows), with the smaller blog page size."""
     out: list[dict] = []
     errors: list[str] = []
     for site in sites:

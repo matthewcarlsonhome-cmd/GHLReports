@@ -11,7 +11,7 @@ consolidated); API field-level verification status lives in
 flowchart LR
     subgraph GHL["GoHighLevel (read-only)"]
         CA["Client subaccounts<br/>leads · convos · pipeline · forms<br/>appointments · content · social"]
-        PA["SSP parent subaccount<br/>invoices · appts · client convos"]
+        PA["SSP parent subaccount<br/>appts · client convos"]
     end
 
     subgraph GHA["GitHub Actions (primary scheduler)"]
@@ -111,8 +111,8 @@ VERIFICATION.md              endpoint-shape verification log (--probe appends he
 1. `pit_key_ok` RPC must pass or the run finishes as failed (exit 1).
 2. Load active subaccounts; `--location <id|slug>` narrows to one (the
    parent context is still built).
-3. **Parent first**: SSP-account invoices (all pages), calendars + events
-   ±60 days, indexed by contact ID; the parent gets its own snapshot too.
+3. **Parent first**: SSP-account calendars + events ±60 days, indexed by
+   contact ID; the parent gets its own snapshot too.
 4. Per client subaccount: G1 identity check (name match normalizes `&`/`and`;
    a mismatch records both names in coverage) → one 42-day contacts fetch
    (covers the 7d window, 28-day baseline, 14–42d conversion cohort, and

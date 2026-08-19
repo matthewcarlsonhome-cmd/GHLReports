@@ -142,10 +142,10 @@ Still in the Supabase dashboard:
    - Name: `ssp-health-readonly`
    - Scopes — **read-only/view only**, check these modules: locations,
      users, contacts, conversations (+ messages), opportunities,
-     **pipelines**, calendars (+ events), invoices, forms, **surveys**,
+     **pipelines**, calendars (+ events), forms, **surveys**,
      **workflows (view)**, blogs (list + posts), social planner (posts +
-     accounts). **Never** any write scope, campaigns, payments, saas, or
-     snapshots. (Surveys and Workflows view power the per-form health
+     accounts). **Never** any write scope, and nothing billing-related —
+     no invoices, payments, campaigns, saas, or snapshots. (Surveys and Workflows view power the per-form health
      checks; Pipelines view guarantees the stage-structure fetch; a token
      missing any of these still works — the affected checks just show
      "scope not yet granted".)
