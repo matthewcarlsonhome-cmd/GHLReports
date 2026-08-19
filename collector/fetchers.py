@@ -815,13 +815,16 @@ def fetch_social_posts(client: GHLClient, cov: Coverage, location_id: str,
     note = None
     page = 0
     while True:
+        # This endpoint validates types unusually strictly (verified against the
+        # live API 2026-08-19): skip/limit must be NUMBER STRINGS and
+        # includeUsers a BOOLEAN STRING, or it rejects with HTTP 422.
         body = {
             "type": "all",
-            "skip": skip,
-            "limit": BLOG_PAGE_LIMIT,
+            "skip": str(skip),
+            "limit": str(BLOG_PAGE_LIMIT),
             "fromDate": from_iso,
             "toDate": to_iso,
-            "includeUsers": False,
+            "includeUsers": "false",
         }
         try:
             data = client.request("POST", f"/social-media-posting/{location_id}/posts/list", json_body=body)

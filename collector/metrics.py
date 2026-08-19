@@ -990,13 +990,22 @@ def flags_changed(today_codes: list[str], prior_codes: list[str]) -> tuple[list[
 # -- gate ----------------------------------------------------------------
 
 
+def _normalize_name(name: str) -> str:
+    """Lowercase, treat '&' and the word 'and' as the same, collapse runs of
+    whitespace — so cosmetic spelling differences don't fail the identity
+    gate ("AAA Pools & Spas" vs a configured "AAA Pools and Spas")."""
+    lowered = name.strip().lower().replace("&", " and ")
+    return " ".join(lowered.split())
+
+
 def location_name_matches(api_name: str | None, configured_name: str) -> bool:
     """G1 identity check: is our configured name a case-insensitive substring
     of the API's location name? Guards against a token that quietly points at
-    the wrong account."""
+    the wrong account. Both sides are normalized first ('&' == 'and',
+    whitespace collapsed) so punctuation variants still match."""
     if not api_name:
         return False
-    return configured_name.strip().lower() in api_name.strip().lower()
+    return _normalize_name(configured_name) in _normalize_name(api_name)
 
 
 def gate_check(g1_ok: bool, coverage, leads_new_7d: int | None,

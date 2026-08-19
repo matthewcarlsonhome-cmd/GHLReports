@@ -342,3 +342,8 @@ def test_location_name_matches():
     assert metrics.location_name_matches("pilot one pools", "Pilot One Pools")
     assert not metrics.location_name_matches("Different Company", "Pilot One Pools")
     assert not metrics.location_name_matches(None, "Pilot One Pools")
+    # '&' and 'and' are the same word after normalization, either direction,
+    # and extra whitespace around the ampersand doesn't matter.
+    assert metrics.location_name_matches("AAA Pools & Spas", "AAA Pools and Spas")
+    assert metrics.location_name_matches("AAA Pools and Spas", "AAA Pools & Spas")
+    assert metrics.location_name_matches("AAA Pools&Spas LLC", "AAA Pools and Spas")

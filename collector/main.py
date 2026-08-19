@@ -364,6 +364,12 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         and str(loc.get("id") or loc.get("_id") or "") == str(location_id)
         and metrics.location_name_matches(loc.get("name"), sub.get("name") or "")
     )
+    if loc and not g1_ok:
+        # A bare "identity check failed" is undiagnosable — record what the
+        # API actually calls this location so /runs shows the mismatch.
+        cov.record("location", retrieved=1,
+                   note=f"identity mismatch: configured name {sub.get('name')!r}, "
+                        f"API reports {loc.get('name')!r} (id {loc.get('id') or loc.get('_id')!r})")
     tz = metrics.get_tz((loc or {}).get("timezone") or sub.get("timezone"))
 
     # Two time windows, both in the LOCATION's timezone: the 7-day reporting
