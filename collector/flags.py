@@ -66,6 +66,7 @@ DEFAULT_THRESHOLDS = {
     "hygiene_stale_frac": 0.6,        # ...and the share of open deals that makes it a cleanup problem
     "frozen_min_open": 10,            # open deals needed before "nothing moved" means anything
     "frozen_moved_pct": 5.0,          # under this % of deals moved in 30d -> pipeline is stalling
+    "bottleneck_min_usd": 10000.0,    # idle dollars in one stage before the bottleneck is worth naming
     # appointments
     "noshow_rate_pct": 30.0,
     # delivery
@@ -353,6 +354,20 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 f"Only {moved} of {opps_open} open deals ({moved_pct:.0f}%) moved in 30 days. "
                 "Walk the client through their pipeline on the next call.",
             ))
+
+    # PIPELINE_BOTTLENECK — info only: the single stage holding the most
+    # idle dollars, when it's real money. Context for the next client call
+    # ("start the pipeline review at Quote"), not an alarm — the stale and
+    # hygiene flags above carry any urgency.
+    bottleneck_stage = metrics.get("bottleneck_stage")
+    bottleneck_value = metrics.get("bottleneck_value_usd")
+    if (bottleneck_stage and bottleneck_value is not None
+            and bottleneck_value >= th["bottleneck_min_usd"]):
+        flags.append(_flag(
+            "PIPELINE_BOTTLENECK", "info", "Pipeline bottleneck",
+            f"{_fmt_money(bottleneck_value)} sits idle in '{bottleneck_stage}' — "
+            "start the pipeline review there.",
+        ))
 
     # HIGH_NOSHOW — appointment no-show rate over 28d (None below 5 outcomes,
     # so it can't fire on tiny samples).

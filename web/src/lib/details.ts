@@ -150,8 +150,17 @@ export type Details = {
   // capped example lists above). All absent on older snapshots.
   pipeline_stages?: {
     pipeline: string; stage: string; count: number; stale_count: number; value: number;
+    stale_value: number;                  // idle dollars in the stage (bottleneck signal)
+    median_days_in_stage: number | null;  // velocity signal; null = no dated deals
+    orphan: boolean;                       // stage no longer exists in the pipeline
   }[];
   deal_aging?: { bucket: string; count: number; value: number }[];
   closed_weekly?: { week_start: string; won: number; lost: number }[];
+  // Structural hygiene of the pipeline setup itself.
+  pipeline_setup?: { pipelines_total: number; empty_pipelines: string[]; orphan_deals: number };
+  // Won/lost (90d) split per pipeline; win_rate_pct null under 5 closed deals.
+  win_rate_by_pipeline?: { pipeline: string; won_90d: number; lost_90d: number; win_rate_pct: number | null }[];
+  // The stage holding the most idle dollars (null when nothing is idle).
+  pipeline_bottleneck?: { stage: string; stale_value: number; stale_count: number } | null;
   ghl_dashboard_url: string; // deep link to the native GHL dashboard for ads
 };

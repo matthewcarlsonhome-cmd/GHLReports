@@ -1,24 +1,29 @@
 # GHL Account Health Dashboard
 
 A read-only account health dashboard for Small Screen Producer's GoHighLevel
-subaccounts. A Python collector runs daily, pulls CRM data from the GHL API
-v2 into Supabase Postgres, computes health metrics and flags, and a React
-SPA at **health.smallscreenproducer.com** shows account managers which
-accounts need a call and why — standalone or embedded inside GHL. Account
-managers can acknowledge flags (with a note and a snooze) and keep
-append-only account notes; those are the only writes in the whole system.
+subaccounts. A Python collector runs nightly, pulls CRM data from the GHL
+API v2 into Supabase Postgres, computes health metrics, per-form/survey
+health, pipeline intelligence, and flags; a separate daily tag checker
+verifies each client website's tracking pixels actually fire. A React SPA
+(on Netlify; custom domain + in-GHL embed as a later phase) gives account
+managers a triage header, a plain-English team report, and per-account
+drilldowns with charts — which accounts need a call and why. AMs can
+acknowledge flags (with a note and a snooze) and keep append-only account
+notes; those are the only writes in the whole system.
 
 > **Going live? Start here → [`docs/GO-LIVE.md`](docs/GO-LIVE.md)** — the
 > complete browser-only setup (Supabase ✓ already provisioned, Netlify,
-> Render, DNS, GHL). **No terminal or local install is needed to deploy or
-> operate this system**: the app deploys from GitHub via Netlify, the Python
-> collector deploys from GitHub via Render (`render.yaml`), and one-off
-> operations (probe / backfill / digest) are triggered from the Render
-> dashboard with the `COLLECTOR_ARGS` environment variable.
+> GitHub Actions, GHL). **No terminal or local install is needed to deploy
+> or operate this system**: the app deploys from GitHub via Netlify, the
+> Python collector and tag checker run as GitHub Actions workflows, and
+> one-off operations (probe / backfill) are triggered from the Actions tab
+> (the args box feeds `COLLECTOR_ARGS`). Render (`render.yaml`) remains a
+> documented alternative scheduler.
 
 - **Go-live setup guide (browser-only):** [`docs/GO-LIVE.md`](docs/GO-LIVE.md)
-- **Design spec (authoritative):** [`docs/DESIGN.md`](docs/DESIGN.md) (build spec v3.0, consolidated)
-- **As-built architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- **Design spec (historical requirements):** [`docs/DESIGN.md`](docs/DESIGN.md) (build spec v3.0)
+- **As-built architecture (current):** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- **Forms/tags integration review + design:** [`docs/FORMS-INTEGRATION.md`](docs/FORMS-INTEGRATION.md)
 - **API verification log:** [`VERIFICATION.md`](VERIFICATION.md) — the probe appends here
 
 Hard guarantees: the collector never writes to GHL; no LLM touches any
@@ -31,13 +36,15 @@ live only in Supabase Vault.
 
 | Path | What it is |
 |---|---|
-| `supabase/migrations/0001_init.sql` | Complete schema: tables, views, RLS + FORCE, auth triggers, Vault RPCs, least-privilege grants — runnable as-is |
+| `supabase/migrations/` | Complete schema (0001) + additive migrations 0002–0006 (missed calls, form_health, tag_checks, pipeline movement, bottleneck) — all applied to the live project |
 | `supabase/seed.sql` | Parent + pilot subaccount rows (edit the placeholders first) |
-| `collector/` | Python 3.11 collector, tools, and 56-test suite (incl. the PII boundary test) |
+| `collector/` | Python 3.11 collector, tools, and test suite (incl. the PII boundary test) |
+| `tagchecker/` | Playwright tag/pixel checker (no GHL tokens; own requirements.txt) |
+| `.github/workflows/` | The schedulers: nightly collector + daily tag checker (manual dispatch too) |
 | `web/` | Vite + React + TypeScript + Tailwind + Recharts SPA |
-| `render.yaml` | Render cron blueprint for the collector |
+| `render.yaml` | OPTIONAL alternative scheduler (GitHub Actions is primary) |
 | `netlify.toml` | Netlify build config + iframe CSP for the SPA |
-| `docs/` | Design spec and architecture docs |
+| `docs/` | Go-live guide, design spec, as-built architecture, forms/tags integration |
 
 ---
 
@@ -196,9 +203,10 @@ Do them in order.
    — inside that subaccount: Settings → Private Integrations → Create new
    Integration, name `ssp-health-readonly`, **read-only scopes only**:
    `locations`, `users`, `contacts`, `conversations` (+ messages),
-   `opportunities`, `calendars` (+ events), `invoices`, `forms`,
-   `blogs` (list + posts), `social planner` (posts + accounts). Never any
-   write scope, workflows, campaigns, payments write, saas, or snapshots.
+   `opportunities`, `pipelines`, `calendars` (+ events), `invoices`,
+   `forms`, `surveys`, `workflows` (view), `blogs` (list + posts),
+   `social planner` (posts + accounts). Never any write scope, campaigns,
+   payments write, saas, or snapshots.
    For each: Vault → Add new secret: Name **exactly**
    `ghl_pit_<location_id>` (the GHL location ID, not the slug), Secret =
    the PIT, Description = the client name. Close the GHL tab — the token
@@ -281,12 +289,13 @@ Agency view → Settings → Custom Menu Links → Create New:
 
 ## 3. Day-to-day usage
 
-**Operations happen in the browser.** The collector runs itself nightly on
-Render; one-off modes are triggered from the Render dashboard: set the
-`COLLECTOR_ARGS` environment variable (e.g. `--probe`, `--backfill 12`,
-`--digest`, `--digest --dry-run`, `--location <slug>`), click **Trigger
-Run**, read the logs, then clear the variable to return to normal nightly
-runs. Token health lives on the app's `/runs` page; tokens are added and
+**Operations happen in the browser.** The collector runs itself nightly via
+GitHub Actions; one-off modes run from the repo's **Actions tab → Nightly
+collector → Run workflow**, typing the args in the box (e.g. `--probe`,
+`--backfill 12`, `--location <slug>`) and reading the run's log. The tag
+checker runs daily the same way. (On the optional Render alternative, the
+same modes go through the `COLLECTOR_ARGS` environment variable + Trigger
+Run.) Token health lives on the app's `/runs` page; tokens are added and
 rotated in the Supabase Vault UI.
 
 For developers with the optional local setup:

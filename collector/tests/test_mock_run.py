@@ -89,6 +89,19 @@ def test_happy_path_metrics_gate_and_flags():
     assert len(closed_weeks) == 12
     by_week = {w["week_start"]: (w["won"], w["lost"]) for w in closed_weeks}
     assert by_week["2026-08-10"] == (1, 1)   # o3 won Aug 15, o4 lost Aug 16
+
+    # pipeline intelligence (pipelines.readonly features)
+    assert snap["bottleneck_stage"] == "Quote"          # single pipeline: no prefix
+    assert snap["bottleneck_value_usd"] == 30000.0      # o1's idle value
+    quote = next(s for s in stages if s["stage"] == "Quote")
+    assert quote["stale_value"] == 30000.0
+    assert quote["median_days_in_stage"] == 48.1        # o1 in Quote since Jul 1
+    assert quote["orphan"] is False
+    assert snap["details"]["pipeline_setup"] == {
+        "pipelines_total": 1, "empty_pipelines": [], "orphan_deals": 0}
+    assert snap["details"]["win_rate_by_pipeline"] == [
+        {"pipeline": "Sales", "won_90d": 1, "lost_90d": 1, "win_rate_pct": None}]
+    assert snap["details"]["pipeline_bottleneck"]["stale_count"] == 1
     assert snap["win_rate_90d"] is None              # won+lost = 2 < 5
     assert snap["median_days_to_close_90d"] == 14.0  # o3: Aug 1 -> Aug 15
     assert snap["lead_to_opp_28d_pct"] == 0.0        # 27-contact cohort, no matching opps
@@ -153,6 +166,7 @@ def test_happy_path_metrics_gate_and_flags():
         "PAST_DUE": "red",              # $3,000 >= $2,500
         "FORM_WENT_SILENT": "amber",    # formA2 (Hot Tub Brochure)
         "SURVEY_WENT_SILENT": "amber",  # survA1 (Post-Install Survey)
+        "PIPELINE_BOTTLENECK": "info",  # $30k idle in Quote
     }
     form_flag = next(f for f in store.flags[("locA", "2026-08-18")] if f["code"] == "FORM_WENT_SILENT")
     assert "Hot Tub Brochure" in form_flag["detail"]
@@ -184,7 +198,8 @@ def test_flags_new_and_resolved_against_seeded_prior_week():
     assert run_with(store, make_factory()) == 0
     snap = store.snapshots[("locA", "2026-08-18")]
     assert snap["flags_new"] == ["FORM_WENT_SILENT", "LEADS_DROP", "PAST_DUE",
-                                 "SOURCE_DROP", "STALE_PIPELINE", "SURVEY_WENT_SILENT"]
+                                 "PIPELINE_BOTTLENECK", "SOURCE_DROP", "STALE_PIPELINE",
+                                 "SURVEY_WENT_SILENT"]
     assert snap["flags_resolved"] == ["NO_DELIVERY"]
 
 

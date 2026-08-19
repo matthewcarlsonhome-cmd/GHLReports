@@ -640,9 +640,15 @@ def deal_aging_buckets(per_opp: list[dict]) -> list[dict]:
 
 
 def stage_distribution(per_opp: list[dict], pipeline_map: dict) -> list[dict]:
-    """Open deals per pipeline stage, fresh vs idle: [{pipeline, stage,
-    count, stale_count, value}] in each pipeline's own stage order (unknown
-    stages last) — the 'everything is bunched in Quote and dead' picture."""
+    """Open deals per pipeline stage: [{pipeline, stage, count, stale_count,
+    value, stale_value, median_days_in_stage, orphan}] in each pipeline's own
+    stage order (unknown stages last).
+
+    Beyond the count picture ('everything is bunched in Quote'), each row
+    carries the idle DOLLARS in the stage (the bottleneck signal), the median
+    days deals have sat in it (the velocity signal), and whether the stage no
+    longer exists in the pipeline (orphan — deals stranded in a deleted
+    stage, a setup-hygiene problem)."""
     # Stage order index from the pipeline map (dicts preserve insertion order).
     order: dict[tuple[str, str], int] = {}
     for pid, entry in pipeline_map.items():
@@ -650,23 +656,83 @@ def stage_distribution(per_opp: list[dict], pipeline_map: dict) -> list[dict]:
             order[(str(pid), str(sid))] = position
 
     agg: dict[tuple[str, str], dict] = {}
+    stage_days: dict[tuple[str, str], list[float]] = {}
     for item in per_opp:
         opp = item["opp"]
         pid = str(opp.get("pipelineId") or "?")
         sid = str(opp.get("pipelineStageId") or "?")
         entry = pipeline_map.get(pid) or {}
+        known_stages = entry.get("stages") or {}
         row = agg.setdefault((pid, sid), {
             "pipeline": entry.get("name") or pid,
-            "stage": (entry.get("stages") or {}).get(sid, sid),
-            "count": 0, "stale_count": 0, "value": 0.0,
+            "stage": known_stages.get(sid, sid),
+            "count": 0, "stale_count": 0, "value": 0.0, "stale_value": 0.0,
+            "median_days_in_stage": None,
+            "orphan": sid not in known_stages,
         })
         row["count"] += 1
         if item.get("is_stale"):
             row["stale_count"] += 1
+            row["stale_value"] += item.get("value") or 0.0
         row["value"] += item.get("value") or 0.0
-    for row in agg.values():
+        if item.get("stage_days") is not None:
+            stage_days.setdefault((pid, sid), []).append(item["stage_days"])
+    for key, row in agg.items():
         row["value"] = round(row["value"], 2)
+        row["stale_value"] = round(row["stale_value"], 2)
+        days = stage_days.get(key)
+        row["median_days_in_stage"] = round(median(days), 1) if days else None
     return [agg[key] for key in sorted(agg, key=lambda k: (k[0], order.get(k, 999)))]
+
+
+def pipeline_setup(per_opp: list[dict], pipeline_map: dict) -> dict:
+    """Structural hygiene of the pipeline SETUP (not the deals): pipelines
+    with zero open deals, and deals stranded in stages that no longer exist.
+    Both are 'fix the configuration' conversations, not follow-up work."""
+    used_pipelines: set[str] = set()
+    orphan_deals = 0
+    for item in per_opp:
+        opp = item["opp"]
+        pid = str(opp.get("pipelineId") or "?")
+        sid = str(opp.get("pipelineStageId") or "?")
+        used_pipelines.add(pid)
+        entry = pipeline_map.get(pid)
+        if entry is None or sid not in (entry.get("stages") or {}):
+            orphan_deals += 1
+    empty = [entry.get("name") or pid
+             for pid, entry in pipeline_map.items() if pid not in used_pipelines]
+    return {"pipelines_total": len(pipeline_map),
+            "empty_pipelines": sorted(empty),
+            "orphan_deals": orphan_deals}
+
+
+def win_rate_by_pipeline(opps: list[dict], pipeline_map: dict,
+                         now_utc: datetime) -> list[dict]:
+    """Won/lost over 90 days split per pipeline, so a strong pipeline can't
+    mask a weak one. win_rate_pct is None under 5 closed deals (same
+    small-sample rule as the overall win rate)."""
+    cutoff = now_utc - timedelta(days=90)
+    agg: dict[str, dict] = {}
+    for opp in opps:
+        status = str(opp.get("status") or "").lower()
+        if status not in ("won", "lost"):
+            continue
+        closed_at = parse_ts(opp.get("lastStatusChangeAt"))
+        if closed_at is None or closed_at < cutoff:
+            continue
+        pid = str(opp.get("pipelineId") or "?")
+        row = agg.setdefault(pid, {
+            "pipeline": (pipeline_map.get(pid) or {}).get("name") or pid,
+            "won_90d": 0, "lost_90d": 0,
+        })
+        row["won_90d" if status == "won" else "lost_90d"] += 1
+    out = []
+    for pid in sorted(agg):
+        row = agg[pid]
+        closed = row["won_90d"] + row["lost_90d"]
+        row["win_rate_pct"] = round(row["won_90d"] / closed * 100.0, 1) if closed >= 5 else None
+        out.append(row)
+    return out
 
 
 def weekly_closed(opps: list[dict], tz, now_utc: datetime, weeks: int = 12) -> list[dict]:

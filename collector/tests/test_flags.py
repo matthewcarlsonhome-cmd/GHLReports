@@ -47,6 +47,17 @@ def test_steady_account_has_no_flags():
     assert compute() == []
 
 
+def test_pipeline_bottleneck_info_flag():
+    # Real money parked in one stage -> info flag naming the stage
+    result = codes(compute({"bottleneck_stage": "Quote", "bottleneck_value_usd": 30000.0}))
+    assert result.get("PIPELINE_BOTTLENECK") == "info"
+    # Small change stays quiet; unknown never fires
+    assert "PIPELINE_BOTTLENECK" not in codes(compute({"bottleneck_stage": "Quote",
+                                                       "bottleneck_value_usd": 500.0}))
+    assert "PIPELINE_BOTTLENECK" not in codes(compute({"bottleneck_stage": None,
+                                                       "bottleneck_value_usd": None}))
+
+
 def test_pipeline_frozen():
     # 12 open deals, nothing moved in 30 days -> red, call the client
     result = codes(compute({"opps_open": 12, "opps_moved_30d": 0}))

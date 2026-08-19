@@ -852,11 +852,21 @@ export default function Account() {
         </Section>
       ) : null}
 
-      {/* Open deals by stage: where the pipeline is bunched, and how much of
-          each stage is idle. Height scales with the stage count. */}
+      {/* Open deals by stage: where the pipeline is bunched, how much of
+          each stage is idle (chart), plus the velocity/value table and the
+          bottleneck callout — the "start the pipeline review here" section. */}
       {snapshot && !noData && stageChart.length > 0 ? (
         <Section title="Open deals by pipeline stage">
           <div className="rounded border border-grid bg-surface p-3">
+            {details?.pipeline_bottleneck ? (
+              <p className="mb-2 text-xs">
+                <span className="rounded bg-status-warning/20 px-1.5 py-0.5 font-medium text-ink">
+                  Bottleneck: {fmtMoney(details.pipeline_bottleneck.stale_value)} idle in
+                  {" "}"{details.pipeline_bottleneck.stage}"
+                  {" "}({details.pipeline_bottleneck.stale_count} deal{details.pipeline_bottleneck.stale_count === 1 ? "" : "s"})
+                </span>
+              </p>
+            ) : null}
             <ResponsiveContainer width="100%" height={Math.max(130, stageChart.length * 34 + 50)}>
               <BarChart layout="vertical" data={stageChart}
                         margin={{ top: 4, right: 24, bottom: 0, left: 8 }}>
@@ -873,6 +883,82 @@ export default function Account() {
                      stroke={SURFACE} strokeWidth={2} maxBarSize={18} />
               </BarChart>
             </ResponsiveContainer>
+            {/* stage velocity & value: the numbers behind the bars */}
+            {details?.pipeline_stages?.length ? (
+              <div className="mt-2">
+                <DetailTable rows={details.pipeline_stages}
+                  empty="No open deals."
+                  columns={[
+                    { header: "Stage", cell: (s) => (
+                        <>{s.stage}{s.orphan
+                          ? <span className="ml-1 rounded bg-status-critical/10 px-1 text-xxs text-status-critical">deleted stage</span>
+                          : null}</>) },
+                    { header: "Pipeline", cell: (s) => s.pipeline },
+                    { header: "Open", cell: (s) => fmtNum(s.count), numeric: true },
+                    { header: "Idle 14d+", cell: (s) => fmtNum(s.stale_count), numeric: true },
+                    { header: "Value", cell: (s) => fmtMoney(s.value), numeric: true },
+                    { header: "Idle $", cell: (s) => fmtMoney(s.stale_value), numeric: true },
+                    {
+                      header: "Median days in stage",
+                      cell: (s) => s.median_days_in_stage === null ? "—" : s.median_days_in_stage.toFixed(0),
+                      numeric: true,
+                    },
+                  ]} />
+                <p className="mt-1 text-xxs text-muted">
+                  "Median days in stage" is how long the CURRENT deals have sat there —
+                  where the client's process stalls, in one column.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </Section>
+      ) : null}
+
+      {/* Pipeline setup hygiene: configuration problems, not deal problems.
+          Rendered only when something is actually wrong. */}
+      {snapshot && !noData && details?.pipeline_setup
+        && (details.pipeline_setup.orphan_deals > 0 || details.pipeline_setup.empty_pipelines.length > 0) ? (
+        <Section title="Pipeline setup needs attention">
+          <div className="rounded border border-grid bg-surface p-3 text-xs text-ink-2">
+            {details.pipeline_setup.orphan_deals > 0 ? (
+              <p className="mb-1">
+                <span className="font-medium text-status-critical">
+                  {details.pipeline_setup.orphan_deals} deal{details.pipeline_setup.orphan_deals === 1 ? "" : "s"} stranded in deleted stages
+                </span>{" "}
+                — these can never progress; move or close them with the client.
+              </p>
+            ) : null}
+            {details.pipeline_setup.empty_pipelines.length > 0 ? (
+              <p>
+                <span className="font-medium">Empty pipeline{details.pipeline_setup.empty_pipelines.length === 1 ? "" : "s"}:</span>{" "}
+                {details.pipeline_setup.empty_pipelines.join(", ")} — unused structure;
+                consider archiving so reports stay clean.
+              </p>
+            ) : null}
+          </div>
+        </Section>
+      ) : null}
+
+      {/* Win rate per pipeline — only worth showing when the account runs
+          more than one pipeline with closed deals, so a strong pipeline
+          can't mask a weak one. */}
+      {snapshot && !noData && (details?.win_rate_by_pipeline?.length ?? 0) >= 2 ? (
+        <Section title="Win rate by pipeline (90d)">
+          <div className="rounded border border-grid bg-surface p-3">
+            <DetailTable rows={details!.win_rate_by_pipeline!}
+              empty="No closed deals in 90 days."
+              columns={[
+                { header: "Pipeline", cell: (r) => r.pipeline },
+                { header: "Won 90d", cell: (r) => fmtNum(r.won_90d), numeric: true },
+                { header: "Lost 90d", cell: (r) => fmtNum(r.lost_90d), numeric: true },
+                {
+                  header: "Win rate",
+                  cell: (r) => r.win_rate_pct === null
+                    ? <span className="text-muted" title="Under 5 closed deals — too few to rate">n/a</span>
+                    : `${r.win_rate_pct.toFixed(0)}%`,
+                  numeric: true,
+                },
+              ]} />
           </div>
         </Section>
       ) : null}

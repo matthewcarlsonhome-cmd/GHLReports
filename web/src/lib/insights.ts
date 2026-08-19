@@ -51,6 +51,8 @@ export function buildAccountInsight(row: PortfolioRow): AccountInsight {
     `${row.forms_silent_ct} form${row.forms_silent_ct === 1 ? "" : "s"} went silent`);
   push(row.opps_moved_30d === 0 && (row.opps_open ?? 0) >= 10,
     `pipeline frozen — none of ${row.opps_open} open deals moved in 30 days`);
+  push(row.bottleneck_stage !== null && (row.bottleneck_value_usd ?? 0) >= 10000,
+    `${fmtMoney(row.bottleneck_value_usd)} idle in "${row.bottleneck_stage}"`);
   push((row.opps_stale ?? 0) > 0,
     `${row.opps_stale} stale deal${row.opps_stale === 1 ? "" : "s"}`
     + (row.opps_stale_value ? ` (${fmtMoney(row.opps_stale_value)})` : ""));

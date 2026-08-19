@@ -360,13 +360,70 @@ def test_deal_aging_buckets():
 def test_stage_distribution_orders_by_pipeline_stage():
     pmap = {"p1": {"name": "Sales", "stages": {"s1": "New", "s2": "Quote"}}}
     per_opp = [
-        {"opp": {"pipelineId": "p1", "pipelineStageId": "s2"}, "is_stale": True, "value": 100.0},
-        {"opp": {"pipelineId": "p1", "pipelineStageId": "s1"}, "is_stale": False, "value": 50.0},
-        {"opp": {"pipelineId": "p1", "pipelineStageId": "s2"}, "is_stale": False, "value": None},
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s2"}, "is_stale": True,
+         "value": 100.0, "stage_days": 40.0},
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s1"}, "is_stale": False,
+         "value": 50.0, "stage_days": 2.0},
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s2"}, "is_stale": False,
+         "value": None, "stage_days": 10.0},
     ]
     rows = metrics.stage_distribution(per_opp, pmap)
     assert [(r["stage"], r["count"], r["stale_count"], r["value"]) for r in rows] == [
         ("New", 1, 0, 50.0), ("Quote", 2, 1, 100.0)]
+    quote = rows[1]
+    assert quote["stale_value"] == 100.0          # idle dollars, not just idle counts
+    assert quote["median_days_in_stage"] == 25.0  # median of 40 and 10
+    assert quote["orphan"] is False
+    assert rows[0]["median_days_in_stage"] == 2.0
+
+
+def test_stage_distribution_marks_orphaned_stages():
+    # A deal pointing at a stage that no longer exists in the pipeline map is
+    # stranded — it can never progress. The row keeps the raw id as its name
+    # and carries orphan=True for the setup-hygiene card.
+    pmap = {"p1": {"name": "Sales", "stages": {"s1": "New"}}}
+    per_opp = [{"opp": {"pipelineId": "p1", "pipelineStageId": "sGone"},
+                "is_stale": False, "value": 10.0, "stage_days": None}]
+    rows = metrics.stage_distribution(per_opp, pmap)
+    assert rows[0]["orphan"] is True
+    assert rows[0]["stage"] == "sGone"
+
+
+def test_pipeline_setup_hygiene():
+    pmap = {
+        "p1": {"name": "Sales", "stages": {"s1": "New"}},
+        "p2": {"name": "Old Service Pipeline", "stages": {"x1": "Start"}},
+    }
+    per_opp = [
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "s1"}, "is_stale": False, "value": 0},
+        {"opp": {"pipelineId": "p1", "pipelineStageId": "sGone"}, "is_stale": False, "value": 0},
+    ]
+    setup = metrics.pipeline_setup(per_opp, pmap)
+    assert setup == {"pipelines_total": 2,
+                     "empty_pipelines": ["Old Service Pipeline"],
+                     "orphan_deals": 1}
+
+
+def test_win_rate_by_pipeline():
+    from datetime import datetime, timezone
+    now = datetime(2026, 8, 18, 15, 0, tzinfo=timezone.utc)
+    pmap = {"p1": {"name": "Construction", "stages": {}},
+            "p2": {"name": "Service", "stages": {}}}
+    opps = (
+        # Construction: 4 won + 2 lost in 90d -> 66.7%
+        [{"status": "won", "pipelineId": "p1", "lastStatusChangeAt": "2026-08-01T12:00:00Z"}] * 4
+        + [{"status": "lost", "pipelineId": "p1", "lastStatusChangeAt": "2026-08-02T12:00:00Z"}] * 2
+        # Service: only 2 closed -> too few, rate withheld
+        + [{"status": "won", "pipelineId": "p2", "lastStatusChangeAt": "2026-08-03T12:00:00Z"}]
+        + [{"status": "lost", "pipelineId": "p2", "lastStatusChangeAt": "2026-08-04T12:00:00Z"}]
+        # out of the 90d window: ignored
+        + [{"status": "won", "pipelineId": "p1", "lastStatusChangeAt": "2020-01-01T12:00:00Z"}]
+    )
+    rows = metrics.win_rate_by_pipeline(opps, pmap, now)
+    by_name = {r["pipeline"]: r for r in rows}
+    assert by_name["Construction"]["won_90d"] == 4
+    assert by_name["Construction"]["win_rate_pct"] == 66.7
+    assert by_name["Service"]["win_rate_pct"] is None  # < 5 closed deals
 
 
 def test_weekly_closed():

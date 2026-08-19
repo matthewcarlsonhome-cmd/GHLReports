@@ -721,6 +721,30 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     details["pipeline_stages"] = metrics.stage_distribution(pipe["per_opp"], pipeline_map)
     details["deal_aging"] = metrics.deal_aging_buckets(pipe["per_opp"])
     details["closed_weekly"] = metrics.weekly_closed(opps, tz, now_utc)
+    details["pipeline_setup"] = metrics.pipeline_setup(pipe["per_opp"], pipeline_map)
+    details["win_rate_by_pipeline"] = metrics.win_rate_by_pipeline(opps, pipeline_map, now_utc)
+
+    # Bottleneck: the single stage holding the most idle dollars. Stored as
+    # snapshot columns too so the portfolio can show it without opening the
+    # details blob. The stage label carries its pipeline name only when the
+    # account runs more than one pipeline.
+    multi_pipeline = len({r["pipeline"] for r in details["pipeline_stages"]}) > 1
+    bottleneck = max((r for r in details["pipeline_stages"] if r["stale_value"] > 0),
+                     key=lambda r: r["stale_value"], default=None)
+    if bottleneck is None:
+        details["pipeline_bottleneck"] = None
+        metric_values["bottleneck_stage"] = None
+        metric_values["bottleneck_value_usd"] = None
+    else:
+        label = (f"{bottleneck['pipeline']} · {bottleneck['stage']}"
+                 if multi_pipeline else bottleneck["stage"])
+        details["pipeline_bottleneck"] = {
+            "stage": label,
+            "stale_value": bottleneck["stale_value"],
+            "stale_count": bottleneck["stale_count"],
+        }
+        metric_values["bottleneck_stage"] = label
+        metric_values["bottleneck_value_usd"] = bottleneck["stale_value"]
 
     details["missed_calls"] = [{
         "conversation_id": m.get("conversation_id"),

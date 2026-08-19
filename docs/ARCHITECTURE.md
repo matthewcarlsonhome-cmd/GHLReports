@@ -14,28 +14,34 @@ flowchart LR
         PA["SSP parent subaccount<br/>invoices · appts · client convos"]
     end
 
-    subgraph Render["Render cron (daily 05:30 CT)"]
-        COL["Python collector<br/>fetch → strip PII → metrics → gate → flags"]
+    subgraph GHA["GitHub Actions (primary scheduler)"]
+        COL["Python collector — nightly 05:30 CT<br/>fetch → strip PII → metrics → gate → flags"]
+        TAG["Tag checker — daily 08:00 CT<br/>headless Chromium loads client sites,<br/>verifies GA4/GTM/Meta/Ads/TikTok fire"]
     end
 
     subgraph Supabase
         VAULT["Vault<br/>PITs, loaded by hand (UI)"]
-        DB[("Postgres<br/>subaccounts · snapshots · flags<br/>lead_events · lead_history<br/>flag_acks · account_notes · collector_runs")]
+        DB[("Postgres<br/>subaccounts · snapshots · flags<br/>lead_events · lead_history · form_health<br/>flag_acks · account_notes<br/>collector_runs · tag_checks")]
         AUTH["Auth<br/>email OTP, pre-provisioned staff,<br/>sign-ups off, domain trigger"]
     end
 
-    subgraph Netlify["Netlify — health.smallscreenproducer.com"]
-        SPA["Vite React SPA<br/>portfolio · drilldown · runs<br/>acks + notes (insert-only)"]
+    subgraph Netlify["Netlify (*.netlify.app now; health.smallscreenproducer.com later)"]
+        SPA["Vite React SPA<br/>team report · portfolio · drilldown · runs<br/>acks + notes (insert-only)"]
     end
 
+    WEB["Client websites (public)"] -- "page load, network watch" --> TAG
     GHL -- "Bearer PIT, Version 2021-07-28" --> COL
     VAULT -- "get_pit(location, COLLECTOR_KEY)" --> COL
     COL -- "service role (writes)" --> DB
+    TAG -- "service role (tag_checks only, no PITs)" --> DB
     DB -- "anon key + RLS (reads)" --> SPA
     SPA -- "flag_acks / account_notes inserts (RLS)" --> DB
     AUTH --> SPA
-    SPA -. "iframe via GHL Custom Menu Link<br/>crm.smallscreenproducer.com (same-site)" .-> GHL
+    SPA -. "iframe via GHL Custom Menu Link<br/>(Later phase; needs the custom domain)" .-> GHL
 ```
+
+(Render remains available as an optional alternative scheduler via
+`render.yaml`; run exactly one of the two.)
 
 Trust boundaries:
 
@@ -60,25 +66,40 @@ Trust boundaries:
 
 ```
 supabase/
-  migrations/0001_init.sql   complete schema: 8 tables, 2 views, RLS + FORCE,
+  migrations/0001_init.sql   base schema: 8 tables, 2 views, RLS + FORCE,
                              auth triggers, Vault RPCs, least-privilege grants
+  migrations/0002..0006      missed calls · form_health + forms_silent_ct ·
+                             tag_checks + tag_config · opps_moved_30d ·
+                             bottleneck columns (all applied to the live project)
   seed.sql                   parent + pilot rows (edit before running)
 collector/                   Python 3.11, no framework
   main.py                    CLI + orchestration (probe / dry-run / collect / backfill)
   ghl_client.py              HTTP client: 8 rps bucket, retries, sanitized errors
   fetchers.py                per-endpoint fetchers + Coverage + PII whitelists
   metrics.py                 pure metric functions (injected clock, no I/O)
-  flags.py                   17-code flag catalog + per-account threshold overrides
+  flags.py                   23-code flag catalog + per-account threshold overrides
   store.py                   supabase-py persistence + Vault RPC wrappers
+  digest.py                  Monday digest builder (parked — off by default)
   tools/pit.py               optional CLI (Vault UI is the primary token path)
   tools/find_client_contact.py
-  tests/                     56 tests incl. full mock run + PII boundary test
+  tests/                     full mock run + PII boundary + per-feature tests
+tagchecker/                  Playwright tag/pixel checker (own requirements.txt);
+                             reads subaccounts.tag_config, writes tag_checks,
+                             touches no GHL tokens; pure logic unit-tested
+.github/workflows/
+  collector.yml              nightly collection (manual dispatch: args box
+                             feeds COLLECTOR_ARGS — --probe, --backfill 12, ...)
+  tagchecker.yml             daily tag check (installs Chromium on the runner)
 web/                         Vite + React + TypeScript + Tailwind + Recharts
   src/pages/                 Login (email OTP), Portfolio, Account, Runs
-  src/lib/                   supabase client, DB types, Details contract, writes
-  src/components/            table/badge/tile primitives, SVG sparkline
-docs/                        DESIGN.md (spec v3, authoritative) + this file
-render.yaml                  Render cron blueprint (collector)
+  src/lib/                   supabase client, DB types, Details contract,
+                             insights (team report), grade (triage bands), writes
+  src/components/            table/badge/tile primitives, SVG sparkline, heatmap
+docs/                        DESIGN.md (spec v3, historical requirements) ·
+                             GO-LIVE.md (setup, browser-only) ·
+                             FORMS-INTEGRATION.md (forms/tags review + design) ·
+                             this file (as-built)
+render.yaml                  OPTIONAL alternative scheduler (GitHub Actions is primary)
 netlify.toml                 Netlify build + SPA redirect + frame-ancestors CSP
 VERIFICATION.md              endpoint-shape verification log (--probe appends here)
 ```
@@ -92,13 +113,21 @@ VERIFICATION.md              endpoint-shape verification log (--probe appends he
    parent context is still built).
 3. **Parent first**: SSP-account invoices (all pages), calendars + events
    ±60 days, indexed by contact ID; the parent gets its own snapshot too.
-4. Per client subaccount: G1 identity check → one 42-day contacts fetch
+4. Per client subaccount: G1 identity check (name match normalizes `&`/`and`;
+   a mismatch records both names in coverage) → one 42-day contacts fetch
    (covers the 7d window, 28-day baseline, 14–42d conversion cohort, and
    28d funnel), earliest-contact probe, per-status opportunities (open all
    pages, won/lost stopped at the 90d cutoff), 14 days of conversations,
    form submissions, review-tagged contacts, calendar events [-28d, +7d],
-   blogs/social/social-accounts when `services` warrant → metrics → write
-   snapshot, `lead_events`, and `lead_history` (current + previous ISO week).
+   blogs/social/social-accounts when `services` warrant, **form/survey
+   inventory** (every form + survey, one count-and-latest request each,
+   business-day silence classification), **workflow inventory** (published
+   vs draft counts) → metrics + chart aggregates → write snapshot,
+   `lead_events`, `lead_history` (current + previous ISO week), and
+   `form_health` (per-form rows). Surveys/workflows scopes missing on a
+   token record as SKIPPED (never gate-tripping) until granted. An account
+   with no PIT yet is "awaiting onboarding" — visible everywhere, counted
+   separately, never a run failure.
 5. **Peer pass**: vertical medians (n ≥ 4, whole-book fallback) written back;
    flags computed per location, `flags_new`/`flags_resolved` diffed against
    the codes stored 7 days ago, flags replaced, snapshot change-columns
@@ -134,13 +163,25 @@ missing-phone hygiene (presence only); form-submission windows;
 stale/stuck/no-next-step pipeline states with per-account `opp_idle_days` /
 `opp_stuck_days` thresholds; 90d win rate and median days-to-close; the
 14–42d lead→opp cohort; appointment booked/showed/no-show; social-account
-expiry counts; flag change tracking.
+expiry counts; flag change tracking; per-form/per-survey health
+(`classify_form`, business-day silence clock — weekends never count);
+pipeline movement over 30 days (created / stage-changed / closed); and the
+chart aggregates, always over the FULL opportunity set: stage distribution
+(count, idle count, value, idle value, median days in stage, orphaned-stage
+detection), idle-time aging buckets, weekly won/lost, pipeline-setup hygiene
+(empty pipelines, deals stranded in deleted stages), win rate per pipeline,
+and the bottleneck (the stage holding the most idle dollars, also stored as
+snapshot columns for the portfolio).
 
 ## Database
 
-Eight tables (`subaccounts` with `mrr`/`contract_end`, `snapshots`, `flags`,
-`lead_events`, `lead_history`, `flag_acks`, `account_notes`,
-`collector_runs`) plus `pit_audit`, and two `security_invoker` views.
+Ten tables (`subaccounts` with `mrr`/`contract_end`/`tag_config`,
+`snapshots`, `flags`, `lead_events`, `lead_history`, `form_health`,
+`tag_checks`, `flag_acks`, `account_notes`, `collector_runs`) plus
+`pit_audit`, and two `security_invoker` views. `v_portfolio` has grown
+(columns appended by migrations 0002–0006): `calls_missed_7d`,
+`forms_silent_ct`, `opps_moved_30d`, `bottleneck_stage`,
+`bottleneck_value_usd`.
 `v_portfolio` weighs acknowledged flags at zero via a lateral join against
 active (un-expired) `flag_acks` rows, so an ack immediately drops the
 account out of "needs attention"; a red that returns after the snooze
@@ -159,31 +200,61 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
   state rendered as icon + color (● / ▲ / ✓ / –), never color alone;
   keyboard (`j`/`k` select, `Enter` open, `a` acknowledge top flag, `/`
   search); 15-minute auto-refresh; filter/sort state in the URL.
-- **Portfolio**: filters (mine/all, SSP, search, vertical, state, flag
-  code), attention or MRR-at-risk sort, optional group-by-AM with per-AM
-  header stats, an "MRR in attention" header tile, compact columns plus a
-  localStorage-persisted column chooser, lead_history sparklines, a "New"
-  column from `flags_new`, muted acked counts, CSV export of the current
-  filter.
+- **Portfolio (the AM morning review)**: triage chips (● Needs attention ·
+  ◐ Watch · ✓ Healthy · ○ No data — each a click-filter) with MRR-at-risk
+  and a data-as-of stamp → the **Team report** (one template-filled plain
+  sentence per account, worst first — every phrase traceable to a metric;
+  steady and awaiting-token accounts roll up into single lines) → the
+  "new this week" strip from `flags_new` → the table: lean default row
+  (state/flags, leads with trend arrow + sparkline, speed, missed calls,
+  MRR, top action, days-since-last-note) with everything else — including
+  Silent forms, Moves 30d, and Bottleneck — behind the localStorage column
+  chooser; filters (mine/all, SSP, search, vertical, state, flag code,
+  band), attention or MRR-at-risk sort, group-by-AM, a **Wall** layout
+  toggle (one tile per account for a big monitor), CSV export of the
+  current view.
 - **Drilldown**: header (MRR / contract end) → **Do next** (top 3 unacked
   flags with Acknowledge + note + 7/14/30-day snooze; acked flags muted
   with who/when/note) → **Changed this week** chips → KPI tiles (incl.
-  no-show %, lead→opp %, win rate, days to close) → 28d funnel strip →
-  stacked-by-source weekly leads chart (top 5 + other, trailing-avg
-  overlay) and a delta-vs-peers panel → speed-to-lead histogram → detail
-  tables collapsed unless a firing flag ties to them → coverage (the
-  honesty layer) → append-only notes.
+  deals-moved-30d, no-show %, lead→opp %, win rate) → **"This week vs
+  last" change scorecard** (nine metrics vs the newest gate-passed snapshot
+  6+ days older, direction-aware arrows) → 28d funnel strip →
+  stacked-by-source weekly leads chart and a delta-vs-peers panel →
+  **won/lost weekly diverging bars** → **speed-to-lead trend line** →
+  **stage bar + velocity/value table with the bottleneck callout** →
+  **pipeline-setup hygiene card** (orphaned deals, empty pipelines) →
+  **win rate by pipeline** (multi-pipeline accounts) → **deal-aging
+  buckets** → after-hours heatmap → speed histogram → detail tables
+  (titles show TRUE counts, "top 50 shown" when capped) → **Forms &
+  surveys** per-form health → **Tracking tags** (latest tag-checker
+  result) → coverage (the honesty layer) → copy-ready weekly client
+  summary → append-only notes.
 - **Runs**: last 30 runs with expandable per-location detail, plus a token
   health list (status ≠ ok or rotation older than 80 days).
 
-## Deploys
+## Deploys & operations
 
-- **Collector**: Render cron via `render.yaml` (Blueprint), exactly three
-  secrets; failure notifications on (the dead-man's switch). Schedule
-  `30 10 * * *` UTC = 05:30 CT during CDT; revisit in November.
-- **SPA**: Netlify from `web/`, custom domain `health.smallscreenproducer.com`,
-  `frame-ancestors` CSP for GHL hosts, no `X-Frame-Options`.
-- **GHL**: Custom Menu Link embeds the portfolio (spec section 10).
+- **Collector**: GitHub Actions (`.github/workflows/collector.yml`),
+  nightly `30 10 * * *` UTC = 05:30 CT during CDT (revisit in November);
+  three repo secrets (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+  `COLLECTOR_KEY`). Manual runs via the Actions tab; the args box feeds
+  `COLLECTOR_ARGS` (`--probe`, `--backfill 12`, ...). A failed scheduled
+  run emails the repo owner — the dead-man's switch. Render (`render.yaml`)
+  is a documented alternative; run exactly one scheduler.
+- **Tag checker**: GitHub Actions (`tagchecker.yml`), daily 08:00 CT,
+  installs Chromium on the runner; needs only the two Supabase secrets and
+  no GHL tokens. Skips accounts without `tag_config` expectations.
+- **SPA**: Netlify from `web/`, auto-deploys on every push. Lives at the
+  free `*.netlify.app` URL until the Later phase adds
+  `health.smallscreenproducer.com`; `frame-ancestors` CSP for GHL hosts, no
+  `X-Frame-Options`.
+- **Auth email**: Supabase's built-in mailer (delivers only to Supabase org
+  members, a few per hour — fine for admins). Team-scale rollout switches
+  SMTP to the agency's own Google Workspace (app password). No third-party
+  email service; Resend was removed from the design by decision.
+- **GHL embed**: Custom Menu Link (spec section 10) is a Later-phase step —
+  in-iframe sign-in requires the custom domain (same-site with
+  `crm.smallscreenproducer.com`).
 
 ## Tier 2 features (shipped on request, 2026-08-18)
 
@@ -205,6 +276,43 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
 - **Copy-ready weekly client summary** — deterministic template fill in the
   drilldown (`web/src/lib/clientSummary.ts`): client-facing wording, unknown
   lines omitted, no flag/risk language, one-click copy.
+
+## Forms, surveys, workflows & tag monitoring (2026-08-19)
+
+Full review + design record: [`FORMS-INTEGRATION.md`](FORMS-INTEGRATION.md).
+
+- **Per-form / per-survey health** — nightly inventory of every form and
+  survey with lifetime submission count + newest submission (one request
+  each via `meta.total`); classified active / silent / no-leads / new /
+  unknown with a business-day silence clock. Rows accumulate in
+  `form_health` (history: "when did this form die" is answerable). Flags:
+  `FORM_WENT_SILENT`, `SURVEY_WENT_SILENT` (both name the silent items).
+- **Workflow inventory** — published vs draft counts;
+  `WORKFLOWS_NONE_PUBLISHED` fires when leads flow but nothing automates
+  follow-up. Requires `workflows.readonly` (policy exception approved).
+- **Tag/pixel monitoring** — `tagchecker/` loads each configured client
+  site in headless Chromium, watches real network requests, and verifies
+  the expected GA4 / GTM / Meta pixel / Google Ads / TikTok tags fired
+  (optionally with the exact ID). Config in `subaccounts.tag_config`
+  (websites seeded for all 31 accounts); results in `tag_checks`; shown on
+  the account page.
+
+## Pipeline intelligence (2026-08-19, pipelines.readonly on all PITs)
+
+- `opps_moved_30d` — deals created / stage-changed / closed in 30 days;
+  `PIPELINE_FROZEN` (red at zero movement with 10+ open deals, amber under
+  5% moved).
+- `PIPELINE_HYGIENE` — when 50+ deals AND 60%+ of the open pipeline are
+  idle, the framing switches from "re-engage each deal" to "book a
+  cleanup"; it replaces `STALE_PIPELINE` on those accounts so thousand-deal
+  pipelines stop producing unusable advice.
+- Stage table (velocity: median days in stage; value and idle $ per stage;
+  orphaned-stage detection), bottleneck callout + snapshot columns +
+  portfolio column + `PIPELINE_BOTTLENECK` info flag, pipeline-setup
+  hygiene card, win rate per pipeline.
+- Honest capping: drilldown list titles show the TRUE metric count with
+  "top 50 shown" when the example rows are truncated; chart aggregates are
+  computed over the full deal set and never capped.
 
 ## Deviations from the spec
 
