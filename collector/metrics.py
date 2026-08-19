@@ -710,12 +710,30 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
 
     created_7d = sum(1 for o in opps if in_window(parse_ts(o.get("createdAt")), win_start, win_end))
 
+    # Pipeline movement, last 30 days: is the client actually WORKING the
+    # pipeline? A deal counts as moved if in the last 30 days it was created,
+    # changed stage (open deals), or closed (won/lost). Zero movement with a
+    # pipeline full of open deals is the "client stopped using GHL for
+    # sales" smell — worth a call regardless of the stale count.
+    cutoff_30 = now_utc - timedelta(days=30)
+    moved_30d = 0
+    for opp in opps:
+        status = str(opp.get("status") or "").lower()
+        stamps = [parse_ts(opp.get("createdAt"))]
+        if status == "open":
+            stamps.append(parse_ts(opp.get("lastStageChangeAt")))
+        else:
+            stamps.append(parse_ts(opp.get("lastStatusChangeAt")))
+        if any(ts is not None and ts >= cutoff_30 for ts in stamps):
+            moved_30d += 1
+
     return {
         "opps_open": len(open_opps),
         "opps_open_value": round(open_value, 2),
         "opps_stale": len(stale),
         "opps_stale_value": round(stale_value, 2),
         "opps_stuck": stuck,
+        "opps_moved_30d": moved_30d,
         "opps_missing_value": missing_value,
         "opps_no_next_step": no_next_step if feature_available else None,
         "opps_won_7d": won_7d,

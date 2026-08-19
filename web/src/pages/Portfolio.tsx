@@ -39,6 +39,7 @@ const EXPANDED_COLUMNS = [
   { key: "uncontacted", label: "Uncont. >24h" },
   { key: "waiting", label: "Waiting" },
   { key: "stale", label: "Stale opps" },
+  { key: "moves", label: "Moves 30d" },
   { key: "forms_silent", label: "Silent forms" },
   { key: "past_due", label: "Past due" },
   { key: "publish", label: "Since publish" },
@@ -372,7 +373,7 @@ export default function Portfolio() {
       const extended: Record<ExpandedKey, unknown> = {
         am: row.am_email, new_flags: (row.flags_new ?? []).join("; "),
         uncontacted: row.leads_uncontacted_24h, waiting: row.convos_waiting,
-        stale: row.opps_stale, forms_silent: row.forms_silent_ct,
+        stale: row.opps_stale, moves: row.opps_moved_30d, forms_silent: row.forms_silent_ct,
         past_due: row.invoices_past_due_amount,
         publish: row.days_since_last_publish, client_touch: row.client_last_touch_days,
         unassigned: row.leads_unassigned_7d, noshow: row.noshow_rate_28d,
@@ -421,6 +422,7 @@ export default function Portfolio() {
         return noData || row.opps_stale === null ? "—"
           : row.opps_stale > 0
             ? `${row.opps_stale} (${fmtMoney(row.opps_stale_value)})` : "0";
+      case "moves": return noData || row.opps_moved_30d === null ? "—" : fmtNum(row.opps_moved_30d);
       case "forms_silent": return noData || row.forms_silent_ct === null ? "—" : fmtNum(row.forms_silent_ct);
       case "past_due":
         return noData || row.invoices_past_due === null ? "—"

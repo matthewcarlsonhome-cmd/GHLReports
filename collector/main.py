@@ -682,6 +682,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "opps_stale": pipe["opps_stale"],
         "opps_stale_value": pipe["opps_stale_value"],
         "opps_stuck": pipe["opps_stuck"],
+        "opps_moved_30d": pipe["opps_moved_30d"],
         "opps_missing_value": pipe["opps_missing_value"],
         "opps_no_next_step": pipe["opps_no_next_step"],
         "opps_won_7d": pipe["opps_won_7d"],

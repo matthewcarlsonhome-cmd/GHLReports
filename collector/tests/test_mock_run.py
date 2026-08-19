@@ -77,6 +77,7 @@ def test_happy_path_metrics_gate_and_flags():
     assert snap["opps_won_7d"] == 1
     assert snap["opps_lost_7d"] == 1
     assert snap["opps_created_7d"] == 1
+    assert snap["opps_moved_30d"] == 3   # o2 created 8/12, o3 won 8/15, o4 lost 8/16; o1 untouched since 7/1
     assert snap["win_rate_90d"] is None              # won+lost = 2 < 5
     assert snap["median_days_to_close_90d"] == 14.0  # o3: Aug 1 -> Aug 15
     assert snap["lead_to_opp_28d_pct"] == 0.0        # 27-contact cohort, no matching opps

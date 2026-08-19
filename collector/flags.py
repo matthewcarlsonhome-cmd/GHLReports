@@ -62,6 +62,10 @@ DEFAULT_THRESHOLDS = {
     "stale_min": 3,
     "stale_frac": 0.3,
     "stale_value_usd": 25000.0,
+    "hygiene_stale_min": 50,          # stale count where per-deal follow-up stops being the story
+    "hygiene_stale_frac": 0.6,        # ...and the share of open deals that makes it a cleanup problem
+    "frozen_min_open": 10,            # open deals needed before "nothing moved" means anything
+    "frozen_moved_pct": 5.0,          # under this % of deals moved in 30d -> pipeline is stalling
     # appointments
     "noshow_rate_pct": 30.0,
     # delivery
@@ -292,13 +296,31 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             entity_name=oldest.get("contact"), deep_link=oldest.get("deep_link"),
         ))
 
-    # STALE_PIPELINE — fires on count (at least stale_min deals AND at least
-    # stale_frac of the open pipeline, via the max()) or on dollars at risk.
-    # Money at stake is what makes it red.
+    # PIPELINE_HYGIENE vs STALE_PIPELINE — same underlying numbers, two very
+    # different conversations. When MOST of a big pipeline is idle (hundreds
+    # or thousands of deals), "re-engage each one" is useless advice: that is
+    # an abandoned-pipeline hygiene problem, and the action is a cleanup
+    # session with the client. Only when the stale set is small enough to be
+    # a work list does STALE_PIPELINE fire with its per-deal framing. The two
+    # are mutually exclusive by construction.
     stale = metrics.get("opps_stale")
     stale_value = metrics.get("opps_stale_value") or 0
     opps_open = metrics.get("opps_open") or 0
-    if stale is not None:
+    hygiene_fires = (
+        stale is not None
+        and stale >= th["hygiene_stale_min"]
+        and opps_open > 0 and stale >= th["hygiene_stale_frac"] * opps_open
+    )
+    if hygiene_fires:
+        pct = stale / opps_open * 100.0
+        flags.append(_flag(
+            "PIPELINE_HYGIENE", "amber", "Pipeline needs a cleanup",
+            f"{stale} of {opps_open} open deals ({pct:.0f}%) idle 14d+ — too many for "
+            "deal-by-deal follow-up. Book a pipeline cleanup with the client: close "
+            "out dead deals so the real ones become visible.",
+            detail=f"{_fmt_money(stale_value)} nominally at stake, but most of it is likely historical",
+        ))
+    elif stale is not None:
         count_fires = stale >= max(th["stale_min"], th["stale_frac"] * opps_open)
         value_fires = stale_value >= th["stale_value_usd"]
         if (stale and count_fires) or value_fires:
@@ -309,6 +331,27 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 "Q3 spring-origin inquiries are re-engage, not close-lost.",
                 entity_type="opportunity", entity_id=first.get("opp_id"),
                 entity_name=first.get("name"), deep_link=first.get("deep_link"),
+            ))
+
+    # PIPELINE_FROZEN — nothing (or almost nothing) has moved in 30 days
+    # despite a real book of open deals: no stage changes, no new deals, no
+    # closes. Distinct from stale (which is per-deal idleness): this is the
+    # whole pipeline not being worked — the strongest "client stopped using
+    # the CRM for sales, reach out" signal we can compute.
+    moved = metrics.get("opps_moved_30d")
+    if (moved is not None and opps_open >= th["frozen_min_open"]):
+        moved_pct = moved / opps_open * 100.0
+        if moved == 0:
+            flags.append(_flag(
+                "PIPELINE_FROZEN", "red", "Pipeline frozen",
+                f"{opps_open} open deals and not one moved in 30 days (no stage changes, "
+                "no new deals, no closes). Call the client — the pipeline isn't being worked.",
+            ))
+        elif moved_pct < th["frozen_moved_pct"]:
+            flags.append(_flag(
+                "PIPELINE_FROZEN", "amber", "Pipeline barely moving",
+                f"Only {moved} of {opps_open} open deals ({moved_pct:.0f}%) moved in 30 days. "
+                "Walk the client through their pipeline on the next call.",
             ))
 
     # HIGH_NOSHOW — appointment no-show rate over 28d (None below 5 outcomes,

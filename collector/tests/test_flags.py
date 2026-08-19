@@ -19,7 +19,7 @@ def base_metrics(**overrides):
         "speed_kind_known": True, "excluded_count": 0,
         "convos_waiting": 0, "convos_waiting_max_hours": None,
         "opps_open": 10, "opps_open_value": 50000.0,
-        "opps_stale": 0, "opps_stale_value": 0.0, "opps_stuck": 0,
+        "opps_stale": 0, "opps_stale_value": 0.0, "opps_stuck": 0, "opps_moved_30d": 5,
         "opps_missing_value": 0, "opps_no_next_step": 0,
         "opps_won_7d": 1, "opps_lost_7d": 0,
         "lead_to_opp_28d_pct": 20.0, "win_rate_90d": 50.0, "median_days_to_close_90d": 12.0,
@@ -45,6 +45,34 @@ def compute(metric_overrides=None, thresholds=None, details=None, sub=None):
 
 def test_steady_account_has_no_flags():
     assert compute() == []
+
+
+def test_pipeline_frozen():
+    # 12 open deals, nothing moved in 30 days -> red, call the client
+    result = codes(compute({"opps_open": 12, "opps_moved_30d": 0}))
+    assert result.get("PIPELINE_FROZEN") == "red"
+    # 1 of 40 moved (2.5% < 5%) -> amber, barely moving
+    result = codes(compute({"opps_open": 40, "opps_moved_30d": 1}))
+    assert result.get("PIPELINE_FROZEN") == "amber"
+    # healthy movement -> quiet
+    assert "PIPELINE_FROZEN" not in codes(compute({"opps_open": 40, "opps_moved_30d": 10}))
+    # too few open deals to judge -> quiet
+    assert "PIPELINE_FROZEN" not in codes(compute({"opps_open": 5, "opps_moved_30d": 0}))
+    # movement unknown (older snapshot) -> quiet, unknown never fires
+    assert "PIPELINE_FROZEN" not in codes(compute({"opps_open": 40, "opps_moved_30d": None}))
+
+
+def test_pipeline_hygiene_replaces_stale_for_abandoned_pipelines():
+    # 800 of 1000 open deals idle: a cleanup conversation, not a follow-up
+    # list — PIPELINE_HYGIENE fires and suppresses STALE_PIPELINE entirely.
+    result = codes(compute({"opps_open": 1000, "opps_stale": 800,
+                            "opps_stale_value": 900000.0, "opps_moved_30d": 100}))
+    assert result.get("PIPELINE_HYGIENE") == "amber"
+    assert "STALE_PIPELINE" not in result
+    # a small stale set keeps the classic per-deal STALE_PIPELINE framing
+    result = codes(compute({"opps_open": 10, "opps_stale": 4, "opps_stale_value": 30000.0}))
+    assert result.get("STALE_PIPELINE") == "red"
+    assert "PIPELINE_HYGIENE" not in result
 
 
 def test_integration_suspect_suppresses_leads_zero():

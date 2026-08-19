@@ -93,6 +93,7 @@ export interface SnapshotRow {
   opps_stale: number | null;
   opps_stale_value: number | null;
   opps_stuck: number | null;
+  opps_moved_30d: number | null;
   opps_missing_value: number | null;
   opps_no_next_step: number | null;
   opps_won_7d: number | null;
@@ -276,6 +277,7 @@ export interface PortfolioRow {
   state: PortfolioState;
   calls_missed_7d: number | null;
   forms_silent_ct: number | null;
+  opps_moved_30d: number | null;
 }
 
 // One row of the form_health table: per-form / per-survey status from the

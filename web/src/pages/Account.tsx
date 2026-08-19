@@ -124,6 +124,14 @@ type Loaded = {
 // Expand/collapse wrapper for the detail tables. `defaultOpen` is only the
 // *initial* value (used to auto-open tables tied to firing flags); after
 // mount the user's clicks own the state.
+// Drill-down section titles show the TRUE metric count. The row list under
+// them is capped at 50 for row-size reasons, so an account with 300 stale
+// deals must read "(300 — top 50 shown)", never a misleading "(50)".
+function cappedTitle(label: string, total: number | null | undefined, shown: number): string {
+  if (total === null || total === undefined || total <= shown) return `${label} (${shown})`;
+  return `${label} (${total} — top ${shown} shown)`;
+}
+
 function Collapsible({ title, defaultOpen, children }: {
   title: string; defaultOpen: boolean; children: ReactNode;
 }) {
@@ -535,6 +543,10 @@ export default function Account() {
           <StatTile label="Stale value (14d+)" value={fmtMoney(snapshot.opps_stale_value)}
                     context={`${fmtNum(snapshot.opps_stale)} deals`}
                     tone={(snapshot.opps_stale_value ?? 0) >= 25000 ? "bad" : undefined} />
+          <StatTile label="Deals moved 30d" value={fmtNum(snapshot.opps_moved_30d)}
+                    context="created, staged, or closed"
+                    tone={snapshot.opps_moved_30d === 0 && (snapshot.opps_open ?? 0) >= 10
+                      ? "bad" : undefined} />
           <StatTile label="Past due (SSP)" value={fmtMoney(snapshot.invoices_past_due_amount)}
                     context={`${fmtNum(snapshot.invoices_past_due)} invoices`}
                     tone={(snapshot.invoices_past_due ?? 0) > 0 ? "bad" : undefined} />
@@ -666,7 +678,7 @@ export default function Account() {
           deep links back into GHL wherever the data offers one. */}
       {details ? (
         <>
-          <Collapsible title={`Uncontacted leads (${details.uncontacted_leads.length})`}
+          <Collapsible title={cappedTitle("Uncontacted leads", snapshot?.leads_uncontacted_24h, details.uncontacted_leads.length)}
                        defaultOpen={firingTables.has("uncontacted")}>
             <DetailTable rows={details.uncontacted_leads} empty="No leads sitting uncontacted past 24h."
               columns={[
@@ -677,7 +689,7 @@ export default function Account() {
               ]} />
           </Collapsible>
 
-          <Collapsible title={`Unassigned leads (${details.unassigned_leads.length})`}
+          <Collapsible title={cappedTitle("Unassigned leads", snapshot?.leads_unassigned_7d, details.unassigned_leads.length)}
                        defaultOpen={firingTables.has("unassigned")}>
             <DetailTable rows={details.unassigned_leads} empty="Every new lead has an owner."
               columns={[
@@ -689,7 +701,7 @@ export default function Account() {
 
           {/* missed_calls is optional (Tier 2) — old snapshots lack it, hence
               the ?? [] fallback and the explanatory empty-state wording */}
-          <Collapsible title={`Missed calls (${details.missed_calls?.length ?? 0})`}
+          <Collapsible title={cappedTitle("Missed calls", snapshot?.calls_missed_7d, details.missed_calls?.length ?? 0)}
                        defaultOpen={(snapshot?.calls_missed_7d ?? 0) > 0}>
             <DetailTable rows={details.missed_calls ?? []}
               empty="No unanswered inbound calls in the window (or this snapshot predates the missed-calls metric)."
@@ -700,7 +712,7 @@ export default function Account() {
               ]} />
           </Collapsible>
 
-          <Collapsible title={`Waiting conversations (${details.waiting_convos.length})`}
+          <Collapsible title={cappedTitle("Waiting conversations", snapshot?.convos_waiting, details.waiting_convos.length)}
                        defaultOpen={firingTables.has("waiting")}>
             <DetailTable rows={details.waiting_convos} empty="Nothing inbound is waiting 4h+."
               columns={[
@@ -711,7 +723,7 @@ export default function Account() {
               ]} />
           </Collapsible>
 
-          <Collapsible title={`Stale opportunities (${details.stale_opps.length})`}
+          <Collapsible title={cappedTitle("Stale opportunities", snapshot?.opps_stale, details.stale_opps.length)}
                        defaultOpen={firingTables.has("stale")}>
             <DetailTable rows={details.stale_opps} empty="No open deals idle 14 days or more."
               columns={[
