@@ -337,6 +337,35 @@ def test_gate_g4_sudden_zero_vs_dormant():
     assert not ok  # not enough history to prove dormancy
 
 
+def test_classify_form():
+    from datetime import date
+    tue = date(2026, 8, 18)  # a Tuesday
+    # unknown when the count could not be determined, or count>0 without a date
+    assert metrics.classify_form(None, None, None, tue) == "unknown"
+    assert metrics.classify_form(5, None, "2026-01-01T00:00:00Z", tue) == "unknown"
+    # active within the threshold; weekend days never count as quiet days
+    assert metrics.classify_form(5, "2026-08-17T12:00:00Z", None, tue) == "active"   # Mon->Tue = 1
+    assert metrics.classify_form(5, "2026-08-14T12:00:00Z", None, tue) == "active"   # Fri->Tue = 2
+    # silent once >= 3 business days quiet
+    assert metrics.classify_form(5, "2026-08-13T12:00:00Z", None, tue) == "silent"   # Thu->Tue = 3
+    assert metrics.classify_form(5, "2026-08-01T12:00:00Z", None, tue) == "silent"
+    # zero submissions: young form is 'new', old form is 'no_leads'
+    assert metrics.classify_form(0, None, "2026-08-10T00:00:00Z", tue) == "new"
+    assert metrics.classify_form(0, None, "2026-03-01T00:00:00Z", tue) == "no_leads"
+    # per-account threshold override widens the window
+    assert metrics.classify_form(5, "2026-08-13T12:00:00Z", None, tue, silent_days=5) == "active"
+
+
+def test_business_days_between():
+    from datetime import date
+    fri, mon, tue = date(2026, 8, 14), date(2026, 8, 17), date(2026, 8, 18)
+    assert metrics.business_days_between(fri, fri) == 0
+    assert metrics.business_days_between(fri, date(2026, 8, 16)) == 0  # Fri -> Sun: no weekdays
+    assert metrics.business_days_between(fri, mon) == 1
+    assert metrics.business_days_between(fri, tue) == 2
+    assert metrics.business_days_between(date(2026, 8, 10), tue) == 6  # Mon -> next Tue
+
+
 def test_location_name_matches():
     assert metrics.location_name_matches("Pilot One Pools — GHL", "Pilot One Pools")
     assert metrics.location_name_matches("pilot one pools", "Pilot One Pools")

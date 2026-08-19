@@ -2,7 +2,7 @@
 
 This is the complete, in-order setup to take the Account Health dashboard
 live. **Every step happens in a web dashboard — no terminal, no local
-installs.** The app runs on Netlify, the Python collector runs on Render, and
+installs.** The app runs on Netlify, the Python collector runs on GitHub Actions, and
 the database runs on Supabase. Sign-in emails come straight from Supabase's
 built-in mailer — no third-party email service to configure.
 
@@ -121,9 +121,10 @@ Still in the Supabase dashboard:
 1. **Make a collector key.** Any long random string (32+ characters, no
    spaces or quotes). Browser-only options: your password manager's
    generator, or https://bitwarden.com/password-generator/ set to 40
-   characters. Copy it — it's needed in two places (here and Render).
+   characters. Copy it — it's needed in two places (here and a GitHub
+   secret in Part 4).
 
-   *Why this exists:* Render has to hold a Supabase admin key to write
+   *Why this exists:* the collector has to hold a Supabase admin key to write
    snapshots. The GHL tokens are far more sensitive than the snapshots, so
    they sit behind a second lock — the Vault function that returns a GHL
    token demands this collector key too, and logs every attempt (right or
@@ -141,9 +142,11 @@ Still in the Supabase dashboard:
    - Name: `ssp-health-readonly`
    - Scopes — **read-only/view only**, check these modules: locations,
      users, contacts, conversations (+ messages), opportunities, calendars
-     (+ events), invoices, forms, blogs (list + posts), social planner
-     (posts + accounts). **Never** any write scope, workflows, campaigns,
-     payments, saas, or snapshots.
+     (+ events), invoices, forms, **surveys**, **workflows (view)**, blogs
+     (list + posts), social planner (posts + accounts). **Never** any write
+     scope, campaigns, payments, saas, or snapshots. (Surveys and Workflows
+     view power the per-form health checks; a token missing them still
+     works — those two checks just show "scope not yet granted".)
    - Copy the token (it is shown once).
 4. Back in Supabase **Vault → Add new secret**:
    - Name: `ghl_pit_ZnckuEDPIcWu8fn72ppi` (exactly — that is the SSP
@@ -162,41 +165,50 @@ enough to go live.
 
 ---
 
-## Part 4 — Render: the Python collector (~10 min)
+## Part 4 — GitHub Actions: the Python collector (~10 min)
 
-1. https://dashboard.render.com → **New → Blueprint** → **Connect GitHub**
-   (authorize access to `matthewcarlsonhome-cmd/GHLReports`) → select the
-   repo. Render reads `render.yaml` and proposes the cron job
-   `ghl-health-collector`. (Important: use **Blueprint**, not "New → Cron
-   Job" — a manually created job ignores `render.yaml`.)
-2. When prompted for environment variables, enter the three secrets:
+The nightly data pull runs as a **GitHub Actions workflow** — no extra
+hosting account, it lives right in the repo
+(`.github/workflows/collector.yml`) and runs on GitHub's machines.
+
+1. **Add the three secrets.** GitHub repo
+   (`matthewcarlsonhome-cmd/GHLReports`) → **Settings → Secrets and
+   variables → Actions → New repository secret**, three times:
    - `SUPABASE_URL` = `https://tpavdifpsevkrubplyrg.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` = Supabase dashboard → **Settings → API →
      `service_role`** key (this one is secret — it lives only here)
    - `COLLECTOR_KEY` = the random string from Part 3
-   Click **Apply / Create**. The schedule (`30 10 * * *` UTC = 5:30am
-   Central) and everything else come from the repo.
-3. Open the service → **Settings → Notifications** → turn **failure
-   notifications ON** (your dead-man's switch for "no run happened").
-4. **First run — verify the API field names (the "probe").** The GHL API
+2. **Enable workflows** if prompted: repo → **Actions** tab → if GitHub
+   shows an "enable workflows" banner, click it. You should see two
+   workflows listed: **Nightly collector** and **Tag checker**.
+3. **First run — verify the API field names (the "probe").** The GHL API
    shapes were implemented from documentation; the probe confirms them
    against reality:
-   - Service → **Environment** → add `COLLECTOR_ARGS` = `--probe`
-   - Click **Trigger Run** (top right). When it finishes, open **Logs** —
-     the full probe report prints there, ending with a checklist. Phones,
+   - Actions → **Nightly collector** → **Run workflow** → type `--probe`
+     in the args box → green **Run workflow** button.
+   - When it finishes, click the run → the **Run collector** step — the
+     full probe report prints there, ending with a checklist. Phones,
      emails, and message bodies are redacted automatically.
-   - If every endpoint shows HTTP 200, you're good. If anything looks off
-     (a 401/403 means a missing scope on the Private Integration — edit its
-     scopes in GHL, no new token needed), or the checklist items look
-     wrong, paste the log into a Claude session against this repo and ask
-     it to reconcile `VERIFICATION.md`.
-5. **Backfill the charts** (12 weeks of history from the CRM):
-   - Change `COLLECTOR_ARGS` to `--backfill 12` → **Trigger Run** → logs
-     should say "backfilled 12 lead_history weeks".
-6. **First full collection:**
-   - **Delete/clear `COLLECTOR_ARGS`** → **Trigger Run**. Logs should end
-     with something like `done: 1 ok, 0 held, 0 failed, ...`.
-   - From now on it runs itself daily at 5:30am CT.
+   - If every endpoint shows HTTP 200, you're good. (A 401/403 on Surveys
+     or Workflows just means that scope isn't granted yet — Part 3.3.) If
+     anything else looks off, paste the log into a Claude session against
+     this repo and ask it to reconcile `VERIFICATION.md`.
+4. **Backfill the charts**: Run workflow again with args `--backfill 12` —
+   the log should say "backfilled 12 lead_history weeks".
+5. **First full collection**: Run workflow once more with the args box
+   **empty**. The log should end `done: N ok, 0 held, 0 failed, ...`
+   (accounts still awaiting tokens are listed separately and don't fail
+   the run). From now on it runs itself daily at 5:30am CT, and GitHub
+   emails you if a scheduled run fails — that's the dead-man's switch.
+6. **If you previously created the Render cron job, suspend or delete it**
+   (Render dashboard → the service → Settings → Suspend). Two schedulers
+   would collect twice a night. `render.yaml` stays in the repo as an
+   optional alternative.
+
+The **Tag checker** workflow needs no extra setup — it reuses the same
+secrets and runs daily at 8am CT, checking that each configured client
+website actually fires its tracking tags (GA4/GTM/Meta pixel). It does
+nothing for accounts until tag expectations are configured in the database.
 
 ---
 
@@ -210,7 +222,7 @@ All of this happens at your `https://<your-site>.netlify.app` URL:
 - [ ] The banner reads "Data as of …" (proves a collector run landed)
 - [ ] Portfolio: tick **Include SSP** — the SSP row shows real numbers, not
       "no data"
-- [ ] `/runs` shows the Render run with per-location detail
+- [ ] `/runs` shows the collector run with per-location detail
 - [ ] Click into SSP → deep links open the right records in GHL
 - [ ] Acknowledge a flag with a note → it drops out of "needs attention"
 - [ ] Add an account note → it appears newest-first
@@ -237,7 +249,7 @@ staff, and the in-GHL embed whenever you're ready.
    client's record → the ID is the last part of the URL
    `/contacts/detail/<id>`. `mrr`/`contract_end` may be NULL.)
 4. Next nightly run picks it up automatically — or trigger one now from
-   Render (**Trigger Run**, no `COLLECTOR_ARGS` needed).
+   GitHub (**Actions → Nightly collector → Run workflow**, args empty).
 
 ---
 
@@ -330,6 +342,7 @@ client update in the browser.
 | Email arrives with a link but no code | `{{ .Token }}` missing from a template (Part 2.5) |
 | Account shows "no data — token" | Vault secret name typo — must be `ghl_pit_<location_id>` exactly |
 | A source shows SOURCE UNAVAILABLE / 403 in `/runs` | The PIT lacks that scope — edit the Private Integration's scopes in GHL (no new token) and re-run |
-| Collector exits 1 "COLLECTOR_KEY rejected" | Render `COLLECTOR_KEY` ≠ the Vault `collector_key` value |
+| Collector exits 1 "COLLECTOR_KEY rejected" | The `COLLECTOR_KEY` GitHub secret ≠ the Vault `collector_key` value |
+| A check shows "scope not yet granted" | Add the Surveys / Workflows **view** scope to that account's Private Integration (Part 3.3) — no new token needed |
 | Blank iframe in GHL | `frame-ancestors` CSP (check browser console) or you opened GHL at app.gohighlevel.com — use crm.smallscreenproducer.com |
-| Numbers look wrong after first run | Read the probe report in Render logs; field-name drift goes to `VERIFICATION.md` — hand the log to Claude to fix the fetchers |
+| Numbers look wrong after first run | Read the probe report in the Actions run log; field-name drift goes to `VERIFICATION.md` — hand the log to Claude to fix the fetchers |

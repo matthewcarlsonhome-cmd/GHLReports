@@ -24,6 +24,11 @@ wrong field name costs a column, not the night's data.
 | `POST /contacts/search` | range filter on `dateAdded`; `attributionSource{sessionSource,utmSource}` used as source fallback; `phone`/`email` used for presence checks only and dropped at the fetch boundary | UNVERIFIED — filter grammar and `attributionSource` shape |
 | `POST /contacts/search` (tag) | `filters[{field:tags,operator:eq,value}]` | UNVERIFIED |
 | `GET /forms/submissions` | `locationId, startAt/endAt (YYYY-MM-DD), limit, page` → `submissions[{id,formId,contactId,createdAt}]` | UNVERIFIED — whole envelope is a spec assumption; metrics degrade to null when unavailable |
+| `GET /forms/` | `locationId, limit≤50, skip` → `forms[{id,name,createdAt}]` | UNVERIFIED — list envelope key and `createdAt` presence |
+| `GET /forms/submissions` (per-form) | adds `formId`, `limit=1` → count from `meta.total` (fallback `total`/`count`), newest date from `submissions[0].createdAt` | UNVERIFIED — `meta.total` is the whole per-form count trick (borrowed from the MLH checker, where it worked live) |
+| `GET /surveys/` | `locationId, limit≤50, skip` → `surveys[{id,name,createdAt}]`; needs `surveys.readonly` (401 records as "scope not yet granted", never gate-tripping) | UNVERIFIED |
+| `GET /surveys/submissions` | `locationId, surveyId, limit=1` → same `meta.total` pattern | UNVERIFIED — endpoint availability varies; failure classifies the survey as `unknown`, never 0 |
+| `GET /workflows/` | `locationId` → `workflows[{id,name,status}]`; published = `status in {published, active}` or `isActive`; needs `workflows.readonly` (401 = skipped) | UNVERIFIED — status vocabulary decides the WORKFLOWS_NONE_PUBLISHED flag |
 | `GET /conversations/search` | `conversations[]`; `lastMessageDate` (ms), `lastMessageDirection`, `startAfterDate` cursor; `lastMessageBody` dropped at the boundary | UNVERIFIED — cursor param name |
 | `GET /conversations/{id}/messages` | nested `messages.messages[]` (flat also handled); `direction`, `dateAdded`, `source`, `userId`; `body` dropped at the boundary | UNVERIFIED — the `source` vocabulary decides human-vs-automation; if it can't be established, kinds stay `unknown` and the UI labels the metric "automation included" |
 | `GET /calendars/` | `calendars[{id,name}]` | UNVERIFIED |

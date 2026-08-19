@@ -213,6 +213,14 @@ class Store:
                     for flag in flags]
             self.client.table("flags").insert(rows).execute()
 
+    def upsert_form_health(self, location_id: str, snapshot_date: str, rows: list[dict]) -> None:
+        """Replace the day's per-form/per-survey health rows for one location
+        (same delete-then-insert idiom as flags, same rerun-safe key)."""
+        self.client.table("form_health").delete().eq("location_id", location_id).eq(
+            "snapshot_date", snapshot_date).execute()
+        if rows:
+            self.client.table("form_health").insert(rows).execute()
+
     def upsert_lead_history(self, location_id: str, rows: list[dict]) -> None:
         """Write weekly lead totals; key = (location, ISO week start)."""
         if rows:

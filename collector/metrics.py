@@ -146,6 +146,53 @@ def iso_week_start(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
 
+def business_days_between(start: date, end: date) -> int:
+    """Weekdays (Mon-Fri) in the range (start, end] — i.e. how many business
+    days have ELAPSED since `start` as of `end`. Saturday and Sunday never
+    count, so a form whose last submission was Friday reads 1 elapsed day on
+    Monday, not 3 — the weekend-false-alarm fix over a naive day count."""
+    if end <= start:
+        return 0
+    days = 0
+    day = start
+    while day < end:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            days += 1
+    return days
+
+
+FORM_NEW_DAYS = 30  # a form this young with zero submissions is 'new', not 'no_leads'
+
+
+def classify_form(total: int | None, last_at, created_at, today: date,
+                  silent_days: int = 3) -> str:
+    """Per-form/per-survey health status (docs/FORMS-INTEGRATION.md Phase 1).
+
+    Port of the reviewed MLH checker's getStatus() with two fixes: silence is
+    measured in BUSINESS days (weekend gaps don't count), and the threshold
+    comes from the account's thresholds ("form_silent_days", default 3).
+
+      unknown  — submission count could not be determined (never guesses)
+      active   — has submissions, newest within the silence threshold
+      silent   — had submissions before, nothing within the threshold
+      new      — zero submissions but created in the last FORM_NEW_DAYS
+      no_leads — zero submissions, older than FORM_NEW_DAYS
+    """
+    if total is None:
+        return "unknown"
+    last = parse_ts(last_at)
+    if total > 0:
+        if last is None:
+            return "unknown"  # count says active-ish but no timestamp to judge by
+        quiet = business_days_between(last.date(), today)
+        return "active" if quiet < silent_days else "silent"
+    created = parse_ts(created_at)
+    if created is not None and (today - created.date()).days <= FORM_NEW_DAYS:
+        return "new"
+    return "no_leads"
+
+
 # -- exclusions ----------------------------------------------------------
 
 

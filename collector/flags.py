@@ -47,6 +47,7 @@ DEFAULT_THRESHOLDS = {
     "missing_phone_pct": 30.0,
     # forms
     "form_silent_trailing_min": 3.0,
+    "form_silent_days": 3,            # business days without a submission before a form is 'silent' (consumed by metrics)
     # response
     "slow_response_min": 3,
     "slow_response_red": 8,
@@ -392,6 +393,43 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
         flags.append(_flag(
             "REVIEW_ASK_GAP", "info", "Recent wins missing review asks",
             f"{gap} recent wins never got a review ask.",
+        ))
+
+    # FORM_WENT_SILENT / SURVEY_WENT_SILENT — per-form inventory checks
+    # (docs/FORMS-INTEGRATION.md Phase 1). Distinct from FORM_SILENT above:
+    # that one fires when the account's TOTAL form volume dies; these name
+    # the individual forms/surveys that used to produce and stopped, even
+    # while the account total still looks fine.
+    def _silent_flag(code: str, noun: str, silent_rows: list) -> None:
+        names = ", ".join(r.get("name") or "?" for r in silent_rows[:5])
+        more = f" (+{len(silent_rows) - 5} more)" if len(silent_rows) > 5 else ""
+        flags.append(_flag(
+            code, "amber", f"{noun}(s) went silent",
+            f"These {noun.lower()}s received submissions before but nothing recently. "
+            "Test each one and check the automations behind it.",
+            detail=f"{len(silent_rows)} silent: {names}{more}",
+        ))
+
+    form_health = (details or {}).get("form_health") or {}
+    silent_forms = form_health.get("forms_silent") or []
+    if silent_forms:
+        _silent_flag("FORM_WENT_SILENT", "Form", silent_forms)
+    silent_surveys = form_health.get("surveys_silent") or []
+    if silent_surveys:
+        _silent_flag("SURVEY_WENT_SILENT", "Survey", silent_surveys)
+
+    # WORKFLOWS_NONE_PUBLISHED — leads are arriving but not a single workflow
+    # is published, so nothing is automating follow-up. Ported from the MLH
+    # checker's best rule; needs the workflows.readonly scope (None = scope
+    # not granted yet = never fires).
+    workflows = form_health.get("workflows")
+    if (workflows and workflows.get("total", 0) > 0 and workflows.get("published", 0) == 0
+            and ((leads or 0) > 0 or (forms_7d or 0) > 0)):
+        flags.append(_flag(
+            "WORKFLOWS_NONE_PUBLISHED", "amber", "No published workflows",
+            "Leads are coming in but no workflow is published — follow-up is all manual. "
+            "Publish (or fix) the intake automation.",
+            detail=f"{workflows['total']} workflows exist, 0 published",
         ))
 
     return flags

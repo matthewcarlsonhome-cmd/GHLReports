@@ -1,0 +1,7 @@
+{
+  "formA1": { "meta": { "total": 42 }, "submissions": [ { "createdAt": "2026-08-17T15:00:00.000Z" } ] },
+  "formA2": { "meta": { "total": 9 },  "submissions": [ { "createdAt": "2026-08-06T15:00:00.000Z" } ] },
+  "formA3": { "meta": { "total": 5 },  "submissions": [ { "createdAt": "2026-08-14T16:00:00.000Z" } ] },
+  "formA4": { "meta": { "total": 0 },  "submissions": [] },
+  "formA5": { "meta": { "total": 0 },  "submissions": [] }
+}

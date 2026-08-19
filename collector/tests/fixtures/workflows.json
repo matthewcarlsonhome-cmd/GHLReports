@@ -1,0 +1,7 @@
+{
+  "workflows": [
+    { "id": "wf1", "name": "New Lead Intake", "status": "published" },
+    { "id": "wf2", "name": "Review Request", "status": "published" },
+    { "id": "wf3", "name": "Old Nurture", "status": "draft" }
+  ]
+}

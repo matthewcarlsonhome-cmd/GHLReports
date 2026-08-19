@@ -35,10 +35,12 @@ Key ideas to understand this file:
 
 from __future__ import annotations
 
-from .ghl_client import GHLClient, GHLError
+from .ghl_client import GHLAuthError, GHLClient, GHLError
 
 PAGE_LIMIT = 100
 BLOG_PAGE_LIMIT = 50
+FORM_LIST_LIMIT = 50       # /forms/ and /surveys/ list endpoints cap at 50/page
+PER_ITEM_LOOKUP_CAP = 200  # safety cap on per-form/per-survey submission lookups
 
 
 class Coverage:
@@ -561,6 +563,139 @@ def fetch_form_submissions(client: GHLClient, cov: Coverage, location_id: str,
         page += 1
     cov.record("forms", retrieved=len(out), exhausted=exhausted, error=error, note=note)
     return None if (error and not out) else out
+
+
+# -- form & survey inventory + workflows (docs/FORMS-INTEGRATION.md Phase 1) --
+
+
+def _count_and_latest(client: GHLClient, path: str, params: dict) -> tuple[int | None, str | None]:
+    """One request against a submissions endpoint: (total count, newest
+    submission timestamp). The endpoint's meta carries the total, so limit=1
+    is enough — one cheap request per form/survey (a trick borrowed from the
+    reviewed MLH checker). PII boundary: only the timestamp is taken from the
+    submission record — names, emails, and answers never leave this function.
+    (None, None) means "could not determine", which classifies as 'unknown'
+    rather than a false 'no leads'."""
+    try:
+        data = client.request("GET", path, params=params)
+    except GHLError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    total = meta.get("total", data.get("total", data.get("count")))
+    subs = _first_list(data, "submissions", "data")
+    last_at = subs[0].get("createdAt") if subs and isinstance(subs[0], dict) else None
+    try:
+        total = int(total) if total is not None else len(subs)
+    except (TypeError, ValueError):
+        total = None
+    return total, last_at
+
+
+def _fetch_inventory_list(client: GHLClient, path: str, location_id: str,
+                          list_keys: tuple[str, ...],
+                          max_pages: int | None) -> tuple[list[dict], bool, str | None, str | None]:
+    """Shared skip/limit pager for /forms/ and /surveys/ lists.
+    Returns (items, exhausted, error, note)."""
+    items: list[dict] = []
+    skip = 0
+    pages = 0
+    exhausted = False
+    error = None
+    note = None
+    while True:
+        data = client.request("GET", path, params={
+            "locationId": location_id, "limit": FORM_LIST_LIMIT, "skip": skip})
+        batch = [b for b in _first_list(data, *list_keys) if isinstance(b, dict)]
+        items.extend(batch)
+        pages += 1
+        if len(batch) < FORM_LIST_LIMIT:
+            exhausted = True
+            break
+        if max_pages and pages >= max_pages:
+            note = f"page cap {max_pages} reached"
+            break
+        skip += FORM_LIST_LIMIT
+    return items, exhausted, error, note
+
+
+def fetch_form_inventory(client: GHLClient, cov: Coverage, location_id: str,
+                         max_pages: int | None = None) -> list[dict] | None:
+    """Every form in the account, each with its lifetime submission count and
+    newest submission date. Returns [{form_id, name, created_at, total,
+    last_at}] or None when the form list itself is unavailable. A form whose
+    per-form lookup failed keeps total=None ('unknown'), never a fake zero."""
+    try:
+        forms, exhausted, error, note = _fetch_inventory_list(
+            client, "/forms/", location_id, ("forms", "data", "list"), max_pages)
+    except GHLError as exc:
+        cov.record("form_inventory", error=str(exc))
+        return None
+    out: list[dict] = []
+    for form in forms[:PER_ITEM_LOOKUP_CAP]:
+        form_id = _get_id(form)
+        if not form_id:
+            continue
+        total, last_at = _count_and_latest(client, "/forms/submissions", {
+            "locationId": location_id, "formId": form_id, "limit": 1})
+        out.append({"form_id": form_id, "name": form.get("name") or "Unnamed form",
+                    "created_at": form.get("createdAt") or form.get("dateAdded"),
+                    "total": total, "last_at": last_at})
+    if len(forms) > PER_ITEM_LOOKUP_CAP:
+        extra = f"only first {PER_ITEM_LOOKUP_CAP} of {len(forms)} forms checked"
+        note = f"{note}; {extra}" if note else extra
+    cov.record("form_inventory", retrieved=len(out), exhausted=exhausted, error=error, note=note)
+    return out
+
+
+def fetch_surveys(client: GHLClient, cov: Coverage, location_id: str,
+                  max_pages: int | None = None) -> list[dict] | None:
+    """Same shape as fetch_form_inventory, for surveys. Needs the
+    surveys.readonly scope, which older tokens were created without — a
+    401/403 records the source as SKIPPED (scope not yet granted), not
+    unavailable, so rolling the scope out gradually never trips gate G2."""
+    try:
+        surveys, exhausted, error, note = _fetch_inventory_list(
+            client, "/surveys/", location_id, ("surveys", "data", "list"), max_pages)
+    except GHLAuthError:
+        cov.record("surveys", skipped=True, note="scope not yet granted (surveys.readonly)")
+        return None
+    except GHLError as exc:
+        cov.record("surveys", error=str(exc))
+        return None
+    out: list[dict] = []
+    for survey in surveys[:PER_ITEM_LOOKUP_CAP]:
+        survey_id = _get_id(survey)
+        if not survey_id:
+            continue
+        total, last_at = _count_and_latest(client, "/surveys/submissions", {
+            "locationId": location_id, "surveyId": survey_id, "limit": 1})
+        out.append({"form_id": survey_id, "name": survey.get("name") or "Unnamed survey",
+                    "created_at": survey.get("createdAt") or survey.get("dateAdded"),
+                    "total": total, "last_at": last_at})
+    cov.record("surveys", retrieved=len(out), exhausted=exhausted, error=error, note=note)
+    return out
+
+
+def fetch_workflows(client: GHLClient, cov: Coverage, location_id: str) -> dict | None:
+    """Workflow inventory: how many exist and how many are published/active.
+    Only counts and the flag decision leave here — workflow names/config stay
+    in GHL. Same gradual-scope-rollout rule as surveys: 401/403 = skipped."""
+    try:
+        data = client.request("GET", "/workflows/", params={"locationId": location_id})
+    except GHLAuthError:
+        cov.record("workflows", skipped=True, note="scope not yet granted (workflows.readonly)")
+        return None
+    except GHLError as exc:
+        cov.record("workflows", error=str(exc))
+        return None
+    rows = [w for w in _first_list(data, "workflows", "list", "data") if isinstance(w, dict)]
+    published = sum(
+        1 for w in rows
+        if str(w.get("status") or "").lower() in ("published", "active") or w.get("isActive") is True)
+    cov.record("workflows", retrieved=len(rows))
+    return {"total": len(rows), "published": published}
 
 
 # -- conversations / messages -------------------------------------------

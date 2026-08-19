@@ -1,6 +1,14 @@
 # Forms Checker Integration — Review & Design (for Matthew's review)
 
-Date: 2026-08-19 · Status: **PROPOSED — awaiting review, nothing implemented yet**
+Date: 2026-08-19 · Status: **IMPLEMENTED 2026-08-19** — both phases approved
+(with `workflows.readonly` allowed) and built: migration 0003 (`form_health`
++ `v_portfolio.forms_silent_ct`) and 0004 (`tag_checks` + `tag_config`) are
+applied to the live project; the collector runs the per-form/per-survey/
+workflow checks nightly; the tag checker runs as a GitHub Actions workflow
+(`.github/workflows/tagchecker.yml`); the dashboard shows a Forms & Surveys
+card, a Tracking-tags card, and a Silent-forms portfolio column. §2 (the
+review) and §6 (the roster seed — since superseded by Matthew's active-client
+list, already seeded) remain as the historical record.
 
 This doc covers (1) a code review of Jeorge's "MLH Forms Health Dashboard"
 (`mlh-dashboard-main`, Node.js single-file server, ~2,900 lines) against the

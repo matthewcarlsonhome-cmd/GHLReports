@@ -119,6 +119,18 @@ def test_happy_path_metrics_gate_and_flags():
     assert store.lead_history[("locA", "2026-08-17")]["leads"] == 1     # Al Recent
     assert store.lead_history[("locA", "2026-08-10")]["leads"] == 3     # Jane, Bob, Maria
 
+    # form/survey inventory (Phase 1): every form classified, weekend-aware
+    fh = {(r["kind"], r["form_id"]): r["status"]
+          for r in store.form_health[("locA", "2026-08-18")]}
+    assert fh == {
+        ("form", "formA1"): "active",    # submitted Mon, checked Tue
+        ("form", "formA2"): "silent",    # last sub Aug 6 — long quiet
+        ("form", "formA3"): "active",    # last sub Fri; Sat+Sun don't count
+        ("form", "formA4"): "new",       # created Aug 10, no subs yet
+        ("form", "formA5"): "no_leads",  # old form, never submitted
+        ("survey", "survA1"): "silent",  # last response Aug 5
+    }
+
     # flags: exactly these, with these severities
     flag_map = {f["code"]: f["severity"] for f in store.flags[("locA", "2026-08-18")]}
     assert flag_map == {
@@ -127,7 +139,11 @@ def test_happy_path_metrics_gate_and_flags():
         "CONVOS_WAITING": "red",        # 25h >= 24h
         "STALE_PIPELINE": "red",        # $30k stale >= $25k
         "PAST_DUE": "red",              # $3,000 >= $2,500
+        "FORM_WENT_SILENT": "amber",    # formA2 (Hot Tub Brochure)
+        "SURVEY_WENT_SILENT": "amber",  # survA1 (Post-Install Survey)
     }
+    form_flag = next(f for f in store.flags[("locA", "2026-08-18")] if f["code"] == "FORM_WENT_SILENT")
+    assert "Hot Tub Brochure" in form_flag["detail"]
     source_flag = next(f for f in store.flags[("locA", "2026-08-18")] if f["code"] == "SOURCE_DROP")
     assert "facebook" in source_flag["action"]
     stale_flag = next(f for f in store.flags[("locA", "2026-08-18")] if f["code"] == "STALE_PIPELINE")
@@ -155,7 +171,8 @@ def test_flags_new_and_resolved_against_seeded_prior_week():
     })
     assert run_with(store, make_factory()) == 0
     snap = store.snapshots[("locA", "2026-08-18")]
-    assert snap["flags_new"] == ["LEADS_DROP", "PAST_DUE", "SOURCE_DROP", "STALE_PIPELINE"]
+    assert snap["flags_new"] == ["FORM_WENT_SILENT", "LEADS_DROP", "PAST_DUE",
+                                 "SOURCE_DROP", "STALE_PIPELINE", "SURVEY_WENT_SILENT"]
     assert snap["flags_resolved"] == ["NO_DELIVERY"]
 
 
@@ -178,6 +195,39 @@ def test_form_silent_fires_when_forms_die_but_leads_flow():
     flag_map = {f["code"]: f["severity"] for f in store.flags[("locA", "2026-08-18")]}
     assert flag_map.get("FORM_SILENT") == "red"
     assert "INTEGRATION_SUSPECT" not in flag_map   # leads are flowing
+
+
+def test_missing_survey_workflow_scopes_are_skipped_not_gate_tripping():
+    # Older tokens lack surveys.readonly / workflows.readonly. Those two
+    # sources must record as SKIPPED — two 403s here would otherwise trip
+    # gate G2 and hold accounts the moment this code deployed.
+    store = happy_store()
+    factory = make_factory(deny_by_loc={
+        "locA": frozenset({"/surveys/", "/workflows/"})})
+    assert run_with(store, factory) == 0
+    snap = store.snapshots[("locA", "2026-08-18")]
+    assert snap["gate_passed"] is True
+    statuses = {name: entry["status"] for name, entry in snap["coverage"]["sources"].items()}
+    assert statuses["surveys"] == "skipped"
+    assert statuses["workflows"] == "skipped"
+    flag_codes = {f["code"] for f in store.flags[("locA", "2026-08-18")]}
+    assert "SURVEY_WENT_SILENT" not in flag_codes       # no data, no cry
+    assert "WORKFLOWS_NONE_PUBLISHED" not in flag_codes
+    # forms need no new scope, so the per-form checks still ran
+    assert any(r["status"] == "silent" for r in store.form_health[("locA", "2026-08-18")])
+
+
+def test_workflows_none_published_fires_when_leads_flow():
+    # Workflows exist but none are published while leads/forms are active.
+    store = happy_store()
+    factory = make_factory(workflows_override={"locA": {"workflows": [
+        {"id": "wf1", "name": "Intake", "status": "draft"},
+        {"id": "wf2", "name": "Nurture", "status": "draft"},
+    ]}})
+    assert run_with(store, factory) == 0
+    flag_map = {f["code"]: f for f in store.flags[("locA", "2026-08-18")]}
+    assert "WORKFLOWS_NONE_PUBLISHED" in flag_map
+    assert "2 workflows exist, 0 published" in flag_map["WORKFLOWS_NONE_PUBLISHED"]["detail"]
 
 
 def test_gate_fails_when_two_sources_403():

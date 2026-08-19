@@ -50,7 +50,8 @@ def load(name: str) -> dict:
 
 
 def make_routes(empty_locs: set[str] | None = None,
-                forms_override: dict[str, dict] | None = None):
+                forms_override: dict[str, dict] | None = None,
+                workflows_override: dict[str, dict] | None = None):
     """Route (method, path, params, body) to fixture data for locA + locP.
     Locations in `empty_locs` return successful empty reads for contacts,
     conversations, and opportunities (the G4 scenario). `forms_override`
@@ -62,6 +63,7 @@ def make_routes(empty_locs: set[str] | None = None,
     """
     empty_locs = empty_locs or set()
     forms_override = forms_override or {}
+    workflows_override = workflows_override or {}
     contact_convos = load("contact_conversations.json")
     messages = load("messages.json")
     all_opps = load("opportunities.json")["opportunities"]
@@ -110,12 +112,36 @@ def make_routes(empty_locs: set[str] | None = None,
             if loc == "locP":
                 return load("parent_contacts_new.json")
             return {"contacts": []}
+        # /forms/submissions serves two callers, told apart by params: with a
+        # formId it is the per-form count+latest lookup (form inventory);
+        # without, it is the windowed submissions fetch. The per-form branch
+        # must come first or forms_override would swallow it.
+        if path == "/forms/submissions" and params.get("formId"):
+            counts = load("form_counts.json")
+            return counts.get(params["formId"], {"meta": {"total": 0}, "submissions": []})
         if path == "/forms/submissions":
             if loc in forms_override:
                 return forms_override[loc]
             if loc in empty_locs:
                 return {"submissions": []}
             return load("form_submissions.json") if loc == "locA" else {"submissions": []}
+        if path == "/forms/":
+            if loc == "locA" and loc not in empty_locs:
+                return load("forms_list.json")
+            return {"forms": []}
+        if path == "/surveys/":
+            if loc == "locA" and loc not in empty_locs:
+                return load("surveys_list.json")
+            return {"surveys": []}
+        if path == "/surveys/submissions":
+            counts = load("survey_counts.json")
+            return counts.get(params.get("surveyId"), {"meta": {"total": 0}, "submissions": []})
+        if path == "/workflows/":
+            if loc in workflows_override:
+                return workflows_override[loc]
+            if loc == "locA" and loc not in empty_locs:
+                return load("workflows.json")
+            return {"workflows": []}
         # Conversations search doubles as both the recent-activity scan (no
         # contactId) and the per-contact lookup used by speed-to-lead and the
         # parent relationship metrics (contactId present).
@@ -196,7 +222,8 @@ class FakeClient:
 
 def make_factory(empty_locs: set[str] | None = None,
                  deny_by_loc: dict[str, frozenset] | None = None,
-                 forms_override: dict[str, dict] | None = None):
+                 forms_override: dict[str, dict] | None = None,
+                 workflows_override: dict[str, dict] | None = None):
     """Build a client factory to pass as main.run(client_factory=...).
 
     Mirrors how run() constructs one GHLClient per token. FakeStore stores
@@ -204,7 +231,8 @@ def make_factory(empty_locs: set[str] | None = None,
     the prefix off to know which location a client is for and attach that
     location's deny-list.
     """
-    routes = make_routes(empty_locs=empty_locs, forms_override=forms_override)
+    routes = make_routes(empty_locs=empty_locs, forms_override=forms_override,
+                         workflows_override=workflows_override)
     deny_by_loc = deny_by_loc or {}
 
     def factory(token: str) -> FakeClient:
@@ -236,6 +264,7 @@ class FakeStore:
         self.flags: dict = {}
         self.lead_events: dict = {}
         self.lead_history: dict = {}
+        self.form_health: dict = {}
         self.token_status: dict = {}
         self.subaccount_updates: dict = {}
         self.runs: list = []
@@ -285,6 +314,9 @@ class FakeStore:
     def upsert_lead_history(self, location_id, rows):
         for row in rows:
             self.lead_history[(location_id, row["week_start"])] = row
+
+    def upsert_form_health(self, location_id, snapshot_date, rows):
+        self.form_health[(location_id, snapshot_date)] = rows
 
     def replace_flags(self, location_id, snapshot_date, flags):
         self.flags[(location_id, snapshot_date)] = flags

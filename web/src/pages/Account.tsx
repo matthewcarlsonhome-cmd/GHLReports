@@ -49,11 +49,13 @@ import type {
   AccountNoteRow,
   FlagAckRow,
   FlagRow,
+  FormHealthRow,
   HistoryRow,
   LeadEventRow,
   LeadHistoryRow,
   SnapshotRow,
   SubaccountRow,
+  TagCheckRow,
 } from "../lib/database.types";
 import {
   coverageQuality,
@@ -115,6 +117,8 @@ type Loaded = {
   weekly: LeadHistoryRow[];
   history: HistoryRow[];
   leadEvents: LeadEventRow[];
+  formHealth: FormHealthRow[];
+  tagCheck: TagCheckRow | null;
 };
 
 // Expand/collapse wrapper for the detail tables. `defaultOpen` is only the
@@ -171,7 +175,7 @@ export default function Account() {
     const snapshot = (snapRows?.[0] ?? null) as SnapshotRow | null;
 
     const twelveWeeksAgo = new Date(Date.now() - 12 * 7 * 86400 * 1000).toISOString().slice(0, 10);
-    const [flagsRes, acksRes, notesRes, weeklyRes, historyRes, eventsRes] = await Promise.all([
+    const [flagsRes, acksRes, notesRes, weeklyRes, historyRes, eventsRes, formHealthRes, tagRes] = await Promise.all([
       // flags for the current snapshot only (no snapshot -> empty stub kept
       // Promise-shaped so destructuring stays uniform)
       snapshot
@@ -192,6 +196,15 @@ export default function Account() {
       supabase.from("lead_events").select("*").eq("location_id", locationId)
         .gte("created_at", new Date(Date.now() - 30 * 86400 * 1000).toISOString())
         .order("created_at", { ascending: false }).limit(500),
+      // per-form / per-survey health for the latest snapshot date
+      snapshot
+        ? supabase.from("form_health").select("*").eq("location_id", locationId)
+            .eq("snapshot_date", snapshot.snapshot_date)
+        : Promise.resolve({ data: [] as FormHealthRow[] }),
+      // newest tag/pixel check (empty until the tag checker has run for
+      // this account — the card hides itself in that case)
+      supabase.from("tag_checks").select("*").eq("location_id", locationId)
+        .order("checked_at", { ascending: false }).limit(1),
     ]);
 
     setData({
@@ -203,6 +216,8 @@ export default function Account() {
       weekly: (weeklyRes.data ?? []) as LeadHistoryRow[],
       history: (historyRes.data ?? []) as HistoryRow[],
       leadEvents: (eventsRes.data ?? []) as LeadEventRow[],
+      formHealth: (formHealthRes.data ?? []) as FormHealthRow[],
+      tagCheck: ((tagRes.data ?? []) as TagCheckRow[])[0] ?? null,
     });
   }, [locationId]);
 
@@ -803,6 +818,105 @@ export default function Account() {
               ]} />
           </Collapsible>
         </>
+      ) : null}
+
+      {/* 7c. per-form / per-survey health (docs/FORMS-INTEGRATION.md Phase 1):
+          every form and survey in the account with its own status. Silent
+          entries sort first; auto-opens whenever any entry is silent. */}
+      {data.formHealth.length > 0 ? (
+        <Collapsible
+          title={`Forms & surveys (${data.formHealth.length}, ${
+            data.formHealth.filter((f) => f.status === "silent").length} silent)`}
+          defaultOpen={data.formHealth.some((f) => f.status === "silent")}
+        >
+          <div className="rounded border border-grid bg-surface p-3">
+            <DetailTable
+              rows={[...data.formHealth].sort((a, b) => {
+                const order = { silent: 0, unknown: 1, active: 2, new: 3, no_leads: 4 };
+                return (order[a.status] ?? 9) - (order[b.status] ?? 9)
+                  || a.name.localeCompare(b.name);
+              })}
+              empty="No forms or surveys found in this account."
+              columns={[
+                { header: "Name", cell: (f) => f.name },
+                { header: "Type", cell: (f) => f.kind },
+                {
+                  header: "Status",
+                  cell: (f) => {
+                    // icon + label, never color alone
+                    const meta: Record<string, [string, string]> = {
+                      active: ["✓ active", "text-status-good-text"],
+                      silent: ["⚠ went silent", "text-status-critical"],
+                      new: ["+ new", "text-series"],
+                      no_leads: ["○ no leads yet", "text-muted"],
+                      unknown: ["? unknown", "text-muted"],
+                    };
+                    const [label, tone] = meta[f.status] ?? [f.status, "text-ink-2"];
+                    return <span className={`font-medium ${tone}`}>{label}</span>;
+                  },
+                },
+                { header: "Submissions", cell: (f) => fmtNum(f.submissions_total), numeric: true },
+                {
+                  header: "Last submission",
+                  cell: (f) => (f.last_submission_at ? fmtDateTime(f.last_submission_at) : "—"),
+                },
+                {
+                  header: "Quiet days",
+                  cell: (f) => {
+                    if (!f.last_submission_at) return "—";
+                    const days = Math.floor(
+                      (Date.now() - new Date(f.last_submission_at).getTime()) / 86400000);
+                    return String(days);
+                  },
+                  numeric: true,
+                },
+              ]}
+            />
+            <p className="mt-1 text-xxs text-muted">
+              "Went silent" counts business days only — a form quiet over the
+              weekend is not an alarm. Checked nightly by the collector.
+            </p>
+          </div>
+        </Collapsible>
+      ) : null}
+
+      {/* 7d. tracking tags (Phase 2): did the client site's pixels actually
+          fire when the tag checker loaded it? Hidden until a check exists. */}
+      {data.tagCheck ? (
+        <Collapsible
+          title={`Tracking tags — ${
+            data.tagCheck.status === "ok" ? "all firing"
+              : data.tagCheck.status === "alert" ? "problem detected" : "check failed"}`}
+          defaultOpen={data.tagCheck.status !== "ok"}
+        >
+          <div className="rounded border border-grid bg-surface p-3">
+            <p className="mb-2 text-xxs text-muted">
+              Checked {fmtDateTime(data.tagCheck.checked_at)} on{" "}
+              <ExternalLink href={data.tagCheck.url}>{data.tagCheck.url}</ExternalLink>
+            </p>
+            {data.tagCheck.error ? (
+              <p className="text-xs text-status-critical">
+                The page could not be checked: {data.tagCheck.error}
+              </p>
+            ) : (
+              <DetailTable
+                rows={data.tagCheck.results}
+                empty="No tag expectations configured for this account."
+                columns={[
+                  { header: "Tag", cell: (r) => r.type },
+                  { header: "Expected ID", cell: (r) => r.id ?? "any" },
+                  {
+                    header: "Result",
+                    cell: (r) =>
+                      r.fired === true ? <span className="font-medium text-status-good-text">✓ fired</span>
+                        : r.fired === false ? <span className="font-medium text-status-critical">✗ did not fire</span>
+                          : <span className="text-muted">? {r.note ?? "unknown"}</span>,
+                  },
+                ]}
+              />
+            )}
+          </div>
+        </Collapsible>
       ) : null}
 
       {/* 8. coverage: the honesty layer */}

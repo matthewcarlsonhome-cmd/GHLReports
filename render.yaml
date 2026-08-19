@@ -1,3 +1,7 @@
+# OPTIONAL ALTERNATIVE — the primary scheduler is GitHub Actions
+# (.github/workflows/collector.yml). Keep exactly ONE of the two enabled:
+# if the GitHub Actions workflow is running nightly, suspend or delete the
+# Render cron job so the collector doesn't run twice per night.
 services:
   - type: cron
     name: ghl-health-collector

@@ -275,6 +275,34 @@ export interface PortfolioRow {
   top_action: string | null;
   state: PortfolioState;
   calls_missed_7d: number | null;
+  forms_silent_ct: number | null;
+}
+
+// One row of the form_health table: per-form / per-survey status from the
+// nightly inventory check (docs/FORMS-INTEGRATION.md Phase 1).
+export interface FormHealthRow {
+  id: number;
+  location_id: string;
+  snapshot_date: string;
+  kind: "form" | "survey";
+  form_id: string;
+  name: string;
+  status: "active" | "silent" | "no_leads" | "new" | "unknown";
+  submissions_total: number | null;
+  last_submission_at: string | null;
+  form_created_at: string | null;
+}
+
+// One row of the tag_checks table: did the client site's tracking tags fire
+// when the tag checker loaded it? (docs/FORMS-INTEGRATION.md Phase 2)
+export interface TagCheckRow {
+  id: number;
+  location_id: string;
+  checked_at: string;
+  url: string;
+  status: "ok" | "alert" | "error";
+  results: { type: string; id: string | null; fired: boolean | null; note?: string }[];
+  error: string | null;
 }
 
 // One row of the v_history VIEW: a slim per-day slice of past snapshots used

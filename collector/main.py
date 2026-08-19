@@ -560,6 +560,36 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         cov.add_note("blogs", "no publish found in 90d")
     social_stats = metrics.social_account_stats(social_accounts)
 
+    # Per-form / per-survey health + workflow inventory (Phase 1 of
+    # docs/FORMS-INTEGRATION.md). Every form and survey in the account gets a
+    # status (active / silent / no_leads / new / unknown); the rows land in
+    # the form_health table, the silent ones become flags, and the workflow
+    # counts feed the WORKFLOWS_NONE_PUBLISHED rule. Surveys/workflows need
+    # scopes older tokens don't have yet — their fetchers record "skipped"
+    # (never gate-tripping "unavailable") until the scope is granted.
+    local_today = now_utc.astimezone(tz).date()
+    form_inv = fetchers.fetch_form_inventory(client, cov, location_id, max_pages)
+    survey_inv = fetchers.fetch_surveys(client, cov, location_id, max_pages)
+    workflows = fetchers.fetch_workflows(client, cov, location_id)
+    form_health_rows: list[dict] = []
+    for kind, inventory in (("form", form_inv), ("survey", survey_inv)):
+        for item in inventory or []:
+            last_dt = metrics.parse_ts(item.get("last_at"))
+            created_dt = metrics.parse_ts(item.get("created_at"))
+            form_health_rows.append({
+                "location_id": location_id,
+                "snapshot_date": run_date.isoformat(),
+                "kind": kind,
+                "form_id": item["form_id"],
+                "name": item["name"],
+                "status": metrics.classify_form(
+                    item.get("total"), item.get("last_at"), item.get("created_at"),
+                    local_today, silent_days=int(thresholds["form_silent_days"])),
+                "submissions_total": item.get("total"),
+                "last_submission_at": last_dt.isoformat() if last_dt else None,
+                "form_created_at": created_dt.isoformat() if created_dt else None,
+            })
+
     # Relationship metrics (is SSP's own relationship with this client
     # healthy?) come from the PARENT account: invoices/events were indexed by
     # contact id in build_parent_context, keyed here by this location's
@@ -696,6 +726,21 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         details["client"]["deep_link"] = metrics.link_contact(
             base, parent_ctx.location_id, client_contact_id)
 
+    # Compact form-health summary for the details blob: the silent lists feed
+    # the FORM_WENT_SILENT / SURVEY_WENT_SILENT flags and the drilldown's
+    # Do-next copy; the full per-form rows live in the form_health table.
+    def _silent_rows(kind: str) -> list[dict]:
+        return [{"form_id": r["form_id"], "name": r["name"],
+                 "last_submission_at": r["last_submission_at"]}
+                for r in form_health_rows if r["kind"] == kind and r["status"] == "silent"]
+    details["form_health"] = {
+        "forms_total": len(form_inv or []),
+        "surveys_total": len(survey_inv or []),
+        "forms_silent": _silent_rows("form"),
+        "surveys_silent": _silent_rows("survey"),
+        "workflows": workflows,
+    }
+
     # The snapshot row: one row per location per day (the upsert key), with
     # gate verdict, coverage report, all metric columns, and the details blob.
     snapshot = {
@@ -733,6 +778,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "snapshot": snapshot,
         "lead_events": lead_event_rows,
         "lead_history": history_rows,
+        "form_health": form_health_rows,
         "metrics": metric_values,
         "details": details,
         "gate_passed": gate_passed,
@@ -922,6 +968,18 @@ def probe_location(client: GHLClient, sub: dict, now_utc: datetime) -> str:
         "endAt": now_utc.date().isoformat(),
         "limit": 2, "page": 1,
     }, pick=first_of("submissions", "data"))
+    # Form/survey inventory + workflows (docs/FORMS-INTEGRATION.md Phase 1).
+    # Surveys and workflows 401 until their scopes are granted — that is an
+    # expected result on older tokens, not a probe failure.
+    show("Forms list", "GET", "/forms/",
+         params={"locationId": location_id, "limit": 2, "skip": 0},
+         pick=first_of("forms", "data", "list"))
+    show("Surveys list (needs surveys.readonly)", "GET", "/surveys/",
+         params={"locationId": location_id, "limit": 2, "skip": 0},
+         pick=first_of("surveys", "data", "list"))
+    show("Workflows (needs workflows.readonly)", "GET", "/workflows/",
+         params={"locationId": location_id},
+         pick=first_of("workflows", "list", "data"))
 
     status, data, error = client.try_request("GET", "/conversations/search", params={
         "locationId": location_id, "limit": 2, "sortBy": "last_message_date", "sort": "desc"})
@@ -1306,6 +1364,8 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             store.upsert_snapshot(result["snapshot"])
             store.upsert_lead_events(result["lead_events"])
             store.upsert_lead_history(location_id, result["lead_history"])
+            store.upsert_form_health(location_id, run_date.isoformat(),
+                                     result.get("form_health") or [])
         results[location_id] = {**result, "sub": sub}
 
         # Gate hold path: a held snapshot IS written (with gate_passed=False)

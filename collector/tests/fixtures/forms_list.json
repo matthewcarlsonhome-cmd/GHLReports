@@ -1,0 +1,9 @@
+{
+  "forms": [
+    { "id": "formA1", "name": "Pool Quote Request", "createdAt": "2026-01-05T12:00:00.000Z" },
+    { "id": "formA2", "name": "Hot Tub Brochure", "createdAt": "2026-01-05T12:00:00.000Z" },
+    { "id": "formA3", "name": "Friday Special", "createdAt": "2026-02-01T12:00:00.000Z" },
+    { "id": "formA4", "name": "New Landing Page", "createdAt": "2026-08-10T12:00:00.000Z" },
+    { "id": "formA5", "name": "Old Contest", "createdAt": "2026-03-01T12:00:00.000Z" }
+  ]
+}
