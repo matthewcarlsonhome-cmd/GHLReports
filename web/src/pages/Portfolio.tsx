@@ -20,7 +20,8 @@ import { Sparkline } from "../components/Sparkline";
 import { EmptyState, QualityBadge, Section, SeverityChip, Skeleton, StateIcon } from "../components/ui";
 import type { FlagRow, LeadHistoryRow, PortfolioRow, PortfolioState } from "../lib/database.types";
 import { dataQuality, fmtDate, fmtHours, fmtMinutes, fmtMoney, fmtNum, fmtPct, UNKNOWN } from "../lib/format";
-import { type Band, bandOf, type Grade, gradeAccount, humanizeCode } from "../lib/grade";
+import { type Band, bandOf, humanizeCode } from "../lib/grade";
+import { buildAccountInsight } from "../lib/insights";
 import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
 import { acknowledgeFlag } from "../lib/writes";
@@ -67,34 +68,21 @@ function loadColumns(): Set<ExpandedKey> {
   return new Set<ExpandedKey>(["stale", "quality"]);
 }
 
-// Sort comparator #1 (the default): grade worst-first. Lower score = worse
-// account = higher on the page; no-data rows (score -1) sink to the bottom
-// so real problems outrank missing tokens. Ties break on attention_score,
-// then biggest lead drop. [...rows] copies before sorting because Array.sort
-// mutates and React state must not be mutated in place.
-function sortByGrade(rows: PortfolioRow[], grades: Record<string, Grade>): PortfolioRow[] {
+// Sort comparator #1 (the default): most attention needed first. Higher
+// attention_score (3 per unacked red, 1 per unacked amber) wins; ties break
+// on the leads delta (biggest drop first); no-data rows sink to the bottom
+// so real problems outrank missing tokens. [...rows] copies before sorting
+// because Array.sort mutates and React state must not be mutated in place.
+function sortByAttention(rows: PortfolioRow[]): PortfolioRow[] {
   return [...rows].sort((a, b) => {
-    const ga = grades[a.location_id]?.score ?? 100;
-    const gb = grades[b.location_id]?.score ?? 100;
-    // no-data (-1) is "unknown", not "worst" — park it after F-grades
-    const sa = ga < 0 ? 101 : ga;
-    const sb = gb < 0 ? 101 : gb;
-    if (sa !== sb) return sa - sb;
+    const aNoData = a.state === "no_data" ? 1 : 0;
+    const bNoData = b.state === "no_data" ? 1 : 0;
+    if (aNoData !== bNoData) return aNoData - bNoData;
     if (b.attention_score !== a.attention_score) return b.attention_score - a.attention_score;
     const da = a.leads_delta_pct ?? Number.POSITIVE_INFINITY;
     const db = b.leads_delta_pct ?? Number.POSITIVE_INFINITY;
     return da - db;
   });
-}
-
-// Grade letter styling: color reinforces the letter, never replaces it.
-function gradeClasses(letter: Grade["letter"]): string {
-  switch (letter) {
-    case "A": case "B": return "bg-status-good/10 text-status-good-text";
-    case "C": return "bg-status-warning/20 text-ink";
-    case "D": case "F": return "bg-status-critical/10 text-status-critical";
-    default: return "bg-plane text-muted";
-  }
 }
 
 const BAND_META: { band: Band; icon: string; label: string }[] = [
@@ -224,13 +212,6 @@ export default function Portfolio() {
     return () => clearInterval(timer);
   }, [load]);
 
-  // One grade per account, memoized off the raw rows.
-  const grades = useMemo(() => {
-    const out: Record<string, Grade> = {};
-    for (const row of rows ?? []) out[row.location_id] = gradeAccount(row);
-    return out;
-  }, [rows]);
-
   // The heart of the page, in two stages: baseVisible applies every filter
   // EXCEPT the triage band (so the band chips can show counts for the whole
   // current view), then `visible` applies the band chip on top and sorts.
@@ -254,8 +235,8 @@ export default function Portfolio() {
 
   const visible = useMemo(() => {
     const banded = band ? baseVisible.filter((row) => bandOf(row) === band) : baseVisible;
-    return sortMode === "mrr" ? sortByMrrAtRisk(banded) : sortByGrade(banded, grades);
-  }, [baseVisible, band, sortMode, grades]);
+    return sortMode === "mrr" ? sortByMrrAtRisk(banded) : sortByAttention(banded);
+  }, [baseVisible, band, sortMode]);
 
   // Chip counts + the "Data as of" stamp for the triage header.
   const bandCounts = useMemo(() => {
@@ -272,12 +253,25 @@ export default function Portfolio() {
   // (flags_new compares against one week prior, so the honest label is
   // "new this week".) Sorted worst-grade-first, capped for readability.
   const overnight = useMemo(() =>
-    sortByGrade(baseVisible.filter((r) => (r.flags_new?.length ?? 0) > 0), grades)
+    sortByAttention(baseVisible.filter((r) => (r.flags_new?.length ?? 0) > 0))
       .map((r) => ({
         row: r,
         codes: (r.flags_new ?? []).map(humanizeCode).join(", "),
       })),
-  [baseVisible, grades]);
+  [baseVisible]);
+
+  // The team report: one insight line per account with data, worst first;
+  // steady and awaiting-setup accounts roll up into single quiet lines.
+  const teamReport = useMemo(() => {
+    const withData = sortByAttention(baseVisible.filter((r) => r.state !== "no_data"))
+      .map(buildAccountInsight);
+    return {
+      active: withData.filter((i) => !i.steady),
+      steady: withData.filter((i) => i.steady),
+      noData: baseVisible.filter((r) => r.state === "no_data"),
+    };
+  }, [baseVisible]);
+  const [reportOpen, setReportOpen] = useState(true);
 
   // Dropdown option lists derived from the data itself (deduped via Set).
   const verticals = useMemo(
@@ -369,7 +363,7 @@ export default function Portfolio() {
   // to trigger the save dialog. Exports exactly what's visible — current
   // filters, current sort, currently chosen expanded columns.
   function exportCsv() {
-    const headers = ["account", "am", "grade", "state", "red", "amber", "acked", "new_flags",
+    const headers = ["account", "am", "state", "red", "amber", "acked", "new_flags",
       "leads_7d", "delta_pct", "peer_delta_pct", "speed_median_min", "missed_calls",
       "mrr", "forms_silent", "top_action", ...[...columns]];
     const lines = [headers.join(",")];
@@ -387,7 +381,7 @@ export default function Portfolio() {
         quality: dataQuality(row), snapshot: row.snapshot_date,
       };
       lines.push([
-        row.name, row.am_email, grades[row.location_id]?.letter ?? "",
+        row.name, row.am_email,
         row.state, row.red, row.amber, row.acked,
         (row.flags_new ?? []).join("; "),
         row.leads_new_7d, row.leads_delta_pct, row.peer_median_delta_pct,
@@ -444,19 +438,6 @@ export default function Portfolio() {
     }
   }
 
-  // The grade badge, with its full deduction list on hover — the grade must
-  // never be a number nobody can explain.
-  function gradeBadge(row: PortfolioRow) {
-    const grade = grades[row.location_id];
-    if (!grade) return null;
-    return (
-      <span title={`Score ${grade.score < 0 ? "—" : grade.score}/100\n${grade.reasons.join("\n")}`}
-            className={`inline-block min-w-[1.4rem] rounded px-1.5 py-0.5 text-center text-xs font-semibold ${gradeClasses(grade.letter)}`}>
-        {grade.letter}
-      </span>
-    );
-  }
-
   // Desktop layout: the full table ("hidden ... md:block" = only at >=768px;
   // renderCards below is its mobile twin). Plain function, not a component —
   // it can read all the surrounding state directly.
@@ -467,7 +448,6 @@ export default function Portfolio() {
           <thead>
             <tr className="border-b border-grid text-left text-xxs uppercase tracking-wide text-muted">
               <th className="px-2 py-1.5 font-medium">Account</th>
-              <th className="px-2 py-1.5 font-medium">Grade</th>
               <th className="px-2 py-1.5 font-medium">State / flags</th>
               <th className="px-2 py-1.5 font-medium">Leads 7d</th>
               <th className="px-2 py-1.5 font-medium">8 wk</th>
@@ -508,7 +488,6 @@ export default function Portfolio() {
                     </Link>
                     {row.is_parent ? <span className="ml-1 text-xxs text-muted">(SSP)</span> : null}
                   </td>
-                  <td className="px-2 py-1.5">{gradeBadge(row)}</td>
                   <td className="px-2 py-1.5">
                     <div className="flex items-center gap-1">
                       <StateIcon state={row.state} />
@@ -627,7 +606,6 @@ export default function Portfolio() {
     return (
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
         {sectionRows.map((row) => {
-          const grade = grades[row.location_id];
           const flags = (flagsByLoc[row.location_id] ?? [])
             .filter((f) => f.severity !== "info")
             .sort((a, b) => (a.severity === "red" ? 0 : 1) - (b.severity === "red" ? 0 : 1));
@@ -640,7 +618,6 @@ export default function Portfolio() {
                   } bg-surface hover:bg-plane`}>
               <div className="mb-1 flex items-start justify-between gap-1">
                 <span className="truncate text-xs font-medium" title={row.name}>{row.name}</span>
-                {gradeBadge(row)}
               </div>
               <div className="flex items-center gap-1 text-xxs text-ink-2">
                 <StateIcon state={row.state} />
@@ -664,7 +641,7 @@ export default function Portfolio() {
                 }`} title={worst.title}>
                   {humanizeCode(worst.code)}
                 </div>
-              ) : grade?.letter === "A" ? (
+              ) : row.state === "steady" ? (
                 <div className="mt-1 text-xxs text-status-good-text">all clear</div>
               ) : null}
             </Link>
@@ -740,7 +717,7 @@ export default function Portfolio() {
         </select>
         <select value={sortMode} onChange={(e) => setParam("sort", e.target.value === "mrr" ? "mrr" : null)}
                 className="rounded border border-grid bg-surface px-1.5 py-1 text-xs text-ink-2">
-          <option value="grade">Sort: worst grade first</option>
+          <option value="grade">Sort: needs attention first</option>
           <option value="mrr">Sort: MRR at risk</option>
         </select>
         {/* table vs tile-wall layout toggle (the wall is the big-monitor view) */}
@@ -810,6 +787,63 @@ export default function Portfolio() {
         <span className="ml-auto text-xxs text-muted">
           {dataAsOf ? `Data as of ${fmtDate(dataAsOf)}` : "No data yet"}
         </span>
+      </div>
+
+      {/* The team report: one plain-sentence insight per account, worst
+          first — the read-aloud version of the table below. Every phrase is
+          template-filled from the same metrics the table shows. */}
+      <div className="mb-3 rounded border border-grid bg-surface">
+        <button onClick={() => setReportOpen((v) => !v)}
+                className="flex w-full items-baseline justify-between px-3 py-2 text-left">
+          <span className="text-sm font-semibold text-ink">
+            Team report{dataAsOf ? ` — ${fmtDate(dataAsOf)}` : ""}
+          </span>
+          <span className="text-xxs text-ink-2 underline underline-offset-2">
+            {reportOpen ? "collapse" : "expand"}
+          </span>
+        </button>
+        {reportOpen ? (
+          <div className="border-t border-grid/60 px-3 py-2">
+            {teamReport.active.length === 0 && teamReport.steady.length === 0 ? (
+              <p className="py-1 text-xs text-muted">No account data yet — insights appear after the first collector run.</p>
+            ) : null}
+            <ul className="space-y-1.5">
+              {teamReport.active.map(({ row, headline, issues, action }) => (
+                <li key={row.location_id} className="text-xs text-ink-2">
+                  <StateIcon state={row.state} />{" "}
+                  <Link to={`/account/${row.location_id}`}
+                        className="font-medium text-ink underline decoration-hairline underline-offset-2">
+                    {row.name}
+                  </Link>{" "}
+                  — {headline}
+                  {issues.length ? <>; {issues.join("; ")}</> : null}.
+                  {action ? <span className="text-muted"> → {action}</span> : null}
+                </li>
+              ))}
+            </ul>
+            {teamReport.steady.length > 0 ? (
+              <p className="mt-2 text-xs text-ink-2">
+                <span className="font-medium text-status-good-text">✓ Steady ({teamReport.steady.length}):</span>{" "}
+                {teamReport.steady.map(({ row }, i) => (
+                  <span key={row.location_id}>
+                    {i > 0 ? ", " : ""}
+                    <Link to={`/account/${row.location_id}`} className="underline decoration-hairline underline-offset-2">
+                      {row.name}
+                    </Link>
+                  </span>
+                ))}{" "}
+                — no open issues.
+              </p>
+            ) : null}
+            {teamReport.noData.length > 0 ? (
+              <p className="mt-1.5 text-xs text-muted">
+                ○ Awaiting setup ({teamReport.noData.length}):{" "}
+                {teamReport.noData.map((r) => r.name).join(", ")}
+                {" "}— data appears once each account's GHL token is added.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* "New this week" strip — the morning briefing. flags_new compares to
