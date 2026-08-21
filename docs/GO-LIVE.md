@@ -326,21 +326,35 @@ console for a `frame-ancestors` violation (extend the CSP list in
 - [ ] Every staff member is pre-created and can sign in
 - [ ] Inside GHL: the iframe renders and you're already signed in
 
-## Parked: Monday digest emails
+## Monday digest emails (optional — on when SMTP is configured)
 
-The collector contains an optional Monday-morning email digest per account
-manager. It is **off** and stays off until an email-sending decision is
-made — it does nothing unless explicitly configured, and no setup step in
-this guide enables it. The **Weekly summary** button on each account page
-covers the same need with zero email plumbing: it builds the copy-ready
-client update in the browser.
+The collector sends one Monday-morning email per account manager: their
+accounts needing attention (with flag actions and MRR), what changed this
+week, a steady list, and a loud no-data section. It sends through the same
+Google Workspace SMTP the auth mailer uses — no third-party email service.
+
+To enable, set on the scheduler (Render env vars or GitHub Actions secrets):
+
+| Variable | Value |
+|---|---|
+| `SMTP_USER` | the Workspace mailbox (e.g. `mcarlson@smallscreenproducer.com`) |
+| `SMTP_PASS` | that account's Google **app password** |
+| `DIGEST_CC` | optional — comma list CC'd on every digest (e.g. a manager) |
+
+Also populate `subaccounts.am_email` for each client — that's what routes
+each account into its AM's email. Unset SMTP variables = the digest is
+skipped as a logged no-op; recipients are restricted to
+`@smallscreenproducer.com` either way. Preview without sending:
+`python -m collector.main --digest --dry-run`. The **Weekly summary** button
+on each account page remains the client-facing counterpart.
 
 ## Troubleshooting
 
 | Symptom | Likely cause → fix |
 |---|---|
 | Netlify deploy failed / built old code | **Deploys → Trigger deploy → Clear cache and deploy site** — this rebuilds the latest commit of the tracked branch. Check the deploy row shows the newest commit hash, and Site configuration → Build & deploy → Branches has Production branch = the repo default. Every future `git push` deploys automatically. Still failing → open the failed deploy's log and read the first red error |
-| Login email never arrives | The built-in mailer only delivers to Supabase **organization members** — accept the Team invite from Part 2.4; it also sends only a few emails per hour, so wait a bit and check spam. Team-scale fix: the Google Workspace SMTP step (L3) |
+| Login email never arrives | Without custom SMTP, the built-in mailer only delivers to Supabase **organization members** and only a few per hour. Fix: Authentication → Emails → SMTP Settings → enable Custom SMTP with the Google Workspace app password, then raise Authentication → Rate Limits |
+| "Not a registered staff account" but the user IS in Auth → Users | The user was created without **Auto Confirm User** — an unconfirmed user + disabled sign-ups reads as "signups not allowed". Fix: tick Auto Confirm when creating, or confirm existing users (`update auth.users set email_confirmed_at = now() where email_confirmed_at is null and email like '%@smallscreenproducer.com'`) |
 | Email arrives with a link but no code | `{{ .Token }}` missing from a template (Part 2.5) |
 | Account shows "no data — token" | Vault secret name typo — must be `ghl_pit_<location_id>` exactly |
 | A source shows SOURCE UNAVAILABLE / 403 in `/runs` | The PIT lacks that scope — edit the Private Integration's scopes in GHL (no new token) and re-run |

@@ -1,5 +1,6 @@
 """Monday digest builder (Tier 2): pure template fill, staff recipients only."""
 
+from .. import digest as digest_mod
 from ..digest import build_digests
 
 SUBS = [
@@ -65,3 +66,45 @@ def test_acked_flags_drop_out():
     lisa = digests["lisa@smallscreenproducer.com"]
     assert lisa["subject"] == "Account health — all steady"
     assert "Steady (2)" in lisa["text"]
+
+
+# -- SMTP transport -----------------------------------------------------------
+
+def test_send_skips_without_smtp_config(monkeypatch):
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+    msg = {"subject": "s", "text": "t", "html": "<pre>t</pre>"}
+    assert digest_mod.send_digests({"lisa@smallscreenproducer.com": msg}) == (0, 0)
+
+
+def test_send_via_smtp_filters_recipients_and_ccs_staff(monkeypatch):
+    sent_msgs = []
+
+    class FakeServer:
+        def login(self, user, password):
+            assert user == "mcarlson@smallscreenproducer.com"
+
+        def send_message(self, msg):
+            sent_msgs.append(msg)
+
+        def quit(self):
+            pass
+
+    monkeypatch.setenv("SMTP_USER", "mcarlson@smallscreenproducer.com")
+    monkeypatch.setenv("SMTP_PASS", "app-password")
+    # CC list mixes a staff address with an outsider; only staff survives.
+    monkeypatch.setenv("DIGEST_CC", "pvinje@smallscreenproducer.com, evil@example.com")
+    monkeypatch.delenv("DIGEST_FROM", raising=False)
+    monkeypatch.setattr(digest_mod.smtplib, "SMTP_SSL", lambda *a, **k: FakeServer())
+
+    sent, failed = digest_mod.send_digests({
+        "lisa@smallscreenproducer.com": {"subject": "s1", "text": "t1", "html": "<pre>t1</pre>"},
+        "outsider@gmail.com": {"subject": "s2", "text": "t2", "html": "<pre>t2</pre>"},
+    }, log=lambda *_: None)
+
+    assert (sent, failed) == (1, 0)          # the outsider To: was refused
+    assert len(sent_msgs) == 1
+    assert sent_msgs[0]["To"] == "lisa@smallscreenproducer.com"
+    assert sent_msgs[0]["From"] == "mcarlson@smallscreenproducer.com"
+    assert sent_msgs[0]["Cc"] == "pvinje@smallscreenproducer.com"
+    assert sent_msgs[0]["Subject"] == "s1"

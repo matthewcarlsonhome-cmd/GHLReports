@@ -1445,11 +1445,11 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
             f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
 
-    # Monday digest (Tier 2): sent at the end of the Monday run when Resend is
+    # Monday digest (Tier 2): sent at the end of the Monday run when SMTP is
     # configured. weekday() == 0 means Monday, judged by the snapshot date —
     # so the auto-send happens exactly once per week without a separate cron
     # entry, and any other day skips this block entirely. (send_digests is a
-    # no-op that logs when RESEND_API_KEY / DIGEST_FROM are unset.)
+    # no-op that logs when SMTP_USER / SMTP_PASS are unset.)
     if run_date.weekday() == 0:
         data = store.read_portfolio(run_date)
         digests = digest_mod.build_digests(

@@ -23,6 +23,14 @@ services:
         value: https://crm.smallscreenproducer.com
       - key: TZ
         value: America/Chicago
+      # Monday digest emails (optional): the same Google Workspace account +
+      # app password the Supabase auth mailer uses. Unset = digest skipped.
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: DIGEST_CC          # optional, comma list CC'd on every digest
+        sync: false
       # That is the complete secret set. PITs are in Supabase Vault, not here.
       #
       # One-off modes without a terminal: set COLLECTOR_ARGS in the Render

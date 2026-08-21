@@ -248,10 +248,11 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
   free `*.netlify.app` URL until the Later phase adds
   `health.smallscreenproducer.com`; `frame-ancestors` CSP for GHL hosts, no
   `X-Frame-Options`.
-- **Auth email**: Supabase's built-in mailer (delivers only to Supabase org
-  members, a few per hour — fine for admins). Team-scale rollout switches
-  SMTP to the agency's own Google Workspace (app password). No third-party
-  email service; Resend was removed from the design by decision.
+- **Auth email**: custom SMTP through the agency's own Google Workspace
+  (app password), configured in Supabase Auth — required for team logins;
+  the built-in mailer only delivered to Supabase org members. The Monday
+  digest reuses the same credentials. No third-party email service; Resend
+  was removed from the design by decision.
 - **GHL embed**: Custom Menu Link (spec section 10) is a Later-phase step —
   in-iframe sign-in requires the custom domain (same-site with
   `crm.smallscreenproducer.com`).
@@ -266,13 +267,15 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
 - **After-hours heatmap** — pure UI on `lead_events`: 7×24 grid in the
   account's timezone, sequential single-hue ramp, toggle between arrival
   counts and median first response, business hours outlined.
-- **Monday digest (parked — off by default)** — `collector/digest.py` builds
-  one plain-text email per AM (attention list with actions and MRR,
+- **Monday digest (on when SMTP is configured)** — `collector/digest.py`
+  builds one plain-text email per AM (attention list with actions and MRR,
   changed-this-week, steady/no-data rollups; acked flags excluded;
-  recipients restricted to `@smallscreenproducer.com`). Sending requires an
-  email API key that is deliberately NOT part of the go-live setup; with
-  nothing configured every run skips the digest as a logged no-op. Preview
-  without sending: `python -m collector.main --digest --dry-run`.
+  recipients — To and CC — restricted to `@smallscreenproducer.com`) and
+  sends it over the agency's own Google Workspace SMTP (`SMTP_USER` +
+  `SMTP_PASS` app password; optional `DIGEST_CC`, `DIGEST_FROM`,
+  `DASHBOARD_URL`). Routing comes from `subaccounts.am_email`. With nothing
+  configured every run skips the digest as a logged no-op. Preview without
+  sending: `python -m collector.main --digest --dry-run`.
 - **Copy-ready weekly client summary** — deterministic template fill in the
   drilldown (`web/src/lib/clientSummary.ts`): client-facing wording, unknown
   lines omitted, no flag/risk language, one-click copy.

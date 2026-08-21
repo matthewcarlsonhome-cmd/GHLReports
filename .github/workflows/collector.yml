@@ -18,6 +18,9 @@
 # Secrets (repo Settings -> Secrets and variables -> Actions):
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, COLLECTOR_KEY — the same three
 #   values Render used. PITs stay in the Supabase Vault, never here.
+#   Optional, for the Monday digest emails: SMTP_USER + SMTP_PASS (the same
+#   Google Workspace account + app password the Supabase auth mailer uses)
+#   and DIGEST_CC (comma list CC'd on every digest). Unset = digest skipped.
 name: Nightly collector
 
 on:
@@ -54,4 +57,7 @@ jobs:
           COLLECTOR_ARGS: ${{ inputs.args }}
           GHL_APP_BASE: https://crm.smallscreenproducer.com
           TZ: America/Chicago
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          DIGEST_CC: ${{ secrets.DIGEST_CC }}
         run: python -m collector.main

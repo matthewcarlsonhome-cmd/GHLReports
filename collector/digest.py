@@ -1,11 +1,15 @@
-"""Monday digest email per AM (spec Tier 2), sent by the collector via Resend.
+"""Monday digest email per AM (spec Tier 2), sent through SSP's own SMTP.
 
 Pure template fill — no LLM anywhere near the numbers. Digests go only to
 @smallscreenproducer.com addresses, and contain only what the dashboard
 already shows: account names, counts, amounts, and flag actions.
 
-Requires RESEND_API_KEY and DIGEST_FROM; without them the digest is skipped
-with a log line, never an error.
+Requires SMTP_USER and SMTP_PASS (the same Google Workspace account + app
+password the Supabase auth mailer uses); without them the digest is skipped
+with a log line, never an error. Optional: SMTP_HOST (default smtp.gmail.com),
+SMTP_PORT (default 465), DIGEST_FROM (default SMTP_USER), DIGEST_CC (comma
+list CC'd on every digest — e.g. a manager who wants the whole picture), and
+DASHBOARD_URL for the link in the footer.
 
 How this fits in
 ----------------
@@ -14,8 +18,7 @@ Monday collection run, and on demand via ``--digest`` (where ``--dry-run``
 prints the emails instead of sending them). Building and sending are split on
 purpose: build_digests is a pure function (data in, email dicts out — easy to
 test with fakes), while send_digests is the only part that talks to the
-network. Resend is a simple transactional-email API: one authenticated HTTP
-POST per email, nothing more.
+network — one SMTP connection, one message per AM.
 
 Key ideas to understand this file
 ---------------------------------
@@ -27,21 +30,24 @@ Key ideas to understand this file
   silent data gaps are how problems hide).
 * Acked flags: an AM can snooze a flag in the dashboard; snoozed codes are
   filtered out here so the digest only nags about NEW information.
-* Safety rails: recipients must be on the staff domain (a typo'd am_email
-  cannot leak client data outside the company), and the body is plain
-  numbers/names the dashboard already shows — no LLM-generated prose.
+* Safety rails: recipients (To and CC alike) must be on the staff domain (a
+  typo'd am_email cannot leak client data outside the company), and the body
+  is plain numbers/names the dashboard already shows — no LLM-generated prose.
 """
 
 from __future__ import annotations
 
+import contextlib
 import html
 import os
+import smtplib
+import ssl
+from email.message import EmailMessage
 
-import requests
-
-RESEND_URL = "https://api.resend.com/emails"
 STAFF_DOMAIN = "@smallscreenproducer.com"
-DASHBOARD_URL = "https://health.smallscreenproducer.com"
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "https://mlhaccountreports.netlify.app")
+SMTP_HOST_DEFAULT = "smtp.gmail.com"
+SMTP_PORT_DEFAULT = 465
 
 
 def _fmt_money(value) -> str:
@@ -170,39 +176,87 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
     return digests
 
 
+def _staff_addresses(raw: str) -> list[str]:
+    """Comma-separated addresses filtered to the staff domain, trimmed."""
+    return [a.strip() for a in raw.split(",")
+            if a.strip() and a.strip().lower().endswith(STAFF_DOMAIN)]
+
+
+def _connect(host: str, port: int, user: str, password: str) -> smtplib.SMTP:
+    """Open and authenticate one SMTP connection. Port 465 is implicit TLS
+    (what Gmail expects); anything else is treated as STARTTLS."""
+    context = ssl.create_default_context()
+    if port == 465:
+        server: smtplib.SMTP = smtplib.SMTP_SSL(host, port, context=context, timeout=30)
+    else:
+        server = smtplib.SMTP(host, port, timeout=30)
+        server.starttls(context=context)
+    server.login(user, password)
+    return server
+
+
 def send_digests(digests: dict[str, dict], log=print) -> tuple[int, int]:
-    """POST each digest to Resend. Returns (sent, failed).
+    """Send each digest over SMTP. Returns (sent, failed).
 
     The only networked function in the module — called by main.py on Mondays
-    (or --digest). Missing Resend config is a logged no-op, not an error, so
+    (or --digest). Missing SMTP config is a logged no-op, not an error, so
     environments without email (local dev, staging) collect normally. One
-    AM's failed email never blocks the others.
+    connection is reused across messages (with a single reconnect attempt if
+    the server drops it mid-batch); one AM's failed email never blocks the
+    others. Non-staff recipients are refused here as well as in
+    build_digests — belt and braces around client data.
     """
-    api_key = os.environ.get("RESEND_API_KEY")
-    from_addr = os.environ.get("DIGEST_FROM")
-    if not api_key or not from_addr:
-        log("digest: RESEND_API_KEY / DIGEST_FROM not set — skipping send")
+    user = os.environ.get("SMTP_USER")
+    password = os.environ.get("SMTP_PASS")
+    if not user or not password:
+        log("digest: SMTP_USER / SMTP_PASS not set — skipping send")
         return 0, 0
+    host = os.environ.get("SMTP_HOST", SMTP_HOST_DEFAULT)
+    try:
+        port = int(os.environ.get("SMTP_PORT", SMTP_PORT_DEFAULT))
+    except ValueError:
+        port = SMTP_PORT_DEFAULT
+    from_addr = os.environ.get("DIGEST_FROM") or user
+    cc = _staff_addresses(os.environ.get("DIGEST_CC", ""))
+
     sent = failed = 0
+    server: smtplib.SMTP | None = None
     for to, message in digests.items():
+        if not to.strip().lower().endswith(STAFF_DOMAIN):
+            log(f"digest: {to} skipped (not a staff address)")
+            continue
+        msg = EmailMessage()
+        msg["From"] = from_addr
+        msg["To"] = to
+        if cc:
+            msg["Cc"] = ", ".join(cc)
+        msg["Subject"] = message["subject"]
+        msg.set_content(message["text"])
+        msg.add_alternative(message["html"], subtype="html")
         try:
-            resp = requests.post(RESEND_URL, timeout=30, headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }, json={
-                "from": from_addr,
-                "to": [to],
-                "subject": message["subject"],
-                "text": message["text"],
-                "html": message["html"],
-            })
-            if resp.status_code < 300:
+            if server is None:
+                server = _connect(host, port, user, password)
+            server.send_message(msg)
+            sent += 1
+            log(f"digest: sent to {to}")
+        except (smtplib.SMTPException, OSError):
+            # The server may have dropped an idle connection — reconnect once
+            # for this message; a second failure counts as failed and the next
+            # message starts fresh.
+            with contextlib.suppress(smtplib.SMTPException, OSError):
+                if server is not None:
+                    server.quit()
+            server = None
+            try:
+                server = _connect(host, port, user, password)
+                server.send_message(msg)
                 sent += 1
-                log(f"digest: sent to {to}")
-            else:
+                log(f"digest: sent to {to} (after reconnect)")
+            except (smtplib.SMTPException, OSError) as exc:
                 failed += 1
-                log(f"digest: {to} failed (HTTP {resp.status_code})")
-        except requests.RequestException as exc:
-            failed += 1
-            log(f"digest: {to} failed ({type(exc).__name__})")
+                log(f"digest: {to} failed ({type(exc).__name__})")
+                server = None
+    if server is not None:
+        with contextlib.suppress(smtplib.SMTPException, OSError):
+            server.quit()
     return sent, failed
