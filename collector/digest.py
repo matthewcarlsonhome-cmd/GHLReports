@@ -389,10 +389,12 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
     snapshots, flags, and acked codes), so main.py can pipe one into the
     other; tests build the inputs by hand.
     """
-    # Group client accounts (never the parent) under each AM's email.
+    # Group accounts under each AM's email. The parent (SSP itself) is
+    # included on purpose — its own pipeline and forms deserve the same
+    # Monday scrutiny as any client's.
     by_am: dict[str, list[dict]] = {}
     for sub in subs:
-        if sub.get("is_parent") or not sub.get("active", True):
+        if not sub.get("active", True):
             continue
         am = (sub.get("am_email") or "").strip().lower()
         if not am.endswith(STAFF_DOMAIN):

@@ -39,7 +39,9 @@ def build(acked=None):
 
 def test_grouping_and_recipient_filtering():
     digests = build()
-    assert set(digests) == {"lisa@smallscreenproducer.com", "lauren@smallscreenproducer.com"}
+    # The parent (SSP) is included like any account, under its own AM email.
+    assert set(digests) == {"lisa@smallscreenproducer.com", "lauren@smallscreenproducer.com",
+                            "matthew@smallscreenproducer.com"}
     # the parent and the non-staff AM never receive anything
 
 
