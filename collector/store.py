@@ -149,7 +149,11 @@ class Store:
             "p_location_id": location_id,
             "p_collector_key": self.collector_key,
         }).execute()
-        return result.data or None
+        # Tokens are pasted into the Vault UI by hand; a stray space or
+        # newline around the paste would reach GHL inside the Authorization
+        # header and read as an invalid token. Strip it here, once, forever.
+        token = (result.data or "").strip()
+        return token or None
 
     def set_pit(self, location_id: str, token: str) -> bool:
         """Store/rotate a token in Vault (used by tools/pit.py, not the run)."""
