@@ -72,7 +72,7 @@ def test_payload_is_flat_and_carries_pipeline_context():
     assert all(isinstance(v, (str, int, float)) for v in payload.values()), \
         "GHL cannot map nested webhook fields"
     assert payload["account_name"] == "Softub Express"
-    assert payload["dashboard_url"].endswith("/account/softub")
+    assert payload["dashboard_url"].endswith("/account/locA")   # SPA routes by location_id
     assert payload["opps_open"] == 35 and payload["opps_moved_30d"] == 0
 
 

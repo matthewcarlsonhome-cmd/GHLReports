@@ -105,7 +105,7 @@ def _account_summary(sub: dict, snapshot: dict | None, flags: list[dict],
     for the dashboard.
     """
     name = sub.get("name") or sub.get("slug") or sub.get("location_id")
-    info = {"name": name, "slug": sub.get("slug") or "", "mrr": sub.get("mrr"),
+    info = {"name": name, "loc": sub.get("location_id") or "", "mrr": sub.get("mrr"),
             "flags": [], "new": [], "resolved": []}
     # No trustworthy snapshot today (broken token, or the gate held it) —
     # surface that fact rather than showing stale or empty numbers.
@@ -274,7 +274,8 @@ def _response_line(info: dict) -> str:
 def _account_card(info: dict) -> str:
     """One needs-attention account: linked name, MRR, pills, changed line."""
     esc = html.escape
-    url = f"{DASHBOARD_URL}/account/{info['slug']}" if info["slug"] else DASHBOARD_URL
+    # The SPA routes accounts by location_id (/account/HBhf…), not by slug.
+    url = f"{DASHBOARD_URL}/account/{info['loc']}" if info["loc"] else DASHBOARD_URL
     mrr = (f'<td align="right" valign="top" style="font-family:{_FONT};font-size:12px;'
            f'color:{_MUTED};white-space:nowrap;padding-left:10px;">'
            f'MRR {_fmt_money(info["mrr"])}</td>') if info["mrr"] is not None else ""

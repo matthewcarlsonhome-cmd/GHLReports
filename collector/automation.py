@@ -138,7 +138,8 @@ def build_payload(flag: dict, sub: dict, metrics: dict, run_date: str,
         "entity_name": (strip_decor(flag.get("entity_name"))
                         if flag.get("entity_type") in SAFE_ENTITY_TYPES else ""),
         "detected_on": run_date,
-        "dashboard_url": f"{dashboard_base.rstrip('/')}/account/{slug}",
+        # The SPA routes by location_id, not slug — a slug URL 404s.
+        "dashboard_url": f"{dashboard_base.rstrip('/')}/account/{sub.get('location_id') or slug}",
         # Pipeline context — see the module docstring's "flat payload" note.
         "stage_name": strip_decor(metrics.get("bottleneck_stage")),
         "opps_open": metrics.get("opps_open") or 0,
