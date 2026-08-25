@@ -125,6 +125,21 @@ def _fmt_money(value) -> str:
         return "$?"
 
 
+# Stage names that mean "this deal is already won". Matched case-insensitively
+# against the stage label after the pipeline prefix; GHL stage names are free
+# text, so this is a heuristic on the words clients actually use.
+_WON_STAGE_WORDS = ("won", "closed won", "deposit received", "contract signed",
+                    "sold", "registration", "booked")
+
+
+def _is_won_stage(stage: str | None) -> bool:
+    """True when a stage label reads as a closed-won outcome."""
+    if not stage:
+        return False
+    label = stage.split("\u00b7")[-1].strip().lower()
+    return any(word in label for word in _WON_STAGE_WORDS)
+
+
 def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                   sub: dict, today: date | None = None) -> list[dict]:
     """Evaluate every flag rule against one account's metrics.
@@ -324,9 +339,13 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
         value_fires = stale_value >= th["stale_value_usd"]
         if (stale and count_fires) or value_fires:
             first = (details.get("stale_opps") or [{}])[0]
+            # Only quote a dollar figure when the client actually records deal
+            # values. Most do not, and "4 deals idle 14d+ worth $0" reads as a
+            # bug rather than as the real finding, which is the count.
+            worth = f" worth {_fmt_money(stale_value)}" if stale_value else ""
             flags.append(_flag(
                 "STALE_PIPELINE", "red" if value_fires else "amber", "Stale pipeline",
-                f"{stale} deals idle 14d+ worth {_fmt_money(stale_value)}. Re-engage; "
+                f"{stale} deals idle 14d+{worth}. Re-engage; "
                 "Q3 spring-origin inquiries are re-engage, not close-lost.",
                 entity_type="opportunity", entity_id=first.get("opp_id"),
                 entity_name=first.get("name"), deep_link=first.get("deep_link"),
@@ -357,15 +376,27 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
     # idle dollars, when it's real money. Context for the next client call
     # ("start the pipeline review at Quote"), not an alarm — the stale and
     # hygiene flags above carry any urgency.
+    # A stage named for a closed-won outcome that still holds *open* deals is
+    # not a bottleneck — the client moved the card and never marked the deal
+    # won. Same number, entirely different conversation, so it gets its own
+    # wording rather than telling an AM to go unblock finished business.
     bottleneck_stage = metrics.get("bottleneck_stage")
     bottleneck_value = metrics.get("bottleneck_value_usd")
     if (bottleneck_stage and bottleneck_value is not None
             and bottleneck_value >= th["bottleneck_min_usd"]):
-        flags.append(_flag(
-            "PIPELINE_BOTTLENECK", "info", "Pipeline bottleneck",
-            f"{_fmt_money(bottleneck_value)} sits idle in '{bottleneck_stage}' — "
-            "start the pipeline review there.",
-        ))
+        if _is_won_stage(bottleneck_stage):
+            flags.append(_flag(
+                "PIPELINE_BOTTLENECK", "info", "Won deals never closed out",
+                f"{_fmt_money(bottleneck_value)} sits in '{bottleneck_stage}' — a won stage "
+                "holding deals still marked open. The work is done; the records were never "
+                "closed. Ask the client to mark them won so revenue reporting means something.",
+            ))
+        else:
+            flags.append(_flag(
+                "PIPELINE_BOTTLENECK", "info", "Pipeline bottleneck",
+                f"{_fmt_money(bottleneck_value)} sits idle in '{bottleneck_stage}' — "
+                "start the pipeline review there.",
+            ))
 
     # HIGH_NOSHOW — appointment no-show rate over 28d (None below 5 outcomes,
     # so it can't fire on tiny samples).

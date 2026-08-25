@@ -31,6 +31,14 @@ services:
         sync: false
       - key: DIGEST_CC          # optional, comma list CC'd on every digest
         sync: false
+      # -- Insight-to-Workflow Bridge (Phase 1) --------------------------
+      # AUTOMATION_WEBHOOKS is the kill switch: off (default) sends nothing,
+      # dry logs what would have been sent, on delivers for real. Flip it here
+      # and press Trigger Run — no deploy needed.
+      - key: AUTOMATION_WEBHOOKS
+        value: "off"
+      - key: AUTOMATION_WEBHOOK_URL   # the GHL Inbound Webhook URL — treat as a secret
+        sync: false
       # That is the complete secret set. PITs are in Supabase Vault, not here.
       #
       # One-off modes without a terminal: set COLLECTOR_ARGS in the Render

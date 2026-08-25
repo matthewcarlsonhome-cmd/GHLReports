@@ -68,7 +68,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import digest as digest_mod, fetchers, flags as flags_mod, metrics
+from . import automation, digest as digest_mod, fetchers, flags as flags_mod, metrics
 from .fetchers import Coverage
 from .ghl_client import GHLClient, GHLAuthError, GHLError
 
@@ -1160,10 +1160,21 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--date", help="snapshot date YYYY-MM-DD (default: today local)")
     parser.add_argument("--backfill", type=int, metavar="N",
                         help="write N ISO weeks of lead_history from CRM history, then exit")
+    parser.add_argument("--send-test", action="store_true",
+                        help="POST one sample alert to AUTOMATION_WEBHOOK_URL and exit "
+                             "(how the GHL workflow learns its field names)")
     parser.add_argument("--digest", action="store_true",
                         help="build and send the per-AM digest from today's data, then exit "
                              "(with --dry-run: print instead of sending)")
     args = parser.parse_args(argv)
+
+    # -- send-test mode -------------------------------------------------------
+    # Fire one sample alert at the GHL webhook and exit. Deliberately ahead of
+    # every dependency below: this needs no database, no Vault key, and no GHL
+    # token — only AUTOMATION_WEBHOOK_URL — so the workflow can be built and
+    # tested before the rest of the bridge is configured.
+    if args.send_test:
+        return automation.send_test_alert(log=log)
 
     # Wire up real dependencies unless the tests injected fakes above.
     if store is None:
@@ -1439,11 +1450,21 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         flags_new, flags_resolved = metrics.flags_changed(
             [f["code"] for f in location_flags], prior_codes)
         store.replace_flags(location_id, run_date.isoformat(), location_flags)
+        result["flags"] = location_flags
         result["details"]["changed"] = {"new": flags_new, "resolved": flags_resolved}
         store.update_snapshot_changes(location_id, run_date, flags_new, flags_resolved,
                                       result["details"])
         log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
             f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
+
+    # Insight-to-Workflow Bridge (Phase 1): tell the SSP GoHighLevel workflow
+    # about anything that newly broke. Runs after every flag row is written so
+    # the audit trail can never claim an alert the dashboard cannot show, and
+    # is wrapped because a webhook problem must not fail a good collection.
+    try:
+        automation.send_run_alerts(store, results, run_date, run_id=run_id, log=log)
+    except Exception as exc:                    # never fatal — see automation.py
+        log(f"automation: bridge failed ({type(exc).__name__}: {exc}); run continues")
 
     # Monday digest (Tier 2): sent at the end of the Monday run when SMTP is
     # configured. weekday() == 0 means Monday, judged by the snapshot date —

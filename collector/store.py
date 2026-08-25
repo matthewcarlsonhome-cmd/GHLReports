@@ -241,6 +241,48 @@ class Store:
             "snapshot_date", snapshot_date.isoformat()).execute()
         return [row["code"] for row in (result.data or [])]
 
+    def read_prev_flag_codes(self, location_id: str, snapshot_date: date) -> list[str] | None:
+        """Flag codes from this location's most recent run BEFORE snapshot_date.
+
+        Returns None when there is no prior run at all, which the automation
+        bridge treats as "stay silent" — on a location's first run every flag
+        would look newly appeared, and announcing all of them at once is
+        exactly the storm the newly-appeared rule exists to prevent.
+
+        Distinct from read_flags(), which asks about one specific date (the
+        dashboard diffs against exactly 7 days ago). Here the question is
+        "what did we see last time we looked", however long ago that was —
+        so a weekend gap or a skipped run does not resurface old alerts.
+        """
+        prior = self.client.table("snapshots").select("snapshot_date").eq(
+            "location_id", location_id).lt(
+            "snapshot_date", snapshot_date.isoformat()
+        ).order("snapshot_date", desc=True).limit(1).execute()
+        rows = prior.data or []
+        if not rows:
+            return None
+        return self.read_flags(location_id, date.fromisoformat(rows[0]["snapshot_date"]))
+
+    def record_automation_send(self, row: dict) -> None:
+        """Append one automation audit row (see migration 0008)."""
+        self.client.table("automation_sends").insert(row).execute()
+
+    def read_sent_alert_keys(self, snapshot_date: date) -> set[tuple[str, str, str]]:
+        """Alerts already delivered for this date, as (location, code, entity).
+
+        Read once per run and used to skip anything already sent, so re-running
+        a day — which recomputes the same flags and would otherwise look newly
+        appeared all over again — cannot double-alert the team. The unique
+        index in migration 0008 is the backstop; this is the cheap check that
+        stops the duplicate POST from ever leaving the building.
+        """
+        result = self.client.table("automation_sends").select(
+            "location_id,flag_code,entity_name").eq(
+            "snapshot_date", snapshot_date.isoformat()).eq(
+            "status", "sent").execute()
+        return {(row["location_id"], row["flag_code"], row.get("entity_name") or "")
+                for row in (result.data or [])}
+
     def update_snapshot_changes(self, location_id: str, snapshot_date: date,
                                 flags_new: list[str], flags_resolved: list[str],
                                 details: dict) -> None:
