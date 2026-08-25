@@ -237,10 +237,23 @@ class GHLClient:
 
             if resp.status_code in (401, 403):
                 # Auth failures never retry — the token won't fix itself.
-                # scope_hint() points the operator at the likely missing scope.
+                # GHL's own message comes first when it says something more
+                # specific than "unauthorized" (e.g. "Location is not
+                # active", which is an account state, not a token problem);
+                # scope_hint() remains the fallback pointer at the likely
+                # missing scope.
+                api_message = ""
+                try:
+                    api_message = str((resp.json() or {}).get("message") or "").strip()
+                except ValueError:
+                    pass
+                if api_message and api_message.lower() != "unauthorized":
+                    detail = f"API says: {api_message!r}"
+                else:
+                    detail = f"token lacks `{scope_hint(path)}` or is invalid"
                 raise GHLAuthError(
                     self.sanitize(
-                        f"{method} {path}: HTTP {resp.status_code} — token lacks `{scope_hint(path)}` or is invalid"
+                        f"{method} {path}: HTTP {resp.status_code} — {detail}"
                     ),
                     resp.status_code,
                 )
