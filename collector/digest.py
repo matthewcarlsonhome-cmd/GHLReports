@@ -58,42 +58,202 @@ def _fmt_money(value) -> str:
         return "$?"
 
 
-def _account_lines(sub: dict, snapshot: dict | None, flags: list[dict],
-                   acked_codes: set[str]) -> tuple[str, list[str]]:
-    """(state, detail lines) for one account in an AM's digest.
+def _account_summary(sub: dict, snapshot: dict | None, flags: list[dict],
+                     acked_codes: set[str]) -> tuple[str, dict]:
+    """(state, info) for one account in an AM's digest.
 
     State is one of "no_data", "steady", "steady_flagged", or "attention";
-    build_digests uses it to pick a section. Lines are pre-indented text
-    ready to drop into the plain-text email body.
+    build_digests uses it to pick a section. info is the structured record
+    both renderers consume — text and HTML are projections of the same data,
+    which is what keeps them from drifting apart.
     """
     name = sub.get("name") or sub.get("slug") or sub.get("location_id")
+    info = {"name": name, "slug": sub.get("slug") or "", "mrr": sub.get("mrr"),
+            "flags": [], "extra": 0, "new": [], "resolved": []}
     # No trustworthy snapshot today (broken token, or the gate held it) —
     # surface that fact rather than showing stale or empty numbers.
     if sub.get("token_status") != "ok" or not snapshot or not snapshot.get("gate_passed"):
-        return "no_data", [f"- {name}: no data (token or gate) — check /runs"]
+        return "no_data", info
 
     # Only unacked red/amber flags count; snoozed codes were already seen.
-    unacked = [f for f in flags if f.get("code") not in acked_codes and f.get("severity") in ("red", "amber")]
+    unacked = [f for f in flags if f.get("code") not in acked_codes
+               and f.get("severity") in ("red", "amber")]
     reds = [f for f in unacked if f.get("severity") == "red"]
     if not unacked:
-        return "steady", []
+        return "steady", info
 
-    # Header line (with monthly recurring revenue when known), then at most 3
-    # flag actions, reds first, then a "changed this week" line if flags moved.
-    lines = [f"- {name}" + (f" (MRR {_fmt_money(sub['mrr'])})" if sub.get("mrr") is not None else "")]
-    for flag in sorted(unacked, key=lambda f: 0 if f.get("severity") == "red" else 1)[:3]:
-        marker = "RED" if flag.get("severity") == "red" else "amber"
-        lines.append(f"    [{marker}] {flag.get('action') or flag.get('code')}")
-    new_codes = snapshot.get("flags_new") or []
-    resolved_codes = snapshot.get("flags_resolved") or []
-    if new_codes or resolved_codes:
+    ordered = sorted(unacked, key=lambda f: 0 if f.get("severity") == "red" else 1)
+    info["flags"] = [(f.get("severity"), f.get("action") or f.get("code") or "")
+                     for f in ordered[:3]]
+    info["extra"] = len(ordered) - len(info["flags"])
+    info["new"] = snapshot.get("flags_new") or []
+    info["resolved"] = snapshot.get("flags_resolved") or []
+    return ("attention" if reds or len(unacked) >= 2 else "steady_flagged"), info
+
+
+def _text_block(info: dict) -> list[str]:
+    """One account's plain-text lines (the format the first digests used)."""
+    lines = [f"- {info['name']}"
+             + (f" (MRR {_fmt_money(info['mrr'])})" if info["mrr"] is not None else "")]
+    for severity, action in info["flags"]:
+        marker = "RED" if severity == "red" else "amber"
+        lines.append(f"    [{marker}] {action}")
+    if info["new"] or info["resolved"]:
         changed = []
-        if new_codes:
-            changed.append("new: " + ", ".join(new_codes))
-        if resolved_codes:
-            changed.append("resolved: " + ", ".join(resolved_codes))
+        if info["new"]:
+            changed.append("new: " + ", ".join(info["new"]))
+        if info["resolved"]:
+            changed.append("resolved: " + ", ".join(info["resolved"]))
         lines.append("    changed this week — " + "; ".join(changed))
-    return ("attention" if reds or len(unacked) >= 2 else "steady_flagged"), lines
+    return lines
+
+
+# -- HTML rendering ---------------------------------------------------------
+#
+# Email clients are a hostile rendering target: Gmail strips <style> blocks,
+# Outlook renders with Word's engine (no flexbox, no grid, patchy CSS), and
+# dark-mode clients recolor at will. So the HTML below is 2005-vintage on
+# purpose: nested tables, every style inline, solid hex colors, system fonts,
+# one 600px column. Palette mirrors the dashboard.
+
+_INK = "#1d2b32"; _BODY_TX = "#3c4a50"; _MUTED = "#5b6a70"; _FAINT = "#8a979c"
+_LINE = "#e3eae9"; _PAPER = "#eef2f1"
+_RED = "#c43c3c"; _RED_SOFT = "#fbeaea"
+_AMBER = "#a86f0a"; _AMBER_SOFT = "#faf0da"
+_GREEN = "#0c7a3c"; _GREEN_SOFT = "#e2f3e8"
+_ACCENT = "#2a78d6"
+_FONT = "'Segoe UI', Helvetica, Arial, sans-serif"
+
+
+def _pill(severity: str) -> str:
+    """Severity badge that survives every client: solid bg, white text."""
+    color = _RED if severity == "red" else _AMBER
+    label = "RED" if severity == "red" else "AMBER"
+    return (f'<span style="display:inline-block;font-family:{_FONT};font-size:10px;'
+            f'font-weight:700;letter-spacing:1px;color:#ffffff;'
+            f'background-color:{color};border-radius:9px;padding:2px 8px;">{label}</span>')
+
+
+def _stat_tile(count: int, label: str, color: str, soft: str) -> str:
+    return (f'<td width="32%" align="center" valign="top" '
+            f'style="background-color:{soft};border-radius:8px;padding:14px 6px 12px;">'
+            f'<div style="font-family:{_FONT};font-size:26px;font-weight:700;'
+            f'color:{color};line-height:1;">{count}</div>'
+            f'<div style="font-family:{_FONT};font-size:10px;letter-spacing:1.2px;'
+            f'text-transform:uppercase;color:{_MUTED};padding-top:6px;">{label}</div></td>')
+
+
+def _section_heading(text: str, color: str, rule: str) -> str:
+    return (f'<tr><td style="padding:22px 32px 2px;">'
+            f'<div style="font-family:{_FONT};font-size:12px;letter-spacing:1.5px;'
+            f'text-transform:uppercase;color:{color};font-weight:700;'
+            f'border-bottom:2px solid {rule};padding-bottom:6px;">{text}</div></td></tr>')
+
+
+def _account_card(info: dict) -> str:
+    """One needs-attention account: linked name, MRR, pills, changed line."""
+    esc = html.escape
+    url = f"{DASHBOARD_URL}/account/{info['slug']}" if info["slug"] else DASHBOARD_URL
+    mrr = (f'<td align="right" valign="top" style="font-family:{_FONT};font-size:12px;'
+           f'color:{_MUTED};white-space:nowrap;padding-left:10px;">'
+           f'MRR {_fmt_money(info["mrr"])}</td>') if info["mrr"] is not None else ""
+    rows = [(
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+        f'<td style="font-family:{_FONT};font-size:15px;font-weight:600;color:{_INK};">'
+        f'<a href="{url}" style="color:{_INK};text-decoration:none;">{esc(info["name"])}</a>'
+        f'</td>{mrr}</tr></table>')]
+    for severity, action in info["flags"]:
+        rows.append(
+            '<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:7px;">'
+            f'<tr><td valign="top" style="padding:1px 8px 0 0;">{_pill(severity)}</td>'
+            f'<td style="font-family:{_FONT};font-size:13px;line-height:1.5;'
+            f'color:{_BODY_TX};">{esc(action)}</td></tr></table>')
+    if info["extra"]:
+        rows.append(f'<div style="font-family:{_FONT};font-size:12px;color:{_ACCENT};'
+                    f'padding-top:6px;">+{info["extra"]} more on the dashboard</div>')
+    if info["new"] or info["resolved"]:
+        parts = []
+        if info["new"]:
+            parts.append("new: " + ", ".join(html.escape(c) for c in info["new"]))
+        if info["resolved"]:
+            parts.append("resolved: " + ", ".join(html.escape(c) for c in info["resolved"]))
+        rows.append(f'<div style="font-family:{_FONT};font-size:12px;color:{_FAINT};'
+                    f'padding-top:7px;">This week — {" · ".join(parts)}</div>')
+    return ('<tr><td style="padding:14px 32px 14px;border-bottom:1px solid '
+            f'{_LINE};">' + "".join(rows) + "</td></tr>")
+
+
+def _render_html(run_date: str, total: int, attention: list[dict],
+                 steady_names: list[str], no_data: list[dict],
+                 mrr_at_risk: float) -> str:
+    """The full email body. One 600px card on a soft ground."""
+    esc = html.escape
+    att_ct, steady_ct, nd_ct = len(attention), len(steady_names), len(no_data)
+    preview = f"{att_ct} need attention · {steady_ct} steady · {nd_ct} no data"
+
+    out = [
+        f'<div style="margin:0;padding:0;background-color:{_PAPER};">',
+        # Hidden preheader: what inboxes show as the preview snippet.
+        f'<div style="display:none;max-height:0;overflow:hidden;">{preview}</div>',
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background-color:{_PAPER};"><tr><td align="center" style="padding:26px 12px;">',
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0" '
+        'style="width:600px;max-width:100%;background-color:#ffffff;'
+        f'border:1px solid {_LINE};border-radius:10px;">',
+        # Header
+        '<tr><td style="padding:26px 32px 0;">'
+        f'<div style="font-family:{_FONT};font-size:11px;letter-spacing:2px;'
+        f'text-transform:uppercase;color:{_ACCENT};font-weight:600;">SSP Account Health</div>'
+        f'<div style="font-family:{_FONT};font-size:22px;font-weight:700;color:{_INK};'
+        f'padding-top:6px;">Monday digest &mdash; week of {esc(run_date)}</div>'
+        f'<div style="font-family:{_FONT};font-size:13px;color:{_MUTED};padding-top:4px;">'
+        f'{total} accounts in your book'
+        + (f' &middot; {_fmt_money(mrr_at_risk)} MRR needs attention' if mrr_at_risk else "")
+        + "</div></td></tr>",
+        # Summary strip
+        '<tr><td style="padding:18px 32px 6px;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+        + _stat_tile(att_ct, "Need attention", _RED if att_ct else _MUTED, _RED_SOFT)
+        + '<td width="2%"></td>'
+        + _stat_tile(steady_ct, "Steady", _GREEN, _GREEN_SOFT)
+        + '<td width="2%"></td>'
+        + _stat_tile(nd_ct, "No data", _AMBER if nd_ct else _MUTED, _AMBER_SOFT)
+        + "</tr></table></td></tr>",
+    ]
+
+    if attention:
+        out.append(_section_heading(f"Needs attention ({att_ct})", _RED, "#f3d4d4"))
+        out.extend(_account_card(info) for info in attention)
+    if steady_names:
+        out.append(_section_heading(f"Steady ({steady_ct})", _GREEN, "#cfe9da"))
+        out.append('<tr><td style="padding:12px 32px 4px;">'
+                   f'<div style="font-family:{_FONT};font-size:13px;line-height:1.8;'
+                   f'color:{_MUTED};">'
+                   + " &nbsp;&middot;&nbsp; ".join(esc(n) for n in steady_names)
+                   + "</div></td></tr>")
+    if no_data:
+        out.append(_section_heading(f"No data ({nd_ct})", _AMBER, "#ecdcb6"))
+        rows = "".join(
+            f'<div style="font-family:{_FONT};font-size:13px;color:{_INK};'
+            f'background-color:{_AMBER_SOFT};border-radius:6px;padding:9px 12px;'
+            f'margin-top:6px;">{esc(info["name"])} '
+            f'<span style="color:#8a6a1f;">&mdash; no data (token or gate); '
+            f'check the Runs page</span></div>'
+            for info in no_data)
+        out.append(f'<tr><td style="padding:10px 32px 4px;">{rows}</td></tr>')
+
+    out.append(
+        '<tr><td align="center" style="padding:26px 32px 8px;">'
+        f'<a href="{DASHBOARD_URL}" style="display:inline-block;font-family:{_FONT};'
+        f'background-color:{_ACCENT};color:#ffffff;text-decoration:none;font-weight:600;'
+        f'font-size:14px;padding:11px 24px;border-radius:8px;">Open the dashboard</a></td></tr>')
+    out.append(
+        '<tr><td align="center" style="padding:4px 32px 24px;">'
+        f'<div style="font-family:{_FONT};font-size:11px;color:{_FAINT};">'
+        'Sent by the Account Health collector &middot; data as of last night&rsquo;s run '
+        '&middot; snoozed flags are not shown</div></td></tr>')
+    out.append("</table></td></tr></table></div>")
+    return "".join(out)
 
 
 def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
@@ -122,56 +282,58 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
     for am, accounts in sorted(by_am.items()):
         # Sort this AM's accounts into the three buckets, tallying the MRR of
         # accounts that need attention for the subject/summary line.
-        attention_blocks: list[str] = []
+        attention: list[dict] = []
         steady_names: list[str] = []
-        no_data_lines: list[str] = []
+        no_data: list[dict] = []
         mrr_at_risk = 0.0
 
         for sub in sorted(accounts, key=lambda s: s.get("name") or ""):
             loc = sub["location_id"]
-            state, lines = _account_lines(
+            state, info = _account_summary(
                 sub, snapshots_by_loc.get(loc), flags_by_loc.get(loc, []),
                 acked_by_loc.get(loc, set()))
             if state == "no_data":
-                no_data_lines.extend(lines)
+                no_data.append(info)
             elif state == "steady":
-                steady_names.append(sub.get("name") or loc)
+                steady_names.append(info["name"])
             else:
-                attention_blocks.extend(lines)
-                if state == "attention" and sub.get("mrr") is not None:
-                    mrr_at_risk += float(sub["mrr"])
+                attention.append(info)
+                if state == "attention" and info["mrr"] is not None:
+                    mrr_at_risk += float(info["mrr"])
 
-        # Unindented lines are account headers; indented ones are flag detail,
-        # so counting headers gives the number of accounts needing attention.
-        attention_count = sum(1 for line in attention_blocks if not line.startswith("    "))
+        # Reds float to the top of the attention list; ties stay alphabetical.
+        attention.sort(key=lambda i: (0 if any(s == "red" for s, _ in i["flags"]) else 1,
+                                      i["name"] or ""))
+
+        attention_count = len(attention)
         subject = (f"Account health — {attention_count} need attention"
                    if attention_count else "Account health — all steady")
 
-        # Assemble the plain-text body: attention first, then steady one-liner,
-        # then the no-data section, then a link to the full dashboard.
+        # Plain-text body: same shape the first digests used — it is what
+        # text-only clients and previews fall back to.
         parts = [
             f"Week of {run_date}. Your book: {len(accounts)} accounts.",
             "",
         ]
-        if attention_blocks:
+        if attention:
             parts.append(f"NEEDS ATTENTION ({attention_count}"
                          + (f", {_fmt_money(mrr_at_risk)} MRR" if mrr_at_risk else "") + "):")
-            parts.extend(attention_blocks)
+            for info in attention:
+                parts.extend(_text_block(info))
             parts.append("")
         if steady_names:
             parts.append(f"Steady ({len(steady_names)}): " + ", ".join(steady_names))
             parts.append("")
-        if no_data_lines:
+        if no_data:
             parts.append("NO DATA:")
-            parts.extend(no_data_lines)
+            parts.extend(f"- {info['name']}: no data (token or gate) — check /runs"
+                         for info in no_data)
             parts.append("")
         parts.append(f"Full picture: {DASHBOARD_URL}")
         text = "\n".join(parts)
 
-        # The HTML variant is just the text in a <pre> block (escaped so
-        # account names can't inject markup) — same content, monospace look.
-        html_body = "<pre style=\"font-family: ui-monospace, monospace; font-size: 13px;\">" \
-            + html.escape(text) + "</pre>"
+        html_body = _render_html(run_date, len(accounts), attention,
+                                 steady_names, no_data, mrr_at_risk)
         digests[am] = {"subject": subject, "text": text, "html": html_body}
     return digests
 

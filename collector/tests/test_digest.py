@@ -108,3 +108,26 @@ def test_send_via_smtp_filters_recipients_and_ccs_staff(monkeypatch):
     assert sent_msgs[0]["From"] == "mcarlson@smallscreenproducer.com"
     assert sent_msgs[0]["Cc"] == "pvinje@smallscreenproducer.com"
     assert sent_msgs[0]["Subject"] == "s1"
+
+
+def test_html_is_a_real_email_not_a_pre_block():
+    digests = build()
+    body = digests["lisa@smallscreenproducer.com"]["html"]
+    assert "<pre" not in body
+    assert "role=\"presentation\"" in body        # table-based email layout
+    assert "Needs attention" in body
+    assert "Open the dashboard" in body
+
+
+def test_html_escapes_account_names():
+    subs = [dict(SUBS[1], name="Evil <script>alert(1)</script> Pools")]
+    digests = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-17")
+    body = digests["lisa@smallscreenproducer.com"]["html"]
+    assert "<script>" not in body
+    assert "Evil &lt;script&gt;" in body
+
+
+def test_reds_sort_before_ambers_in_attention():
+    digests = build()
+    body = digests["lisa@smallscreenproducer.com"]["html"]
+    assert ">RED<" in body and ">AMBER<" in body
