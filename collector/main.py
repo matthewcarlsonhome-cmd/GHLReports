@@ -1160,9 +1160,13 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--date", help="snapshot date YYYY-MM-DD (default: today local)")
     parser.add_argument("--backfill", type=int, metavar="N",
                         help="write N ISO weeks of lead_history from CRM history, then exit")
-    parser.add_argument("--send-test", action="store_true",
+    parser.add_argument("--send-test", nargs="?", const="daily", choices=["daily", "weekly"],
                         help="POST one sample alert to AUTOMATION_WEBHOOK_URL and exit "
-                             "(how the GHL workflow learns its field names)")
+                             "(how the GHL workflow learns its field names). "
+                             "'weekly' sends the Monday pipeline shape instead.")
+    parser.add_argument("--weekly-alerts", action="store_true",
+                        help="send the weekly pipeline digest for --date (default today) "
+                             "from stored data, on any day of the week")
     parser.add_argument("--digest", action="store_true",
                         help="build and send the per-AM digest from today's data, then exit "
                              "(with --dry-run: print instead of sending)")
@@ -1174,7 +1178,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     # token — only AUTOMATION_WEBHOOK_URL — so the workflow can be built and
     # tested before the rest of the bridge is configured.
     if args.send_test:
-        return automation.send_test_alert(log=log)
+        return automation.send_test_alert(kind=args.send_test, log=log)
 
     # Wire up real dependencies unless the tests injected fakes above.
     if store is None:
@@ -1190,6 +1194,13 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     if not store.pit_key_ok():
         log("COLLECTOR_KEY rejected by pit_key_ok — aborting (check Vault bootstrap and env)")
         return 1
+
+    # -- weekly-alerts mode ---------------------------------------------------
+    # Fire the Monday pipeline digest from stored snapshots on any day. Same
+    # kill switch and same already-sent dedupe as the nightly path.
+    if args.weekly_alerts:
+        tally = automation.send_weekly_alerts(store, run_date, log=log)
+        return 0 if tally["failed"] == 0 else 2
 
     subs = store.load_subaccounts(active=True)
     if not subs:

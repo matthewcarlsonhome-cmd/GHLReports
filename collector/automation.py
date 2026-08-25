@@ -209,7 +209,7 @@ def post_alert(url: str, payload: dict, timeout: float = 15.0) -> tuple[int | No
     return None, last_error
 
 
-def send_test_alert(log=print, env=None) -> int:
+def send_test_alert(kind: str = "daily", log=print, env=None) -> int:
     """POST one sample alert and return an exit code. Used by --send-test.
 
     This is how the GHL workflow gets its first payload: GHL cannot show the
@@ -227,18 +227,27 @@ def send_test_alert(log=print, env=None) -> int:
     if not url:
         log("send-test: AUTOMATION_WEBHOOK_URL is not set — nothing to send")
         return 2
-    payload = build_payload(
+    sample_sub = {"location_id": "SAMPLE", "slug": "sample-account",
+                  "name": "Sample Pool & Spa", "am_email": "mcarlson@smallscreenproducer.com"}
+    sample_metrics = {"opps_open": 42, "opps_stale": 11, "opps_moved_30d": 3,
+                      "bottleneck_stage": "Inground Pool Sales · Hold for Decision",
+                      "bottleneck_value_usd": 203480}
+    sample_date = env.get("SAMPLE_DATE") or "2026-08-25"
+    base = (env.get("DASHBOARD_URL") or DEFAULT_DASHBOARD_URL).strip()
+
+    if kind == "weekly":
+        # The Monday shape, so the workflow's If/Else branch can be tested
+        # without waiting for a Monday.
+        payload = weekly_pipeline_payload(sample_sub, sample_metrics, sample_date, base)
+    else:
+        payload = build_payload(
         {"code": "FORM_WENT_SILENT", "severity": "amber", "title": "Form went silent",
          "action": "SAMPLE ALERT — Hot Tub Brochure quiet 4 business days; was ~6/wk. "
                    "Check the page.",
          "entity_type": "form", "entity_name": "Hot Tub Brochure"},
-        {"location_id": "SAMPLE", "slug": "sample-account", "name": "Sample Pool & Spa",
-         "am_email": "mcarlson@smallscreenproducer.com"},
-        {"opps_open": 42, "opps_stale": 11, "opps_moved_30d": 3,
-         "bottleneck_stage": "Inground Pool Sales · Hold for Decision"},
-        env.get("SAMPLE_DATE") or "2026-08-25",
-        (env.get("DASHBOARD_URL") or DEFAULT_DASHBOARD_URL).strip())
-    log("send-test: posting sample payload:")
+        sample_sub, sample_metrics, sample_date, base)
+
+    log(f"send-test: posting sample {kind} payload:")
     log(json.dumps(payload, indent=2))
     http_status, error = post_alert(url, payload)
     if error:
@@ -314,7 +323,18 @@ def send_run_alerts(store, results: dict, run_date, run_id=None, log=print, env=
         _record(store, run_id, sub, date_str, payload, mode, "skipped_cap", None,
                 f"over the {DAILY_SEND_CAP}/run cap", log)
 
-    for sub, payload in queued + weekly:
+    _deliver(queued + weekly, url, mode, store, run_id, date_str, tally, log)
+
+    if mode == "dry":
+        log(f"automation: dry run — {tally['dry']} alerts would have been sent")
+    else:
+        log(f"automation: {tally['sent']} sent, {tally['failed']} failed, {tally['skipped']} over cap")
+    return tally
+
+
+def _deliver(items, url, mode, store, run_id, date_str, tally, log) -> None:
+    """POST each (sub, payload), tallying and auditing. Shared by both paths."""
+    for sub, payload in items:
         label = f"{payload['flag_code']} · {sub.get('slug') or ''}"
         if mode == "dry":
             tally["dry"] += 1
@@ -330,10 +350,49 @@ def send_run_alerts(store, results: dict, run_date, run_id=None, log=print, env=
             log(f"automation: FAILED {label} — {error}")
             _record(store, run_id, sub, date_str, payload, mode, "failed", http_status, error, log)
 
-    if mode == "dry":
-        log(f"automation: dry run — {tally['dry']} alerts would have been sent")
-    else:
-        log(f"automation: {tally['sent']} sent, {tally['failed']} failed, {tally['skipped']} over cap")
+
+def send_weekly_alerts(store, run_date, log=print, env=None) -> dict:
+    """Fire the weekly pipeline digest on demand, from already-stored data.
+
+    The nightly run does this automatically on Mondays from the run it just
+    performed. This is the same send driven from the snapshots table instead,
+    so the digest can be demonstrated — or re-sent after a failure — on any
+    day without re-collecting anything.
+
+    Honors the same kill switch and the same already-sent dedupe as the
+    nightly path, so running it twice cannot double-send.
+    """
+    env = env or os.environ
+    mode = mode_from_env(env)
+    tally = {"sent": 0, "dry": 0, "failed": 0, "skipped": 0}
+    if mode == "off":
+        log("weekly: AUTOMATION_WEBHOOKS is off — nothing sent")
+        return tally
+    url = (env.get("AUTOMATION_WEBHOOK_URL") or "").strip()
+    if not url:
+        log("weekly: AUTOMATION_WEBHOOK_URL is not set — nothing sent")
+        return tally
+
+    dashboard_base = (env.get("DASHBOARD_URL") or DEFAULT_DASHBOARD_URL).strip()
+    date_str = run_date.isoformat()
+    subs_by_id = {s["location_id"]: s for s in store.load_subaccounts(active=True)}
+    already_sent = store.read_sent_alert_keys(run_date)
+
+    items = []
+    for row in store.read_pipeline_snapshots(run_date):
+        sub = subs_by_id.get(row.get("location_id"))
+        if not sub:
+            continue
+        payload = weekly_pipeline_payload(sub, row, date_str, dashboard_base)
+        if payload and _key(sub, payload) not in already_sent:
+            items.append((sub, payload))
+
+    if not items:
+        log(f"weekly: nothing to send for {date_str} "
+            "(no account has a bottleneck stage, or all were sent already)")
+        return tally
+    log(f"weekly: {len(items)} account(s) with a pipeline read for {date_str}")
+    _deliver(items, url, mode, store, None, date_str, tally, log)
     return tally
 
 

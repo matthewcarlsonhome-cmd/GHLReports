@@ -255,3 +255,72 @@ def test_unreadable_audit_table_aborts_rather_than_risking_duplicates(monkeypatc
                                        env={"AUTOMATION_WEBHOOKS": "on",
                                             "AUTOMATION_WEBHOOK_URL": "https://x"})
     assert tally == {"sent": 0, "dry": 0, "failed": 0, "skipped": 0} and sent == []
+
+
+# -- weekly digest on demand ---------------------------------------------
+
+class WeeklyStore(FakeStore):
+    def __init__(self, rows, subs, sent_keys=None):
+        super().__init__([])
+        self.rows, self.subs, self.sent_keys = rows, subs, sent_keys or set()
+    def load_subaccounts(self, active=True): return self.subs
+    def read_pipeline_snapshots(self, snapshot_date): return self.rows
+    def read_sent_alert_keys(self, snapshot_date): return self.sent_keys
+
+
+def test_weekly_alerts_sends_only_accounts_with_a_bottleneck(monkeypatch):
+    subs = [{"location_id": "locA", "slug": "magnolia", "name": "Magnolia Custom Pools"},
+            {"location_id": "locB", "slug": "quiet", "name": "Quiet Pools"}]
+    rows = [{"location_id": "locA", "opps_open": 245, "opps_stale": 240,
+             "opps_moved_30d": 16, "bottleneck_stage": "🚧 Construction · 🛠 Phase 12",
+             "bottleneck_value_usd": 224000},
+            {"location_id": "locB", "opps_open": 3, "opps_stale": 1,
+             "opps_moved_30d": 0, "bottleneck_stage": None, "bottleneck_value_usd": None}]
+    sent = []
+    monkeypatch.setattr(automation, "post_alert",
+                        lambda url, payload, timeout=15.0: (sent.append(payload), (200, None))[1])
+    tally = automation.send_weekly_alerts(
+        WeeklyStore(rows, subs), date(2026, 8, 25), log=lambda *a: None,
+        env={"AUTOMATION_WEBHOOKS": "on", "AUTOMATION_WEBHOOK_URL": "https://x"})
+    assert tally["sent"] == 1
+    assert sent[0]["account_name"] == "Magnolia Custom Pools"
+    assert "$224,000" in sent[0]["action"]
+    assert sent[0]["stage_name"] == "Construction · Phase 12"
+
+
+def test_weekly_alerts_runs_on_any_weekday():
+    # No Monday check: the whole point of this entry point is that it can be
+    # fired on demand. Tuesday must behave identically to Monday.
+    subs = [{"location_id": "locA", "slug": "a", "name": "A"}]
+    rows = [{"location_id": "locA", "opps_open": 10, "opps_stale": 5, "opps_moved_30d": 1,
+             "bottleneck_stage": "Sales · Quote", "bottleneck_value_usd": 50000}]
+    env = {"AUTOMATION_WEBHOOKS": "dry", "AUTOMATION_WEBHOOK_URL": "https://x"}
+    for day in (date(2026, 8, 24), date(2026, 8, 25), date(2026, 8, 29)):
+        tally = automation.send_weekly_alerts(WeeklyStore(rows, subs), day,
+                                              log=lambda *a: None, env=env)
+        assert tally["dry"] == 1, day
+
+
+def test_weekly_alerts_will_not_double_send(monkeypatch):
+    subs = [{"location_id": "locA", "slug": "a", "name": "A"}]
+    rows = [{"location_id": "locA", "opps_open": 10, "opps_stale": 5, "opps_moved_30d": 1,
+             "bottleneck_stage": "Sales · Quote", "bottleneck_value_usd": 50000}]
+    store = WeeklyStore(rows, subs, sent_keys={("locA", "PIPELINE_WEEKLY", "Sales · Quote")})
+    sent = []
+    monkeypatch.setattr(automation, "post_alert",
+                        lambda url, payload, timeout=15.0: (sent.append(payload), (200, None))[1])
+    tally = automation.send_weekly_alerts(
+        store, date(2026, 8, 25), log=lambda *a: None,
+        env={"AUTOMATION_WEBHOOKS": "on", "AUTOMATION_WEBHOOK_URL": "https://x"})
+    assert tally["sent"] == 0 and sent == []
+
+
+def test_weekly_alerts_respects_the_kill_switch():
+    subs = [{"location_id": "locA", "slug": "a", "name": "A"}]
+    rows = [{"location_id": "locA", "bottleneck_stage": "Sales · Quote",
+             "bottleneck_value_usd": 50000}]
+    tally = automation.send_weekly_alerts(WeeklyStore(rows, subs), date(2026, 8, 25),
+                                          log=lambda *a: None,
+                                          env={"AUTOMATION_WEBHOOKS": "off",
+                                               "AUTOMATION_WEBHOOK_URL": "https://x"})
+    assert tally == {"sent": 0, "dry": 0, "failed": 0, "skipped": 0}

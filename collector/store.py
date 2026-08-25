@@ -263,6 +263,19 @@ class Store:
             return None
         return self.read_flags(location_id, date.fromisoformat(rows[0]["snapshot_date"]))
 
+    def read_pipeline_snapshots(self, snapshot_date: date) -> list[dict]:
+        """Pipeline columns for every location on one date, for the weekly send.
+
+        The nightly Monday path reads these straight out of the run in memory;
+        this is the path for --weekly-alerts, which fires the same digest from
+        already-stored data on a day that is not a Monday.
+        """
+        result = self.client.table("snapshots").select(
+            "location_id,opps_open,opps_stale,opps_moved_30d,"
+            "bottleneck_stage,bottleneck_value_usd"
+        ).eq("snapshot_date", snapshot_date.isoformat()).execute()
+        return result.data or []
+
     def record_automation_send(self, row: dict) -> None:
         """Append one automation audit row (see migration 0008)."""
         self.client.table("automation_sends").insert(row).execute()
