@@ -424,9 +424,10 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
                 if state == "attention" and info["mrr"] is not None:
                     mrr_at_risk += float(info["mrr"])
 
-        # Reds float to the top of the attention list; ties stay alphabetical.
-        attention.sort(key=lambda i: (0 if any(s == "red" for s, _ in i["flags"]) else 1,
-                                      i["name"] or ""))
+        # One strictly alphabetical list — Matthew's call: scanning for a
+        # specific client beats severity grouping. (Reds still sort first
+        # WITHIN each account's card.)
+        attention.sort(key=lambda i: (i["name"] or "").lower())
 
         attention_count = len(attention)
         subject = (f"Account health — {attention_count} need attention"
