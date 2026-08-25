@@ -335,7 +335,9 @@ class Store:
         whose snooze window still covers the date)."""
         subs = self.load_subaccounts(active=True)
         snaps = self.client.table("snapshots").select(
-            "location_id,gate_passed,flags_new,flags_resolved"
+            "location_id,gate_passed,flags_new,flags_resolved,"
+            "opps_open,opps_stale,opps_moved_30d,"
+            "speed_to_lead_median_min,leads_uncontacted_24h"
         ).eq("snapshot_date", snapshot_date.isoformat()).execute().data or []
         flags = self.client.table("flags").select(
             "location_id,code,severity,action"

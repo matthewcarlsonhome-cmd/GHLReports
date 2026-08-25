@@ -49,8 +49,8 @@ def test_attention_content_and_subject():
     assert "Pilot One Pools" in lisa["text"]
     assert "$2,500" in lisa["text"]                       # MRR at risk
     assert "[RED] Leads down 60%" in lisa["text"]
-    assert "new: LEADS_DROP" in lisa["text"]
-    assert "resolved: NO_DELIVERY" in lisa["text"]
+    assert "new: leads down vs baseline" in lisa["text"]      # plain English, not codes
+    assert "resolved: nothing published recently" in lisa["text"]
     assert "Steady (1): Quiet Spas" in lisa["text"]
     assert "REVIEW_ASK_GAP" not in lisa["text"]           # info flags stay out of the digest
 
@@ -131,3 +131,29 @@ def test_reds_sort_before_ambers_in_attention():
     digests = build()
     body = digests["lisa@smallscreenproducer.com"]["html"]
     assert ">RED<" in body and ">AMBER<" in body
+
+
+def test_pipeline_bar_and_response_line_render():
+    snaps = {"l1": dict(SNAPSHOTS["l1"], opps_open=162, opps_stale=161, opps_moved_30d=3,
+                        speed_to_lead_median_min=0.3, leads_uncontacted_24h=4)}
+    digests = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")
+    lisa = digests["lisa@smallscreenproducer.com"]
+    assert "161 of 162 open deals idle 14d+" in lisa["html"]
+    assert "3 moved in 30d" in lisa["html"]
+    assert "First touch &lt;1 min" in lisa["html"] or "First touch <1 min" in lisa["html"]
+    assert "4 leads without follow-up 24h+" in lisa["html"]
+    # same facts reach the plain-text fallback
+    assert "pipeline: 161 of 162 open deals idle 14d+; 3 moved in 30d" in lisa["text"]
+
+
+def test_bar_skipped_without_open_deals():
+    snaps = {"l1": dict(SNAPSHOTS["l1"], opps_open=0, opps_stale=0, opps_moved_30d=0)}
+    digests = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")
+    assert "open deals idle" not in digests["lisa@smallscreenproducer.com"]["html"]
+
+
+def test_frozen_book_gets_a_red_bar():
+    snaps = {"l1": dict(SNAPSHOTS["l1"], opps_open=35, opps_stale=35, opps_moved_30d=0)}
+    digests = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")
+    body = digests["lisa@smallscreenproducer.com"]["html"]
+    assert f'width="100%" height="8" style="background-color:#c43c3c;"' in body

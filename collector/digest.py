@@ -50,6 +50,41 @@ SMTP_HOST_DEFAULT = "smtp.gmail.com"
 SMTP_PORT_DEFAULT = 465
 
 
+# Plain-English names for flag codes, used wherever a week-over-week diff
+# would otherwise print CONVOS_WAITING at an account manager. An unknown code
+# degrades to lower-cased words rather than shouting an identifier.
+_CODE_LABELS = {
+    "INTEGRATION_SUSPECT": "nothing flowing at all",
+    "LEADS_ZERO": "zero leads this week",
+    "FORM_SILENT": "forms silent",
+    "LEADS_DROP": "leads down vs baseline",
+    "LEADS_DROP_SEASONAL": "seasonal lead dip",
+    "SOURCE_DROP": "a lead source dropped",
+    "UNASSIGNED_LEADS": "new leads with no owner",
+    "LEADS_UNREACHABLE": "leads missing phone numbers",
+    "SLOW_RESPONSE": "leads sitting uncontacted",
+    "CONVOS_WAITING": "inbound conversations waiting",
+    "PIPELINE_HYGIENE": "pipeline needs a cleanup",
+    "STALE_PIPELINE": "stale deals piling up",
+    "PIPELINE_FROZEN": "pipeline not moving",
+    "PIPELINE_BOTTLENECK": "money parked in one stage",
+    "HIGH_NOSHOW": "high appointment no-shows",
+    "NO_DELIVERY": "nothing published recently",
+    "SOCIAL_DISCONNECTED": "social account disconnected",
+    "NO_CLIENT_TOUCH": "no recent client contact",
+    "RENEWAL_SOON": "renewal approaching",
+    "REVIEW_ASK_GAP": "wins missing review asks",
+    "WORKFLOWS_NONE_PUBLISHED": "no published workflows",
+    "FORM_WENT_SILENT": "a form went silent",
+    "SURVEY_WENT_SILENT": "a survey went silent",
+}
+
+
+def _label(code: str) -> str:
+    """Human words for a flag code; unknown codes degrade gracefully."""
+    return _CODE_LABELS.get(code, code.replace("_", " ").lower())
+
+
 def _fmt_money(value) -> str:
     """Format a number as $1,234; bad/missing input becomes "$?" not a crash."""
     try:
@@ -65,11 +100,13 @@ def _account_summary(sub: dict, snapshot: dict | None, flags: list[dict],
     State is one of "no_data", "steady", "steady_flagged", or "attention";
     build_digests uses it to pick a section. info is the structured record
     both renderers consume — text and HTML are projections of the same data,
-    which is what keeps them from drifting apart.
+    which is what keeps them from drifting apart. Every red/amber flag is
+    included, reds first: the digest is the complete picture, not a teaser
+    for the dashboard.
     """
     name = sub.get("name") or sub.get("slug") or sub.get("location_id")
     info = {"name": name, "slug": sub.get("slug") or "", "mrr": sub.get("mrr"),
-            "flags": [], "extra": 0, "new": [], "resolved": []}
+            "flags": [], "new": [], "resolved": []}
     # No trustworthy snapshot today (broken token, or the gate held it) —
     # surface that fact rather than showing stale or empty numbers.
     if sub.get("token_status") != "ok" or not snapshot or not snapshot.get("gate_passed"):
@@ -84,10 +121,15 @@ def _account_summary(sub: dict, snapshot: dict | None, flags: list[dict],
 
     ordered = sorted(unacked, key=lambda f: 0 if f.get("severity") == "red" else 1)
     info["flags"] = [(f.get("severity"), f.get("action") or f.get("code") or "")
-                     for f in ordered[:3]]
-    info["extra"] = len(ordered) - len(info["flags"])
+                     for f in ordered]
     info["new"] = snapshot.get("flags_new") or []
     info["resolved"] = snapshot.get("flags_resolved") or []
+    # Chart inputs (may be None on older snapshots — renderers skip then).
+    info["opps_open"] = snapshot.get("opps_open")
+    info["opps_stale"] = snapshot.get("opps_stale")
+    info["opps_moved_30d"] = snapshot.get("opps_moved_30d")
+    info["speed_median_min"] = snapshot.get("speed_to_lead_median_min")
+    info["uncontacted_24h"] = snapshot.get("leads_uncontacted_24h")
     return ("attention" if reds or len(unacked) >= 2 else "steady_flagged"), info
 
 
@@ -98,12 +140,18 @@ def _text_block(info: dict) -> list[str]:
     for severity, action in info["flags"]:
         marker = "RED" if severity == "red" else "amber"
         lines.append(f"    [{marker}] {action}")
+    if info.get("opps_open"):
+        lines.append(f"    pipeline: {info['opps_stale'] or 0} of {info['opps_open']} "
+                     f"open deals idle 14d+; {info['opps_moved_30d'] or 0} moved in 30d")
+    if info.get("speed_median_min") is not None or info.get("uncontacted_24h"):
+        lines.append(f"    response: first touch {_fmt_minutes(info.get('speed_median_min'))}; "
+                     f"{info.get('uncontacted_24h') or 0} leads without follow-up in 24h+")
     if info["new"] or info["resolved"]:
         changed = []
         if info["new"]:
-            changed.append("new: " + ", ".join(info["new"]))
+            changed.append("new: " + ", ".join(_label(c) for c in info["new"]))
         if info["resolved"]:
-            changed.append("resolved: " + ", ".join(info["resolved"]))
+            changed.append("resolved: " + ", ".join(_label(c) for c in info["resolved"]))
         lines.append("    changed this week — " + "; ".join(changed))
     return lines
 
@@ -150,6 +198,79 @@ def _section_heading(text: str, color: str, rule: str) -> str:
             f'border-bottom:2px solid {rule};padding-bottom:6px;">{text}</div></td></tr>')
 
 
+def _fmt_minutes(minutes) -> str:
+    """Humanize a minutes value: <1 min / 12 min / 3.4h / 2.1d; '?' if unknown."""
+    try:
+        m = float(minutes)
+    except (TypeError, ValueError):
+        return "?"
+    if m < 1:
+        return "&lt;1 min" if False else "<1 min"
+    if m < 90:
+        return f"{m:.0f} min"
+    if m < 2880:
+        return f"{m / 60:.1f}h"
+    return f"{m / 1440:.1f}d"
+
+
+def _pipeline_bar(info: dict) -> str:
+    """Idle-share bar: what fraction of open deals sat untouched 14d+.
+
+    A stacked email-safe bar (two colored table cells) beats any number here:
+    Flohr at 99% idle and Olympic at 36% idle look instantly different. Fill
+    goes red when nothing at all moved in 30 days on a real book — the frozen
+    case — else amber. Skipped when the account has no open deals.
+    """
+    open_ct = info.get("opps_open") or 0
+    if not open_ct:
+        return ""
+    stale = min(info.get("opps_stale") or 0, open_ct)
+    moved = info.get("opps_moved_30d") or 0
+    pct = stale / open_ct * 100.0
+    # Keep a sliver of each side visible so 1% and 99% still read as mixed.
+    fill = max(2, min(98, round(pct))) if 0 < pct < 100 else round(pct)
+    color = _RED if (moved == 0 and open_ct >= 10) else "#d99a2b"
+    bar = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+           'style="margin-top:8px;"><tr>')
+    if fill:
+        bar += f'<td width="{fill}%" height="8" style="background-color:{color};"></td>'
+    if fill < 100:
+        bar += f'<td width="{100 - fill}%" height="8" style="background-color:{_GREEN_SOFT};"></td>'
+    bar += "</tr></table>"
+    caption = (f'<div style="font-family:{_FONT};font-size:12px;color:{_MUTED};'
+               f'padding-top:4px;">{stale:,} of {open_ct:,} open deals idle 14d+ '
+               f'&middot; {moved:,} moved in 30d</div>')
+    return bar + caption
+
+
+def _dot(color: str) -> str:
+    return (f'<span style="display:inline-block;width:8px;height:8px;'
+            f'border-radius:4px;background-color:{color};"></span>&nbsp;')
+
+
+def _response_line(info: dict) -> str:
+    """First-touch speed and the human follow-up gap, as one dotted line.
+
+    Median first touch is nearly always automation answering in seconds —
+    green and reassuring but not the story. The load-bearing number is how
+    many leads have had NO follow-up in 24h+; its dot goes amber then red.
+    """
+    sp = info.get("speed_median_min")
+    waiting = info.get("uncontacted_24h")
+    if sp is None and not waiting:
+        return ""
+    parts = []
+    if sp is not None:
+        sp_color = _GREEN if float(sp) < 5 else (_AMBER if float(sp) < 60 else _RED)
+        parts.append(f'{_dot(sp_color)}First touch {_fmt_minutes(sp)}')
+    w = waiting or 0
+    w_color = _GREEN if w == 0 else (_AMBER if w < 10 else _RED)
+    w_text = "no leads waiting 24h+" if w == 0 else f"{w} lead{'s' if w != 1 else ''} without follow-up 24h+"
+    parts.append(f"{_dot(w_color)}{w_text}")
+    return (f'<div style="font-family:{_FONT};font-size:12px;color:{_BODY_TX};'
+            f'padding-top:7px;">' + " &nbsp; ".join(parts) + "</div>")
+
+
 def _account_card(info: dict) -> str:
     """One needs-attention account: linked name, MRR, pills, changed line."""
     esc = html.escape
@@ -159,24 +280,23 @@ def _account_card(info: dict) -> str:
            f'MRR {_fmt_money(info["mrr"])}</td>') if info["mrr"] is not None else ""
     rows = [(
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
-        f'<td style="font-family:{_FONT};font-size:15px;font-weight:600;color:{_INK};">'
-        f'<a href="{url}" style="color:{_INK};text-decoration:none;">{esc(info["name"])}</a>'
-        f'</td>{mrr}</tr></table>')]
+        f'<td style="font-family:{_FONT};font-size:15px;font-weight:600;">'
+        f'<a href="{url}" style="color:{_ACCENT};text-decoration:none;">'
+        f'{esc(info["name"])} &rarr;</a></td>{mrr}</tr></table>')]
+    rows.append(_pipeline_bar(info))
+    rows.append(_response_line(info))
     for severity, action in info["flags"]:
         rows.append(
             '<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:7px;">'
             f'<tr><td valign="top" style="padding:1px 8px 0 0;">{_pill(severity)}</td>'
             f'<td style="font-family:{_FONT};font-size:13px;line-height:1.5;'
             f'color:{_BODY_TX};">{esc(action)}</td></tr></table>')
-    if info["extra"]:
-        rows.append(f'<div style="font-family:{_FONT};font-size:12px;color:{_ACCENT};'
-                    f'padding-top:6px;">+{info["extra"]} more on the dashboard</div>')
     if info["new"] or info["resolved"]:
         parts = []
         if info["new"]:
-            parts.append("new: " + ", ".join(html.escape(c) for c in info["new"]))
+            parts.append("new: " + ", ".join(html.escape(_label(c)) for c in info["new"]))
         if info["resolved"]:
-            parts.append("resolved: " + ", ".join(html.escape(c) for c in info["resolved"]))
+            parts.append("resolved: " + ", ".join(html.escape(_label(c)) for c in info["resolved"]))
         rows.append(f'<div style="font-family:{_FONT};font-size:12px;color:{_FAINT};'
                     f'padding-top:7px;">This week — {" · ".join(parts)}</div>')
     return ('<tr><td style="padding:14px 32px 14px;border-bottom:1px solid '
