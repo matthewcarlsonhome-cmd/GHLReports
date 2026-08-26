@@ -159,3 +159,39 @@ def test_frozen_book_gets_a_red_bar():
     digests = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")
     body = digests["lisa@smallscreenproducer.com"]["html"]
     assert f'width="100%" height="8" style="background-color:#c43c3c;"' in body
+
+
+def test_oversized_book_splits_into_parts_under_gmail_clip_limit():
+    """Gmail clips HTML over ~102KB, silently amputating the bottom of the
+    digest (this happened: Texas Swim vanished from the 25-account email).
+    An oversized book must arrive as numbered parts, every account present."""
+    subs, snaps, flags = [], {}, {}
+    action = ("963 of 996 open deals (97%) idle 14d+ — too many for deal-by-deal "
+              "follow-up. Book a pipeline cleanup with the client: close out dead "
+              "deals so the real ones become visible.")
+    for i in range(32):
+        loc = f"loc{i:02d}"
+        subs.append({"location_id": loc, "name": f"Account Number {i:02d} Pools & Spas",
+                     "slug": f"acct{i}", "active": True, "token_status": "ok",
+                     "am_email": "lisa@smallscreenproducer.com"})
+        snaps[loc] = {"gate_passed": True,
+                      "flags_new": ["CONVOS_WAITING", "PIPELINE_HYGIENE", "FORM_WENT_SILENT",
+                                    "UNASSIGNED_LEADS", "SLOW_RESPONSE"],
+                      "flags_resolved": ["NO_DELIVERY"],
+                      "opps_open": 996, "opps_stale": 963, "opps_moved_30d": 52,
+                      "speed_to_lead_median_min": 0.3, "leads_uncontacted_24h": 4}
+        flags[loc] = ([{"code": "CONVOS_WAITING", "severity": "red", "action": action}]
+                      + [{"code": f"C{j}", "severity": "amber", "action": action}
+                         for j in range(6)])
+    digests = build_digests(subs, snaps, flags, {}, "2026-08-17")
+    first = digests["lisa@smallscreenproducer.com"]
+    every_part = [first] + list(first.get("extra_parts") or [])
+    assert len(every_part) >= 2, "a 32-account book must split"
+    joined = ""
+    for i, message in enumerate(every_part, 1):
+        size = len(message["html"].encode())
+        assert size < 95_000, f"part {i}: {size} bytes"
+        assert f"({i}/{len(every_part)})" in message["subject"]
+        joined += message["html"]
+    for i in range(32):
+        assert f"Account Number {i:02d}" in joined

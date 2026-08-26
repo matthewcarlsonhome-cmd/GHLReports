@@ -1251,8 +1251,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             log("digest: no AMs with client accounts; nothing to send")
             return 0
         if args.dry_run:
-            for am, message in digests.items():
-                print(f"--- {am} :: {message['subject']} ---\n{message['text']}\n")
+            for am, first in digests.items():
+                for message in [first] + list(first.get("extra_parts") or []):
+                    print(f"--- {am} :: {message['subject']} ---\n{message['text']}\n")
             log(f"digest dry run: {len(digests)} emails built, none sent")
             return 0
         sent, digest_failed = digest_mod.send_digests(digests, log=log)

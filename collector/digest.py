@@ -170,7 +170,10 @@ _RED = "#c43c3c"; _RED_SOFT = "#fbeaea"
 _AMBER = "#a86f0a"; _AMBER_SOFT = "#faf0da"
 _GREEN = "#0c7a3c"; _GREEN_SOFT = "#e2f3e8"
 _ACCENT = "#2a78d6"
-_FONT = "'Segoe UI', Helvetica, Arial, sans-serif"
+# Deliberately terse: email clients ignore inheritance so this repeats on
+# ~300 elements, and Gmail CLIPS any message over ~102KB — which silently
+# amputates the bottom of the digest. Byte budget beats Segoe UI.
+_FONT = "Arial,sans-serif"
 
 
 def _pill(severity: str) -> str:
@@ -178,7 +181,7 @@ def _pill(severity: str) -> str:
     color = _RED if severity == "red" else _AMBER
     label = "RED" if severity == "red" else "AMBER"
     return (f'<span style="display:inline-block;font-family:{_FONT};font-size:10px;'
-            f'font-weight:700;letter-spacing:1px;color:#ffffff;'
+            f'font-weight:700;letter-spacing:1px;color:#fff;'
             f'background-color:{color};border-radius:9px;padding:2px 8px;">{label}</span>')
 
 
@@ -288,10 +291,8 @@ def _account_card(info: dict) -> str:
     rows.append(_response_line(info))
     for severity, action in info["flags"]:
         rows.append(
-            '<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:7px;">'
-            f'<tr><td valign="top" style="padding:1px 8px 0 0;">{_pill(severity)}</td>'
-            f'<td style="font-family:{_FONT};font-size:13px;line-height:1.5;'
-            f'color:{_BODY_TX};">{esc(action)}</td></tr></table>')
+            f'<div style="margin-top:7px;font-family:{_FONT};font-size:13px;'
+            f'line-height:1.5;color:{_BODY_TX};">{_pill(severity)} {esc(action)}</div>')
     if info["new"] or info["resolved"]:
         parts = []
         if info["new"]:
@@ -319,7 +320,7 @@ def _render_html(run_date: str, total: int, attention: list[dict],
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
         f'style="background-color:{_PAPER};"><tr><td align="center" style="padding:26px 12px;">',
         '<table role="presentation" width="600" cellpadding="0" cellspacing="0" '
-        'style="width:600px;max-width:100%;background-color:#ffffff;'
+        'style="width:600px;max-width:100%;background-color:#fff;'
         f'border:1px solid {_LINE};border-radius:10px;">',
         # Header
         '<tr><td style="padding:26px 32px 0;">'
@@ -366,7 +367,7 @@ def _render_html(run_date: str, total: int, attention: list[dict],
     out.append(
         '<tr><td align="center" style="padding:26px 32px 8px;">'
         f'<a href="{DASHBOARD_URL}" style="display:inline-block;font-family:{_FONT};'
-        f'background-color:{_ACCENT};color:#ffffff;text-decoration:none;font-weight:600;'
+        f'background-color:{_ACCENT};color:#fff;text-decoration:none;font-weight:600;'
         f'font-size:14px;padding:11px 24px;border-radius:8px;">Open the dashboard</a></td></tr>')
     out.append(
         '<tr><td align="center" style="padding:4px 32px 24px;">'
@@ -401,16 +402,18 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
             continue
         by_am.setdefault(am, []).append(sub)
 
-    digests: dict[str, dict] = {}
-    for am, accounts in sorted(by_am.items()):
-        # Sort this AM's accounts into the three buckets, tallying the MRR of
-        # accounts that need attention for the subject/summary line.
+    # Gmail clips messages over ~102KB, silently amputating the bottom of
+    # the digest (accounts late in the alphabet just vanish). Budget leaves
+    # headroom for quoted-printable encoding growth in transit.
+    BYTE_BUDGET = 88_000
+
+    def compose(chunk: list[dict]) -> dict:
+        """Render one email for a subset of an AM's accounts."""
         attention: list[dict] = []
         steady_names: list[str] = []
         no_data: list[dict] = []
         mrr_at_risk = 0.0
-
-        for sub in sorted(accounts, key=lambda s: s.get("name") or ""):
+        for sub in chunk:
             loc = sub["location_id"]
             state, info = _account_summary(
                 sub, snapshots_by_loc.get(loc), flags_by_loc.get(loc, []),
@@ -436,7 +439,7 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
         # Plain-text body: same shape the first digests used — it is what
         # text-only clients and previews fall back to.
         parts = [
-            f"Week of {run_date}. Your book: {len(accounts)} accounts.",
+            f"Week of {run_date}. Your book: {len(chunk)} accounts.",
             "",
         ]
         if attention:
@@ -455,10 +458,36 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
             parts.append("")
         parts.append(f"Full picture: {DASHBOARD_URL}")
         text = "\n".join(parts)
-
-        html_body = _render_html(run_date, len(accounts), attention,
+        html_body = _render_html(run_date, len(chunk), attention,
                                  steady_names, no_data, mrr_at_risk)
-        digests[am] = {"subject": subject, "text": text, "html": html_body}
+        return {"subject": subject, "text": text, "html": html_body}
+
+    digests: dict[str, dict] = {}
+    for am, accounts in sorted(by_am.items()):
+        ordered = sorted(accounts, key=lambda s: (s.get("name") or "").lower())
+        message = compose(ordered)
+        if len(message["html"].encode()) > BYTE_BUDGET and len(ordered) > 1:
+            # Too big for one email: split into alphabetical parts, each under
+            # budget, so no account is ever silently clipped away. Greedy
+            # packing — grow a chunk until adding one more account overflows.
+            chunks: list[list[dict]] = []
+            current: list[dict] = []
+            for sub in ordered:
+                current.append(sub)
+                if (len(current) > 1
+                        and len(compose(current)["html"].encode()) > BYTE_BUDGET):
+                    current.pop()
+                    chunks.append(current)
+                    current = [sub]
+            if current:
+                chunks.append(current)
+            messages = [compose(c) for c in chunks]
+            total = len(messages)
+            for i, msg in enumerate(messages, 1):
+                msg["subject"] = msg["subject"].replace(
+                    "Account health", f"Account health ({i}/{total})", 1)
+            message = {**messages[0], "extra_parts": messages[1:]}
+        digests[am] = message
     return digests
 
 
@@ -507,41 +536,47 @@ def send_digests(digests: dict[str, dict], log=print) -> tuple[int, int]:
 
     sent = failed = 0
     server: smtplib.SMTP | None = None
-    for to, message in digests.items():
+    for to, first in digests.items():
         if not to.strip().lower().endswith(STAFF_DOMAIN):
             log(f"digest: {to} skipped (not a staff address)")
             continue
-        msg = EmailMessage()
-        msg["From"] = from_addr
-        msg["To"] = to
-        if cc:
-            msg["Cc"] = ", ".join(cc)
-        msg["Subject"] = message["subject"]
-        msg.set_content(message["text"])
-        msg.add_alternative(message["html"], subtype="html")
-        try:
-            if server is None:
-                server = _connect(host, port, user, password)
-            server.send_message(msg)
-            sent += 1
-            log(f"digest: sent to {to}")
-        except (smtplib.SMTPException, OSError):
-            # The server may have dropped an idle connection — reconnect once
-            # for this message; a second failure counts as failed and the next
-            # message starts fresh.
-            with contextlib.suppress(smtplib.SMTPException, OSError):
-                if server is not None:
-                    server.quit()
-            server = None
+        # An oversized book arrives as numbered parts (see build_digests's
+        # BYTE_BUDGET) — each part is its own email so Gmail never clips.
+        every_part = [first] + list(first.get("extra_parts") or [])
+        if len(every_part) > 1:
+            log(f"digest: {to} split into {len(every_part)} parts (size)")
+        for message in every_part:
+            msg = EmailMessage()
+            msg["From"] = from_addr
+            msg["To"] = to
+            if cc:
+                msg["Cc"] = ", ".join(cc)
+            msg["Subject"] = message["subject"]
+            msg.set_content(message["text"])
+            msg.add_alternative(message["html"], subtype="html")
             try:
-                server = _connect(host, port, user, password)
+                if server is None:
+                    server = _connect(host, port, user, password)
                 server.send_message(msg)
                 sent += 1
-                log(f"digest: sent to {to} (after reconnect)")
-            except (smtplib.SMTPException, OSError) as exc:
-                failed += 1
-                log(f"digest: {to} failed ({type(exc).__name__})")
+                log(f"digest: sent to {to}")
+            except (smtplib.SMTPException, OSError):
+                # The server may have dropped an idle connection — reconnect
+                # once for this message; a second failure counts as failed and
+                # the next message starts fresh.
+                with contextlib.suppress(smtplib.SMTPException, OSError):
+                    if server is not None:
+                        server.quit()
                 server = None
+                try:
+                    server = _connect(host, port, user, password)
+                    server.send_message(msg)
+                    sent += 1
+                    log(f"digest: sent to {to} (after reconnect)")
+                except (smtplib.SMTPException, OSError) as exc:
+                    failed += 1
+                    log(f"digest: {to} failed ({type(exc).__name__})")
+                    server = None
     if server is not None:
         with contextlib.suppress(smtplib.SMTPException, OSError):
             server.quit()
