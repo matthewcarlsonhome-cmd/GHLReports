@@ -158,6 +158,53 @@ def account_rows(sub: dict, forms: list[dict], per_form: dict,
     return rows
 
 
+def collect_book(store, subs: list[dict], days: int = 30,
+                 keep_query: bool = False, client_factory=GHLClient,
+                 log=print) -> tuple[list[dict], list[str]]:
+    """Run the extraction for the given subaccounts.
+
+    Returns (csv_rows, failed_labels). Shared by the standalone CLI below and
+    collector/main.py's --form-urls mode (Render can only run main.py, so the
+    mode is how the CSV gets produced without a local Python setup)."""
+    start = (date.today() - timedelta(days=days)).isoformat()
+    end = date.today().isoformat()
+    rows: list[dict] = []
+    failed: list[str] = []
+    for sub in sorted(subs, key=lambda s: (s.get("name") or s.get("slug") or "").lower()):
+        label = sub.get("name") or sub.get("slug") or sub["location_id"]
+        token = store.get_pit(sub["location_id"])
+        if not token:
+            log(f"{label}: SKIPPED — no PIT stored")
+            failed.append(label)
+            continue
+        client = client_factory(token)
+        try:
+            forms = fetch_forms(client, sub["location_id"])
+            per_form, complete = fetch_submission_pages(
+                client, sub["location_id"], start, end, keep_query)
+        except GHLError as exc:
+            log(f"{label}: FAILED — {exc}")
+            failed.append(label)
+            continue
+        acct = account_rows(sub, forms, per_form, keep_query)
+        rows.extend(acct)
+        placed = len({r["form_id"] for r in acct if r["status"] == "placed"})
+        silent = sum(1 for r in acct if r["status"] == "silent")
+        suffix = "" if complete else f" (window truncated at {MAX_SUBMISSION_PAGES * PAGE_LIMIT} submissions)"
+        log(f"{label}: {len(forms)} forms — {placed} placed, {silent} silent{suffix}")
+    return rows, failed
+
+
+def rows_to_csv_text(rows: list[dict]) -> str:
+    """The finished CSV as one string (header + every row)."""
+    import io
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="form_urls", description=(
         "Map forms to the page URLs they were submitted from (read-only)."))
@@ -176,39 +223,11 @@ def main() -> None:
         if not subs:
             print(f"no active subaccount with slug {args.location!r}", file=sys.stderr)
             sys.exit(1)
-    subs.sort(key=lambda s: (s.get("name") or s.get("slug") or "").lower())
 
-    start = (date.today() - timedelta(days=args.days)).isoformat()
-    end = date.today().isoformat()
-    rows: list[dict] = []
-    failed: list[str] = []
-    for sub in subs:
-        label = sub.get("name") or sub.get("slug") or sub["location_id"]
-        token = store.get_pit(sub["location_id"])
-        if not token:
-            print(f"{label}: SKIPPED — no PIT stored", file=sys.stderr)
-            failed.append(label)
-            continue
-        client = GHLClient(token)
-        try:
-            forms = fetch_forms(client, sub["location_id"])
-            per_form, complete = fetch_submission_pages(
-                client, sub["location_id"], start, end, args.keep_query)
-        except GHLError as exc:
-            print(f"{label}: FAILED — {exc}", file=sys.stderr)
-            failed.append(label)
-            continue
-        acct = account_rows(sub, forms, per_form, args.keep_query)
-        rows.extend(acct)
-        placed = len({r["form_id"] for r in acct if r["status"] == "placed"})
-        silent = sum(1 for r in acct if r["status"] == "silent")
-        suffix = "" if complete else f" (window truncated at {MAX_SUBMISSION_PAGES * PAGE_LIMIT} submissions)"
-        print(f"{label}: {len(forms)} forms — {placed} placed, {silent} silent{suffix}")
-
+    rows, failed = collect_book(store, subs, days=args.days,
+                                keep_query=args.keep_query)
     with open(args.out, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
+        fh.write(rows_to_csv_text(rows))
     placed_total = len({(r["location_id"], r["form_id"])
                         for r in rows if r["status"] == "placed"})
     print(f"\nwrote {len(rows)} rows to {args.out} "

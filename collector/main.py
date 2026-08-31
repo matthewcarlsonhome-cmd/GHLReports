@@ -1170,6 +1170,11 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--digest", action="store_true",
                         help="build and send the per-AM digest from today's data, then exit "
                              "(with --dry-run: print instead of sending)")
+    parser.add_argument("--form-urls", action="store_true",
+                        help="print the form→page-URL CSV (from submission tracking "
+                             "data) to the log and exit; honors --location")
+    parser.add_argument("--form-urls-days", type=int, default=30, metavar="N",
+                        help="submission window for --form-urls (default 30)")
     args = parser.parse_args(argv)
 
     # -- send-test mode -------------------------------------------------------
@@ -1237,6 +1242,22 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             fh.write(report)
         log("probe appended to VERIFICATION.md")
         return 0
+
+    # -- form-urls mode --------------------------------------------------------
+    # Map each form to the page URL(s) it was submitted from and print the
+    # CSV to stdout — like the probe report, the log stream is what survives
+    # a Render run, so copy the block between the markers into a .csv file.
+    if args.form_urls:
+        from .tools import form_urls as form_urls_mod
+        rows, failed = form_urls_mod.collect_book(
+            store, targets, days=args.form_urls_days,
+            client_factory=client_factory, log=log)
+        print("\n===== form-urls.csv BEGIN (copy the lines between the markers) =====")
+        print(form_urls_mod.rows_to_csv_text(rows), end="")
+        print("===== form-urls.csv END =====")
+        if failed:
+            log(f"{len(failed)} account(s) not checked: {', '.join(failed)}")
+        return 0 if not failed else 2
 
     # -- digest mode ------------------------------------------------------------
     # Build the per-AM summary from data already in the database (no GHL

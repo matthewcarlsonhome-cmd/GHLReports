@@ -332,10 +332,18 @@ the UI. The collector reads the Vault's `updated_at` every run, so
 `token_rotated_at` and the 80-day warning stay correct automatically.
 
 **Where is each form embedded?** GHL doesn't store form placement, but
-every submission records the page it came from, so
-`python -m collector.tools.form_urls` (options: `--location <slug>`,
-`--days 30`, `--out form-urls.csv`) writes a CSV mapping each form to the
-page URLs it was submitted from — the input the uptime browser checks need.
+every submission records the page it came from, and two commands turn that
+into a CSV mapping each form to the page URLs it was submitted from — the
+input the uptime browser checks need:
+
+- **On Render (no local setup)**: set `COLLECTOR_ARGS` to `--form-urls`
+  (optionally plus `--location <slug>` or `--form-urls-days 60`), trigger a
+  manual run, and copy the CSV block printed in the log between the
+  `===== form-urls.csv BEGIN/END =====` markers. Remember to clear
+  `COLLECTOR_ARGS` afterward or the nightly run repeats it.
+- **Locally**: `python -m collector.tools.form_urls` (options:
+  `--location <slug>`, `--days 30`, `--out form-urls.csv`).
+
 Forms with no submissions in the window show as `silent`: their placement
 exists nowhere in GHL, so get the page from the client team or by crawling
 the site for `/widget/form/<id>` iframes.

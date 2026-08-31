@@ -2,13 +2,18 @@
 
 Covers URL normalization, the submissions aggregation (pagination, no-URL
 submissions, the safety cap), row building (placed / no_url_data / silent),
-and the PII boundary: submitted answer fields living next to eventData in
-`others` must never surface in the aggregate or the CSV rows.
+the PII boundary (submitted answer fields living next to eventData in
+`others` must never surface in the aggregate or the CSV rows), and the
+--form-urls mode of collector/main.py that prints the CSV into the run log.
 """
 
+from datetime import datetime, timezone
+
+from .. import main as main_mod
 from ..tools.form_urls import (MAX_SUBMISSION_PAGES, PAGE_LIMIT, account_rows,
-                               fetch_submission_pages, normalize_url)
-from .fakes import FakeClient
+                               fetch_submission_pages, normalize_url,
+                               rows_to_csv_text)
+from .fakes import CLIENT_SUB, PARENT_SUB, FakeClient, FakeStore, make_factory
 
 
 def _submission(form_id, created, url=None, title=None, others_extra=None):
@@ -146,3 +151,41 @@ def test_rows_carry_account_identity_for_the_csv():
         assert row["account"] == "AAA Pools"
         assert row["slug"] == "aaapools"
         assert row["location_id"] == "loc1"
+
+
+# -- main.py --form-urls mode ----------------------------------------------
+
+def test_main_form_urls_mode_prints_csv_between_markers(capsys):
+    submissions = {"submissions": [
+        _submission("formA1", "2026-08-15", "https://client.com/pool-quote",
+                    "Get a Quote"),
+        _submission("formA1", "2026-08-17", "https://client.com/pool-quote",
+                    "Get a Quote"),
+    ]}
+    store = FakeStore(subs=[PARENT_SUB, CLIENT_SUB])
+    code = main_mod.run(["--form-urls"], store=store,
+                        client_factory=make_factory(
+                            forms_override={"locA": submissions}),
+                        now_utc=datetime(2026, 8, 18, 15, 0, tzinfo=timezone.utc))
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "===== form-urls.csv BEGIN" in out and "form-urls.csv END" in out
+    csv_part = out.split("BEGIN (copy the lines between the markers) =====")[1]
+    csv_part = csv_part.split("=====")[0]
+    lines = [l for l in csv_part.strip().splitlines() if l]
+    assert lines[0].startswith("account,slug,location_id,form_id,form_name")
+    placed = [l for l in lines if ",placed," in l]
+    assert len(placed) == 1
+    assert "formA1" in placed[0] and "https://client.com/pool-quote" in placed[0]
+    assert placed[0].rstrip().endswith("2026-08-17")  # hits row keeps last_seen
+    # The four other locA fixture forms had no submissions in the window.
+    assert sum(1 for l in lines if ",silent," in l) == 4
+    # No snapshot was written: the mode exits before the collection pipeline.
+    assert store.snapshots == {}
+
+
+def test_rows_to_csv_text_roundtrips_columns():
+    text = rows_to_csv_text(_rows())
+    lines = text.strip().splitlines()
+    assert lines[0] == "account,slug,location_id,form_id,form_name,status,page_url,page_title,hits,last_seen"
+    assert len(lines) == 1 + len(_rows())
