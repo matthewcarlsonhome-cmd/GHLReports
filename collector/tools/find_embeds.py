@@ -56,6 +56,12 @@ BFS_DEPTH = 2
 # GHL widget embeds, any host (api.leadconnectorhq.com, link.msgsndr.com,
 # whitelabel domains). The id charset is GHL's usual base62-ish key.
 WIDGET_RE = re.compile(r"/widget/(form|survey)/([A-Za-z0-9_-]{8,40})")
+# Forms on GHL-hosted funnel pages render INLINE, not as widget iframes:
+# the form id shows up in element ids (el_<formId>_<field>) and in the
+# page's packed JSON ("formId":"<id>"). Both patterns require the id to be
+# 15+ chars so generic el_* element ids don't false-positive.
+INLINE_EL_RE = re.compile(r"\bel_([A-Za-z0-9]{15,40})_")
+FORMID_JSON_RE = re.compile(r"""formId["']?\s*[:=]\s*["']([A-Za-z0-9_-]{15,40})""")
 # A native HTML form on the page (crude on purpose; search boxes are
 # filtered out by requiring a method=post or several input fields nearby).
 NATIVE_FORM_RE = re.compile(r"<form\b[^>]*method=[\"']?post", re.IGNORECASE)
@@ -184,8 +190,11 @@ def candidate_rank(url: str) -> tuple[int, int]:
 
 
 def scan_page(body: str) -> tuple[set[str], bool]:
-    """(GHL widget ids in the HTML, page has a native POST form)."""
+    """(GHL form/survey ids in the HTML — widget iframes plus inline funnel
+    renders — , page has a native POST form)."""
     ids = {m.group(2) for m in WIDGET_RE.finditer(body)}
+    ids |= set(INLINE_EL_RE.findall(body))
+    ids |= set(FORMID_JSON_RE.findall(body))
     return ids, bool(NATIVE_FORM_RE.search(body))
 
 

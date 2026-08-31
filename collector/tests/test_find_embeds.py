@@ -90,6 +90,18 @@ def test_scan_page_finds_widget_ids_on_any_embed_host():
     assert not native
 
 
+def test_scan_page_finds_inline_funnel_forms():
+    # GHL funnel pages render forms inline: el_<formId>_<field> element ids
+    # and "formId" keys in packed JSON — no widget iframe at all.
+    body = """
+      <input id="el_5ynEIFJZNDcZiTDgl0sg_first_name">
+      <script>{"formId":"SxDhR1BuOShS7xDLTvVr","x":1}</script>
+      <div id="el_short_x">generic builder id, too short to be a GHL key</div>
+    """
+    ids, _ = scan_page(body)
+    assert ids == {"5ynEIFJZNDcZiTDgl0sg", "SxDhR1BuOShS7xDLTvVr"}
+
+
 def test_scan_page_flags_native_post_forms_but_not_get_search():
     assert scan_page('<form method="post" action="/thank-you">')[1] is True
     assert scan_page('<form method="get" id="searchform">')[1] is False
