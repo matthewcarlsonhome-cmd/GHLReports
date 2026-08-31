@@ -345,8 +345,15 @@ input the uptime browser checks need:
   `--location <slug>`, `--days 30`, `--out form-urls.csv`).
 
 Forms with no submissions in the window show as `silent`: their placement
-exists nowhere in GHL, so get the page from the client team or by crawling
-the site for `/widget/form/<id>` iframes.
+exists nowhere in GHL — for those, crawl the client's public site instead:
+`python -m collector.tools.find_embeds --targets targets.csv` reads a CSV
+of forms to locate (`slug,form_id` at minimum), pulls each account's
+website from `subaccounts.tag_config->website` (or a `--sites` CSV), walks
+the sitemap (BFS from the homepage when there is none), and writes
+`embeds.csv` with a row per page whose HTML embeds the form
+(`/widget/form/<id>`), plus `not_found` / `unlisted` / `native_form_page`
+rows — the last one marks contact-style pages using a non-GHL form, the
+usual reason a silent form is silent. Public pages only; no GHL tokens.
 
 ## 4. Security model (short version)
 
