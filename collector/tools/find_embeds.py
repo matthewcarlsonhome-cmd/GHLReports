@@ -62,6 +62,13 @@ WIDGET_RE = re.compile(r"/widget/(form|survey)/([A-Za-z0-9_-]{8,40})")
 # 15+ chars so generic el_* element ids don't false-positive.
 INLINE_EL_RE = re.compile(r"\bel_([A-Za-z0-9]{15,40})_")
 FORMID_JSON_RE = re.compile(r"""formId["']?\s*[:=]\s*["']([A-Za-z0-9_-]{15,40})""")
+# AMP builds serialize the iframe differently: the id survives as an
+# inline-<id> element id or a data-form-id attribute (seen live on
+# texaspoolsandpatios.com). One caveat this scanner can't fix: builders
+# that inject the embed purely client-side (seen on a Wix site) leave no
+# trace in raw HTML — those need a rendered-browser check.
+INLINE_ID_RE = re.compile(r"""\binline-([A-Za-z0-9_-]{15,40})""")
+DATA_FORM_ID_RE = re.compile(r"""data-form-id=["']([A-Za-z0-9_-]{15,40})["']""")
 # A native HTML form on the page (crude on purpose; search boxes are
 # filtered out by requiring a method=post or several input fields nearby).
 NATIVE_FORM_RE = re.compile(r"<form\b[^>]*method=[\"']?post", re.IGNORECASE)
@@ -195,6 +202,8 @@ def scan_page(body: str) -> tuple[set[str], bool]:
     ids = {m.group(2) for m in WIDGET_RE.finditer(body)}
     ids |= set(INLINE_EL_RE.findall(body))
     ids |= set(FORMID_JSON_RE.findall(body))
+    ids |= set(INLINE_ID_RE.findall(body))
+    ids |= set(DATA_FORM_ID_RE.findall(body))
     return ids, bool(NATIVE_FORM_RE.search(body))
 
 

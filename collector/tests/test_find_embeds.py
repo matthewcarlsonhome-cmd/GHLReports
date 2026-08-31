@@ -102,6 +102,17 @@ def test_scan_page_finds_inline_funnel_forms():
     assert ids == {"5ynEIFJZNDcZiTDgl0sg", "SxDhR1BuOShS7xDLTvVr"}
 
 
+def test_scan_page_finds_amp_serialized_embeds():
+    # AMP builds keep the id in inline-<id> element ids / data-form-id attrs
+    # even when the iframe src is mangled (seen live on an AMP client site).
+    body = """
+      <amp-iframe id="inline-PADwizizkUAVaJQuUIf5" src="mhtml:...">
+      <div data-form-id="CtA7ZeTB1C7I5uiiIuQf" data-height="600">
+    """
+    ids, _ = scan_page(body)
+    assert ids == {"PADwizizkUAVaJQuUIf5", "CtA7ZeTB1C7I5uiiIuQf"}
+
+
 def test_scan_page_flags_native_post_forms_but_not_get_search():
     assert scan_page('<form method="post" action="/thank-you">')[1] is True
     assert scan_page('<form method="get" id="searchform">')[1] is False
