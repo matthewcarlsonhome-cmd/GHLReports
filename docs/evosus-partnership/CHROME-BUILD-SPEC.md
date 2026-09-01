@@ -15,6 +15,33 @@ about what *not* to do.
 
 ---
 
+## Status — updated after Eric's 1 Sep update
+
+Three things changed, and they change how this spec is run:
+
+1. **Eric is rebuilding the sub-account.** The account we have been testing in is
+   an old one full of stale data. Eric is standing up a clean one and shaping it
+   into the Evosus template that every dealer gets cloned from. **Do not build
+   into the current test account.** This spec runs against Eric's new account,
+   after he hands it over.
+2. **The data layer already partly exists.** Orders flow into MLH, customer
+   records are created, and purchased products are recorded and linked to the
+   customer. So Eric has already created objects and fields in that account.
+   Phase A can no longer assume an empty slate — see **Phase 0**, which is new
+   and mandatory.
+3. **Ownership is settled.** Eric owns the pipe and the account shell. Everything
+   downstream — workflows, templates, content automation — is Matthew's. Phase J
+   (snapshot) is Eric's, not a gap.
+
+**Blocked upstream:** the LOU `orders-by-date` endpoint is not working yet
+(John's team is on it). That gates *live* firing, not this build. Everything in
+this spec can be built and verified against sample data.
+
+> **A note on names.** "MLH" in Eric's updates is the GoHighLevel instance. This
+> document says GoHighLevel throughout; they are the same system.
+
+---
+
 ## 0. Preflight — do all of this before any write
 
 Take a screenshot at each step. If any check fails, **stop and report**; do not
@@ -23,8 +50,9 @@ proceed on assumption.
 | # | Check | Pass condition | If it fails |
 |---|---|---|---|
 | P1 | Read the sub-account name in the top-left switcher | Matches the name Matthew gave for this session | STOP. Wrong account is the one unrecoverable mistake here. |
-| P2 | Navigate to Contacts | **Zero contacts**, or only obvious test records | STOP and ask. Contacts imply a live client account. |
+| P2 | Navigate to Contacts | Zero contacts, **or** only records Eric's sample-data load created | STOP and ask if there are contacts that look like a real dealer's customers. |
 | P3 | Navigate to Automation → Workflows | Empty, or only items already prefixed `[SSP-CORE]` | STOP if unrelated workflows exist. |
+| P2b | Confirm this is Eric's **new** account, not the old test account | Eric has confirmed handover | STOP. Building into the old account wastes the work — it is being discarded. |
 | P4 | Navigate to Settings → Business Profile | Confirm this is the intended master, not a client | STOP if it carries a real dealer's name. |
 | P5 | Check Settings → Phone Numbers and Email Services | Note whether sending is configured | Record in the gaps report. Do not configure. |
 | P6 | Confirm plan supports Custom Objects (Settings → Objects, or Custom Objects in the left nav) | Present | Record as a gap; Wave 1 does not require them. |
@@ -77,7 +105,8 @@ the session ends early, the most valuable and least-recoverable work is done.
 
 | Phase | Objects | Automation risk | Expect |
 |---|---|---|---|
-| A | 27 custom fields | Low | Complete |
+| 0 | Inventory Eric's build | Low | Complete — and it gates everything below |
+| A | 27 custom fields | Low | Complete, minus whatever Eric already created |
 | B | 19 tags | Low | Complete |
 | C | 22 custom values | Low | Complete |
 | D | 2 pipelines | Low | Complete |
@@ -86,11 +115,47 @@ the session ends early, the most valuable and least-recoverable work is done.
 | G | 2 forms + 1 calendar | Medium | Partial |
 | H | 4 funnel pages | **High** | Shells only |
 | I | 6 workflows | **High** | 2–3 of 6 |
-| J | Snapshot | **Blocked** | Agency-level action; cannot be done from a sub-account |
+| J | Snapshot / template | **Eric's** | Eric is building the Evosus template this clones from. Not our action. |
 
 **Be honest in the report about where you stopped.** A truthful "3 of 6
 workflows, here is exactly where I left off" is worth far more than a claim of
 completion that Matthew discovers is wrong on Monday.
+
+---
+
+## 2b. Phase 0 — Inventory Eric's build (mandatory, before any write)
+
+Eric's pipe already creates customer records and records purchased products
+against them. That means objects and fields exist in this account that this spec
+did not create. **Creating a second set alongside them is the most likely way to
+wreck this build** — two "Customer ID" fields, one populated by the pipe and one
+read by the workflows, fails silently and looks like a content bug for days.
+
+Produce a written inventory before creating anything:
+
+| Read | Record |
+|---|---|
+| Settings → Custom Fields (all objects) | Every field: name, **key**, type, which object |
+| Settings → Custom Objects / Objects | Every custom object, its fields, and its **association to Contact** |
+| Settings → Tags | Every existing tag |
+| Settings → Custom Values | Every existing value |
+| A sample contact created by the pipe | Which fields are actually populated, and with what |
+
+Then reconcile against §3's 27 fields and produce three lists:
+
+- **Same meaning, same key** → do not create. Use Eric's.
+- **Same meaning, different key** → **STOP and ask.** This is a code decision:
+  either the connector changes to write Eric's key, or Eric's field is renamed.
+  Do not create a duplicate to paper over it.
+- **Not present** → create per §3.
+
+**How products are stored is the question that matters most.** "Individual
+products purchased are recorded and linked to the customer record" can mean a
+custom object with an association, or repeating fields on the contact. Find out
+which, record the exact structure, and put it at the top of the gaps report.
+The signal layer currently writes flat contact fields; if Eric has modelled
+purchases as a related object, that is a genuine architecture question for
+Matthew and Eric, not something to resolve by clicking.
 
 ---
 
@@ -296,12 +361,19 @@ allows re-entry after 30 days). Quiet hours 8am–8pm if the setting is availabl
 
 ---
 
-## 10. Phase J — Snapshot
+## 10. Phase J — Snapshot / Evosus template
 
-**This cannot be done from a sub-account.** Snapshot creation lives in the agency
-view (Agency Settings → Snapshots → Create from sub-account). Record it in the
-gaps report as an action for Matthew with agency access. Do not attempt to switch
-to the agency view.
+**Not our action.** Eric is building this account out as the Evosus template that
+every dealer is cloned from. Snapshot creation is an agency-level action anyway
+(Agency Settings → Snapshots → Create from sub-account), and cannot be done from
+a sub-account.
+
+What this phase *does* require from us: the gaps report must tell Eric exactly
+what is safe to snapshot and what is not — specifically, that every workflow is
+in Draft by design, and every `[[BRACKETED]]` custom value is a per-dealer blank
+that must stay a blank in the template. If a placeholder gets filled with the
+first dealer's real details before the snapshot is taken, all 100 dealers inherit
+them.
 
 ---
 
@@ -315,7 +387,7 @@ to the agency view.
 
 ## 12. Gaps report — required output
 
-Produce all seven sections. Do not omit one because it is empty; say "none".
+Produce all nine sections. Do not omit one because it is empty; say "none".
 
 **1. Built and verified.** Object type, count, how verification was done.
 
@@ -337,6 +409,16 @@ corrected for dealers 2 through 100.
 **7. Decisions needed from Matthew.** Concrete questions with options, not
 open-ended ones.
 
+**8. Eric's data layer, as found.** The Phase 0 inventory: every object, field and
+key the pipe created, how purchased products are linked to the contact, and every
+place our field keys and Eric's disagree. Eric needs this back — it is the other
+half of the contract in `src/wave1/contract.js`.
+
+**9. Template safety.** What must NOT be filled in before Eric takes the snapshot:
+every `[[BRACKETED]]` custom value, and the fact that all workflows are
+deliberately in Draft. A placeholder filled with dealer one's details propagates
+to every dealer cloned afterward.
+
 Close with a one-paragraph plain summary: what a person would now see if they
 opened this sub-account, and what remains before it could be snapshotted.
 
@@ -352,6 +434,7 @@ opened this sub-account, and what remains before it could be snapshotted.
 | SMS copy | `email/dist/sms.txt` |
 | Workflow step detail | Wave 1 Build Specification, §8 |
 | Category copy | `src/wave1/content.js` |
+| Kit / bundle handling | `src/wave1/contract.js` (`kitId`, `lineRole`) and `resolveKits()` in `compute.js` |
 
 If this spec and the code disagree, **the code wins** — it is what the connector
 actually writes.
