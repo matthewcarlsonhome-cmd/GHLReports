@@ -8,11 +8,6 @@ actions**; where either disagrees with the code, **the code wins**.
 **Revised:** 3 September 2026, after an external design review closed nine gaps
 and surfaced two live defects in the connector (see §1.2).
 
-> **Note.** Code paths below (`src/…`, `email/…`, `docs/…`) are relative to the
-> **Evosus** repo — `github.com/matthewcarlsonhome-cmd/evosus`, branch
-> `claude/ssp-evosus-lou-integration-gkbg1m`. This copy sits in GHLReports beside
-> the other partnership documents; the canonical copies live in that repo.
-
 ---
 
 ## 1. Before you touch anything
@@ -61,20 +56,32 @@ will see in §9:
 
 ---
 
-## 2. The sub-account Matthew creates first
-
-Matthew creates this at agency level before the session starts. It is a **test**
-account and carries no dealer data. The account owner is Matthew.
+## 2. The target sub-account — created 3 Sep 2026
 
 | Setting | Value |
 |---|---|
+| **Location ID** | `YjSrE8qK0pEp4bBwqO4T` |
+| **Dashboard URL** | `https://crm.smallscreenproducer.com/v2/location/YjSrE8qK0pEp4bBwqO4T/dashboard` |
 | Business name | `TEST — Evosus Launch Build` |
-| Owner / first name | Matthew |
-| Last name | Carlson |
-| Email | `mcarlson@smallscreenproducer.com` |
-| Phone | `608-284-7333` |
+| Owner | Matthew Carlson · `mcarlson@smallscreenproducer.com` · 608-284-7333 |
 | Timezone | America/Chicago |
-| Snapshot to apply | **None** — start blank |
+| Snapshot applied | None — started blank |
+
+**Every URL you visit must contain `YjSrE8qK0pEp4bBwqO4T`.** If the location
+segment of the address bar ever shows a different ID, you are in another
+sub-account: **stop immediately** and report it. This is the one unrecoverable
+mistake available in this build.
+
+### Where this build can run
+
+This plan needs a browser already signed in to GoHighLevel. It runs from Claude
+Code on the desktop app, or the Claude Chrome extension — anything with control of
+a real, authenticated browser.
+
+It **cannot** run from a Claude Code cloud/web session: those execute in an
+isolated container with no access to your browser, and the default network policy
+blocks `services.leadconnectorhq.com`, so the GHL API is unreachable there too.
+Confirmed on 3 Sep 2026 — the proxy returns a 403 policy denial on CONNECT.
 
 ---
 
@@ -117,8 +124,9 @@ account and carries no dealer data. The account owner is Matthew.
 A fresh test account should be empty. Verify rather than assume; Eric's pipe may
 have been pointed here.
 
-1. Confirm the sub-account name reads `TEST — Evosus Launch Build`. **If not, stop.**
-2. Record the location/account ID if visible.
+1. Confirm the address bar contains `YjSrE8qK0pEp4bBwqO4T` **and** the account name
+   reads `TEST — Evosus Launch Build`. **If either is wrong, stop.**
+2. Record the location ID you actually observed in the build log.
 3. Inventory and log: custom fields (name, **key**, type, object) · custom objects
    and any Contact association · tags · custom values · pipelines · email and SMS
    templates · forms · calendars · funnels · workflows · any contact created by
