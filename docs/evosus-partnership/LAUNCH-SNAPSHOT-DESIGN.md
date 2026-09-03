@@ -6,12 +6,10 @@ Launch Snapshot, plus the SSP/Evosus team reviewing the design.
 "one snapshot vs fifty" discussion; the architecture section here is the decided
 design, and §5 records the open team objection and the answer to it.
 
-> **Note.** Every `src/…`, `email/…` and `docs/…` path below is relative to the
+> **Note.** Code paths below (`src/…`, `email/…`, `docs/…`) are relative to the
 > **Evosus** repo — `github.com/matthewcarlsonhome-cmd/evosus`, branch
-> `claude/ssp-evosus-lou-integration-gkbg1m`, which is where the connector code,
-> templates and tests live. This copy sits in GHLReports alongside the other
-> partnership documents; the canonical copy is `docs/LAUNCH-SNAPSHOT-DESIGN.md`
-> in the Evosus repo.
+> `claude/ssp-evosus-lou-integration-gkbg1m`. This copy sits in GHLReports beside
+> the other partnership documents; the canonical copies live in that repo.
 
 ---
 
@@ -374,7 +372,7 @@ merged by the E5/E6 product card but never written, which would have rendered a
 broken image for every reorder recipient). **If you add a merge field to a template,
 add the field to `WAVE1_FIELDS` in the same change.**
 
-### 6.6 Workflows — 6
+### 6.6 Workflows — 8 (6 campaigns + 2 form handlers)
 
 `Automation → Workflows → Create → Start from Scratch`. **Every workflow is left in
 Draft.** Build in this order — easiest first, so partial completion still leaves
@@ -388,24 +386,78 @@ quiet hours 8am–8pm where available.
 | 1 | `[SSP-CORE] W3 Balance-Due Recovery` | `balance-due` | E7 → wait 3d → S5 → wait 6d → E8 → wait 8d → internal task |
 | 2 | `[SSP-CORE] W1 Reorder Reminder` | `reorder-due` | S2 → wait 1d → E5 → wait 3d → S3 → wait 4d → E6 → wait 6d → S4 |
 | 3 | `[SSP-CORE] W2 Seasonal Booking` | `season-invite` | E9 → wait 5d → S7 → wait 7d → E10 → wait 5d → S8 |
-| 4 | `[SSP-CORE] W4 Post-Service Review` | `service-completed` | S6 → wait 1d → E12 → wait 3d → branch on rating → wait 11d → E11 |
+| 4 | `[SSP-CORE] W4 Post-Service Review` | `service-completed` | S6 → wait 1d → E12 → wait 3d → **if `service-recovery-open` end** → wait 11d → E11 |
 | 5 | `[SSP-CORE] W5 New Customer Welcome` | `new-customer` | E1 → wait 2d → S1 → wait 5d → E2 → wait 14d → E3 → wait 24d → E4 |
 | 6 | `[SSP-CORE] U1 Internal Alerts` | `service-recovery-open` | internal notification to `{{custom_values.notify_email_service}}` + task |
+| 7 | `[SSP-CORE] U2 Seasonal Booking Handler` | **Form Submitted:** `[SSP-CORE] Seasonal Booking` | add tag `season-booked` |
+| 8 | `[SSP-CORE] U3 Service Feedback Handler` | **Form Submitted:** `[SSP-CORE] Service Feedback` | if rating ≤ 3 → add tag `service-recovery-open`; else → nothing |
+
+U2 and U3 exist because GHL forms cannot reliably add a tag, let alone a
+*conditional* tag, from form settings alone. They carry **no guards** — they are
+not campaigns, they are the plumbing that turns a form submission into the tag the
+rest of the design depends on. Build them even if the canvas defeats the campaign
+workflows; without U3 nothing ever sets `service-recovery-open`, and both the W4
+branch and U1 are dead.
+
+**W4's "branch on rating" is resolved:** the branch checks for the
+`service-recovery-open` tag that U3 applies. There is no rating field on the
+contact, and none is needed.
 
 **Two guard patterns, on every workflow. These are not optional — without them the
 design fails silently.**
 
-1. **Trigger-tag guard.** Precede *every* send step with If/Else on
-   "Contact has tag `{trigger tag}`"; the false branch **ends** the workflow. This
-   is what makes a customer who has already reordered, paid, or booked stop
-   receiving the sequence. The connector removes the tag; the guard notices.
+1. **Send guard.** Precede *every* send step with a single If/Else carrying a
+   compound condition: **has tag `{trigger tag}` AND does not have tag
+   `do-not-market`**. The false branch **ends** the workflow. This is what makes a
+   customer who has already reordered, paid, or booked stop receiving the
+   sequence, and it is where the hard suppression is enforced. One combined
+   condition, not two stacked branches.
 2. **SMS consent guard.** Wrap every SMS step in If/Else on "Contact has tag
    `sms-consent`"; the false branch **skips the step and continues** (it does not
    end the workflow).
 
+`email-ok` is **not** a GHL guard. It is a connector-side segmentation tag meaning
+"this contact has a deliverable email"; GHL will not send an email to a contact
+with no email address anyway. Do not add it to the workflow canvas.
+
+### Trigger-tag lifetime — the invariant that makes the guards safe
+
+Because every send is guarded on the trigger tag, **a trigger tag must outlive its
+workflow.** If it expires mid-sequence the guard ends the workflow and the
+remaining messages silently never send. Two defects of exactly this kind were
+found and fixed on 3 Sep:
+
+| Tag | Lifetime | Workflow | Span |
+|---|---|---|---|
+| `new-customer` | 45 days | W5 | 45 days (2+5+14+24) |
+| `service-completed` | 35 days | W4 | 15 days (1+3+11) |
+| `reorder-due` | until the category is repurchased | W1 | 14 days |
+| `balance-due` | until the balance clears | W3 | 17 days |
+| `season-invite` | until booked or the window closes | W2 | 17 days |
+
+`new-customer` was previously applied only for 7 days, which would have killed W5
+after the day-2 SMS — nobody would ever have received E2, E3 or E4.
+`service-completed` was **never applied at all**, so W4 could never fire. Both are
+now covered by tests in `tests/wave1.test.js`, including one that fails if the
+connector ever applies a tag not declared in `MANAGED_TAGS`.
+
+`NEW_CUSTOMER_DAYS = 7` still exists and does a different job: during a backfill
+run it decides who may *enter*, so importing 24 months of history does not fire a
+welcome series at everyone. `NEW_CUSTOMER_TAG_DAYS = 45` decides how long they
+stay eligible once in.
+
+`do-not-market` is deliberately **not** in `MANAGED_TAGS` — it is set by a person
+or an unsubscribe, and if the connector managed it, the next sync would strip it
+and the contact would start receiving mail again.
+
 **Do not add an arbitration or traffic-controller workflow.** Arbitration already
 happened in the connector — a contact can only ever carry one revenue-ask tag.
 Adding a second layer in GHL will produce contradictory behaviour.
+
+**Internal task assignee** for W3 step 5 and U1: the account's only user
+(Matthew Carlson in the test build). Per dealer this becomes their sales or
+service owner; it is a custom value candidate, not hard-coded, if GHL allows an
+assignee to be set dynamically.
 
 ### 6.7 Supporting objects
 
@@ -413,7 +465,7 @@ Adding a second layer in GHL will produce contradictory behaviour.
 |---|---|
 | Form `[SSP-CORE] Seasonal Booking` | service type (dropdown: Opening / Closing), preferred week (date), address, notes. On submit: add tag `season-booked`. |
 | Form `[SSP-CORE] Service Feedback` | rating (radio 1–5), comments. Rating 1–3 adds `service-recovery-open`. |
-| Calendar `[SSP-CORE] Seasonal Service` | 60-minute slots, no payment, no confirmation SMS configured |
+| Calendar `[SSP-CORE] Seasonal Service` | 60-minute slots, no payment, no confirmation SMS configured. **Owner:** the account's only user (Matthew Carlson in the test build; reassigned per dealer at onboarding). **Timezone:** America/Chicago. **Availability:** Mon–Fri 8:00–16:00. These are snapshot defaults, expected to be overridden per dealer. |
 | Funnels (4) | `Review Gateway`, `Seasonal Booking`, `Quick Reorder`, `Preference Center` — **shells only**, one blank step each. Page design is a separate content task. |
 
 ---
@@ -434,7 +486,7 @@ still leaves the most valuable work done.
 | F | 12 email templates | Medium | Verify HTML survived the editor |
 | G | 2 forms + 1 calendar | Medium | Partial |
 | H | 4 funnel shells | High | Shells only |
-| I | 6 workflows (§6.6) | **High** | Realistically 2–3 of 6; the canvas is the wall |
+| I | 8 workflows (§6.6) | **High** | Build U2/U3 first — they are small and everything depends on them. Realistically 4–5 of 8. |
 | J | Snapshot | **Eric's** | Agency-level; not this session's action |
 
 ### Phase 0 is mandatory and comes before any write
