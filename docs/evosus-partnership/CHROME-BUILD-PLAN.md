@@ -33,7 +33,7 @@ messages from them.
 | # | Was ambiguous | Now decided |
 |---|---|---|
 | 1 | SMS copy not available to the builder | **Embedded verbatim in §7 of this plan.** No blocker. |
-| 2 | Email HTML not available | Obtained by running `npm run email` in the repo — §8. If you cannot reach the repo, Phase F stops; do not invent bodies. |
+| 2 | Email HTML not available | **Not a blocker.** All 12 files are committed to GitHub and fetchable in the browser — direct links in §8. |
 | 3 | `email-ok` described as a send guard | **Not a GHL guard.** Connector-side segmentation only. Do not put it on the canvas. |
 | 4 | `do-not-market` suppression not in the guards | **Folded into the send guard** as a compound condition — §9.1. |
 | 5 | W4 "branch on rating" undefined | **Branch on the `service-recovery-open` tag.** There is no rating field on the contact. |
@@ -54,7 +54,8 @@ will see in §9:
 1. The exact test sub-account name (see §2 — he creates it from the agency prompt).
 2. Confirmation Chrome is logged in with rights to manage settings, templates,
    forms, calendars, funnels, pipelines and workflows.
-3. Repo access for the email HTML, or the files themselves.
+3. A Chrome profile signed in to GitHub with access to
+   `matthewcarlsonhome-cmd/Evosus` — that is where the email HTML comes from (§8).
 4. Whether Eric's LOU pipe has written anything into this account yet (it should
    not have, in a fresh test account — but Phase 0 checks regardless).
 
@@ -283,9 +284,20 @@ including every `{{ }}`. Name each template exactly as the heading.
 
 ## 8. Phase F — 12 email templates
 
-Source: `email/dist/E1-*.html` … `E12-*.html`. Regenerate with `npm run email`
-from the repo root. **If you cannot obtain these files, mark Phase F not built —
-do not recreate the bodies visually and do not use placeholder HTML.**
+**The HTML is on GitHub — open each link in a browser tab and copy the file.**
+The repo is private, so use the `github.com` links below rather than
+`raw.githubusercontent.com`; they resolve in an authenticated browser session and
+404 without one. GitHub shows `.html` files as source (it does not render them),
+so the blob view is the file. Use the **"Copy raw file"** button in the file
+toolbar to get the exact bytes — do not select-and-copy from the rendered line
+numbers, which can pick up line-number text.
+
+If a link 404s, the Chrome profile is not signed in to GitHub as an account with
+access to `matthewcarlsonhome-cmd/Evosus`. Say so and stop Phase F — **do not
+recreate the bodies visually and do not use placeholder HTML.**
+
+Regenerating from a clone (`npm run email` at the repo root) is an equivalent
+alternative if you have one.
 
 `Marketing → Emails → Templates → New → **Blank / Custom HTML / Import HTML**`.
 **Do not use the drag-and-drop builder** — it rewrites tables and can escape merge
@@ -295,20 +307,20 @@ Procedure: build **E1 first**, save, reopen, and confirm three things — the
 subject is right, every `{{ }}` survived unescaped, and the `<table>` structure is
 intact. **If E1 is mangled, stop and report. Do not paste the other eleven.**
 
-| ID | Template name | Subject |
-|---|---|---|
-| E1 | `[SSP-CORE] E1 Welcome` | `Welcome to {{custom_values.dealer_name}}, {{contact.first_name}}` |
-| E2 | `[SSP-CORE] E2 Category Education` | `The 5 things that keep {{custom_values.dealer_city}} pools trouble-free` |
-| E3 | `[SSP-CORE] E3 Return Reasons` | `Three things people come back for` |
-| E4 | `[SSP-CORE] E4 Review Request` | `How did we do?` |
-| E5 | `[SSP-CORE] E5 Reorder Product` | `Running low on {{contact.next_offer_product}}?` |
-| E6 | `[SSP-CORE] E6 Reorder Incentive` | `A little something on your {{contact.next_offer_product}}` |
-| E7 | `[SSP-CORE] E7 Balance Note` | `A quick note about your account` |
-| E8 | `[SSP-CORE] E8 Balance Help` | `Anything we can help with?` |
-| E9 | `[SSP-CORE] E9 Seasonal Invite` | `Time to get your {{contact.season_service_type}} on the schedule` |
-| E10 | `[SSP-CORE] E10 Seasonal Last Slots` | `Last of the {{contact.season_service_type}} slots` |
-| E11 | `[SSP-CORE] E11 Service Plan` | `What that visit would have cost on a plan` |
-| E12 | `[SSP-CORE] E12 Service Review` | `How did we do on the {{contact.last_service_type}}?` |
+| ID | Source file (click to open) | GHL template name | Subject |
+|---|---|---|---|
+| E1 | [`E1-welcome.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E1-welcome.html) | `[SSP-CORE] E1 Welcome` | `Welcome to {{custom_values.dealer_name}}, {{contact.first_name}}` |
+| E2 | [`E2-care-guide.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E2-care-guide.html) | `[SSP-CORE] E2 Category Education` | `The 5 things that keep {{custom_values.dealer_city}} pools trouble-free` |
+| E3 | [`E3-accessory-attach.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E3-accessory-attach.html) | `[SSP-CORE] E3 Return Reasons` | `Three things people come back for` |
+| E4 | [`E4-review-request.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E4-review-request.html) | `[SSP-CORE] E4 Review Request` | `How did we do?` |
+| E5 | [`E5-reorder-reminder.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E5-reorder-reminder.html) | `[SSP-CORE] E5 Reorder Product` | `Running low on {{contact.next_offer_product}}?` |
+| E6 | [`E6-reorder-with-incentive.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E6-reorder-with-incentive.html) | `[SSP-CORE] E6 Reorder Incentive` | `A little something on your {{contact.next_offer_product}}` |
+| E7 | [`E7-balance-reminder.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E7-balance-reminder.html) | `[SSP-CORE] E7 Balance Note` | `A quick note about your account` |
+| E8 | [`E8-balance-offer-to-help.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E8-balance-offer-to-help.html) | `[SSP-CORE] E8 Balance Help` | `Anything we can help with?` |
+| E9 | [`E9-seasonal-booking-invite.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E9-seasonal-booking-invite.html) | `[SSP-CORE] E9 Seasonal Invite` | `Time to get your {{contact.season_service_type}} on the schedule` |
+| E10 | [`E10-seasonal-last-call.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E10-seasonal-last-call.html) | `[SSP-CORE] E10 Seasonal Last Slots` | `Last of the {{contact.season_service_type}} slots` |
+| E11 | [`E11-service-plan-offer.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E11-service-plan-offer.html) | `[SSP-CORE] E11 Service Plan` | `What that visit would have cost on a plan` |
+| E12 | [`E12-post-service-check-in.html`](https://github.com/matthewcarlsonhome-cmd/Evosus/blob/claude/ssp-evosus-lou-integration-gkbg1m/email/dist/E12-post-service-check-in.html) | `[SSP-CORE] E12 Service Review` | `How did we do on the {{contact.last_service_type}}?` |
 
 **Verify:** 12 present · names and subjects exact · braces intact on reopen ·
 **no email sent**.
@@ -418,7 +430,7 @@ These are snapshot defaults, overridden per dealer at onboarding.
 | A | 27 fields | Low | Complete |
 | B–D | Tags, values, pipelines | Low | Complete |
 | E | 8 SMS | Low | Complete — copy is in §7 |
-| F | 12 emails | Medium | Complete if the repo files are reachable |
+| F | 12 emails | Medium | Complete — source links are in §8 |
 | G | 2 forms + calendar | Medium | Likely complete |
 | H | 4 funnel shells | High | Shells only |
 | I | 8 workflows | **High** | U2/U3 and the linear ones; W4's branch is the hardest. 4–5 of 8 is a good session. |
@@ -445,7 +457,7 @@ Nine sections. If one is empty, write "none".
 2. **Built but unverified** — and why.
 3. **Partially built** — exact stopping point and the precise next click.
 4. **Not built** — by reason: automation limit / needs a decision / needs agency
-   access / missing source files / out of session.
+   access / could not sign in to GitHub for the email HTML / out of session.
 5. **Placeholders left in** — every `[[BRACKETED]]` value and every shell.
 6. **Discrepancies** — objects that already existed, keys GHL generated
    differently, UI paths that differed, behaviour you had to infer. **Most
