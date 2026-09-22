@@ -35,6 +35,23 @@ export function daysSince(iso: string | null): number | null {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 }
 
+// Row order for form tables: forms that have a last submission first,
+// ordered by days quiet (most recently active on top, or longest quiet on
+// top with longestFirst); forms never submitted to sink to the bottom by
+// name. Compares the timestamps themselves, so same-day forms keep their
+// real order.
+export function byDaysQuiet(longestFirst = false) {
+  return (a: Pick<FormHealthRow, "last_submission_at" | "name">,
+          b: Pick<FormHealthRow, "last_submission_at" | "name">): number => {
+    const ta = a.last_submission_at ? new Date(a.last_submission_at).getTime() : null;
+    const tb = b.last_submission_at ? new Date(b.last_submission_at).getTime() : null;
+    if (ta === null && tb === null) return a.name.localeCompare(b.name);
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    return (longestFirst ? ta - tb : tb - ta) || a.name.localeCompare(b.name);
+  };
+}
+
 // The weekly synthetic form check (docs/FORM-MONITORING.md §4): did the
 // latest one land, and as a real CRM contact?
 export function weeklyTestLabel(f: Pick<FormHealthRow, "last_check_at" | "check_contact_ok">): string {

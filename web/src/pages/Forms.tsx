@@ -14,7 +14,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { DetailTable, EmptyState, ExternalLink, Section, Skeleton } from "../components/ui";
 import type { FormHealthRow, PortfolioRow } from "../lib/database.types";
 import { fmtDateTime, fmtNum } from "../lib/format";
-import { daysSince, FORM_STATUS, formTypeLabel, shortUrl, weeklyTestLabel } from "../lib/forms";
+import { byDaysQuiet, daysSince, FORM_STATUS, formTypeLabel, shortUrl, weeklyTestLabel } from "../lib/forms";
 import { usesMlh } from "../lib/mlh";
 import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
@@ -60,6 +60,9 @@ export default function Forms() {
   const includeSsp = params.get("ssp") === "1";
   const statusFilter = STATUS_FILTERS.find((s) => s.value === (params.get("status") ?? "")) ?? STATUS_FILTERS[0];
   const type = params.get("type") ?? "";
+  // Days quiet order: fewest first by default, ?order=longest flips it.
+  // Either way, forms that were never submitted to go last.
+  const longestFirst = params.get("order") === "longest";
   const search = params.get("q") ?? "";
 
   function setParam(key: string, value: string | null) {
@@ -113,12 +116,9 @@ export default function Forms() {
       list.push(f);
       map.set(f.location_id, list);
     }
-    for (const list of map.values()) {
-      list.sort((a, b) => (FORM_STATUS[a.status]?.order ?? 9) - (FORM_STATUS[b.status]?.order ?? 9)
-        || a.name.localeCompare(b.name));
-    }
+    for (const list of map.values()) list.sort(byDaysQuiet(longestFirst));
     return map;
-  }, [forms, statusFilter, type, search]);
+  }, [forms, statusFilter, type, search, longestFirst]);
 
   const visibleIds = new Set(visibleAccounts.map((a) => a.location_id));
   const visibleForms = forms.filter((f) => visibleIds.has(f.location_id));
@@ -161,6 +161,11 @@ export default function Forms() {
           <select value={statusFilter.value} onChange={(e) => setParam("status", e.target.value || null)}
                   className="rounded border border-grid bg-surface px-2 py-1">
             {STATUS_FILTERS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <select value={longestFirst ? "longest" : ""} onChange={(e) => setParam("order", e.target.value || null)}
+                  className="rounded border border-grid bg-surface px-2 py-1">
+            <option value="">Order: fewest days quiet first</option>
+            <option value="longest">Order: most days quiet first</option>
           </select>
           <label className="flex items-center gap-1.5 text-ink-2">
             <input type="checkbox" checked={includeSsp} onChange={(e) => setParam("ssp", e.target.checked ? "1" : null)} />

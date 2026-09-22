@@ -319,6 +319,8 @@ Per form:
 
 - Every form shows by default, however long it has been quiet. The status
   and type filters are optional.
+- Forms are ordered by days quiet, fewest first. The "Order" menu flips it to
+  most first. Forms that have never been submitted to always go last.
 - The account page's Forms & Surveys card shows the same columns for one
   account.
 - The nightly collector writes this data (`form_health`). Everything is

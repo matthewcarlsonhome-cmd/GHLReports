@@ -47,7 +47,7 @@ import {
   StatTile,
 } from "../components/ui";
 import { buildClientSummary } from "../lib/clientSummary";
-import { FORM_STATUS, formTypeLabel, shortUrl, weeklyTestLabel } from "../lib/forms";
+import { byDaysQuiet, FORM_STATUS, formTypeLabel, shortUrl, weeklyTestLabel } from "../lib/forms";
 import type {
   AccountNoteRow,
   FlagAckRow,
@@ -1211,8 +1211,9 @@ export default function Account() {
       ) : null}
 
       {/* 7c. per-form / per-survey health (docs/FORMS-INTEGRATION.md Phase 1):
-          every form and survey in the account with its own status. Silent
-          entries sort first; auto-opens whenever any entry is silent. */}
+          every form and survey in the account with its own status, ordered
+          by days quiet (never-submitted forms last); auto-opens whenever any
+          entry is silent. */}
       {data.formHealth.length > 0 ? (
         <Collapsible
           title={`Forms & surveys (${data.formHealth.length}, ${
@@ -1221,10 +1222,7 @@ export default function Account() {
         >
           <div className="rounded border border-grid bg-surface p-3">
             <DetailTable
-              rows={[...data.formHealth].sort((a, b) => {
-                return (FORM_STATUS[a.status]?.order ?? 9) - (FORM_STATUS[b.status]?.order ?? 9)
-                  || a.name.localeCompare(b.name);
-              })}
+              rows={[...data.formHealth].sort(byDaysQuiet())}
               empty="No forms or surveys found in this account."
               columns={[
                 { header: "Name", cell: (f) => f.name },
