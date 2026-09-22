@@ -810,7 +810,7 @@ Embedding detection (UI only): `const embedded = window.self !== window.top || n
 ### 9.3 Routes
 - `/login`: section 9.1.
 - `/` **Portfolio** (query `v_portfolio`; sparklines from `lead_history` last 8 weeks per location):
-  - Filters: "My accounts" (default; `am_email == session email`) / "All"; "Include SSP" checkbox (`is_parent`, off by default); text search on account name; vertical; state; flag code. Sort: "by attention" (default: `attention_score` desc, `leads_delta_pct` asc) or "by MRR at risk" (`attention_score > 0` first, then `mrr` desc).
+  - Filters: "All" (default since 2026-09-22, so everyone lands on the whole book) / "My accounts" (`am_email == session email`, `?view=mine`); "Include SSP" checkbox (`is_parent`, off by default); text search on account name; vertical; state; flag code. Sort: "by attention" (default: `attention_score` desc, `leads_delta_pct` asc) or "by MRR at risk" (`attention_score > 0` first, then `mrr` desc).
   - Optional **Group by AM** with a team header row per AM: "Lisa: 12 accounts, 3 attention, $18.4k MRR in attention." Header tile above the table: MRR in attention (sum of `mrr` where state = attention, with "n accounts without MRR set").
   - Three sections in order: **Needs attention**, **Steady**, **No data**; each with an explicit empty state ("No accounts need attention").
   - **Compact columns (default)**: Account (link), AM, State icon + unacked flag chips (red/amber counts, muted "acked n"), New (count of `flags_new`, tooltip lists codes), Leads 7d with delta % vs baseline (small peer note) and 8-week sparkline, Uncontacted >24h, Convos waiting (max h), Top action (`top_action`).

@@ -54,7 +54,9 @@ export default function Forms() {
   const [forms, setForms] = useState<FormHealthRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const view = params.get("view") === "all" ? "all" : "mine";
+  // Everyone lands on the whole book; "My accounts" narrows to your own
+  // (?view=mine). Old ?view=all links keep working.
+  const view = params.get("view") === "mine" ? "mine" : "all";
   const includeSsp = params.get("ssp") === "1";
   const statusFilter = STATUS_FILTERS.find((s) => s.value === (params.get("status") ?? "")) ?? STATUS_FILTERS[0];
   const type = params.get("type") ?? "";
@@ -143,12 +145,12 @@ export default function Forms() {
         <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
           <div className="flex overflow-hidden rounded border border-grid">
             <button onClick={() => setParam("view", null)}
-                    className={`px-2.5 py-1 ${view === "mine" ? "bg-ink font-medium text-white" : "text-ink-2"}`}>
-              My accounts
-            </button>
-            <button onClick={() => setParam("view", "all")}
                     className={`px-2.5 py-1 ${view === "all" ? "bg-ink font-medium text-white" : "text-ink-2"}`}>
               All
+            </button>
+            <button onClick={() => setParam("view", "mine")}
+                    className={`px-2.5 py-1 ${view === "mine" ? "bg-ink font-medium text-white" : "text-ink-2"}`}>
+              My accounts
             </button>
           </div>
           <select value={type} onChange={(e) => setParam("type", e.target.value || null)}
@@ -191,7 +193,7 @@ export default function Forms() {
         {error ? <EmptyState>Could not load forms: {error}</EmptyState> : null}
         {accounts === null && !error ? <Skeleton rows={6} /> : null}
         {accounts !== null && !ordered.length ? (
-          <EmptyState>No accounts to show. Switch to "All" if you own none.</EmptyState>
+          <EmptyState>No accounts to show. Switch to "All" to see every account.</EmptyState>
         ) : null}
 
         {ordered.map((account) => {

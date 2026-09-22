@@ -303,7 +303,7 @@ MLH:
   (`subaccounts.mlh_status`), and accounts with no client users, are left
   out.
 - The SSP parent is behind a toggle.
-- "My accounts" / "All" work as on the portfolio.
+- "All" (the default) / "My accounts" work as on the portfolio.
 
 Per form:
 

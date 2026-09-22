@@ -2,7 +2,7 @@
 // table, grouped into "Needs attention" / "Steady" / "No data" sections.
 //
 // Key ideas needed to read this file:
-// - Filter state lives in the URL query string (?view=all&q=pool...), read and
+// - Filter state lives in the URL query string (?view=mine&q=pool...), read and
 //   written via react-router's useSearchParams. That makes every filter combo
 //   a shareable/bookmarkable link, and Back/Forward work over filter changes.
 // - useMemo caches derived data ("memoization"): the filtered+sorted row list
@@ -135,7 +135,9 @@ export default function Portfolio() {
 
   // Decode each filter from the query string, with a safe default when the
   // param is absent or has an unexpected value.
-  const view = params.get("view") === "all" ? "all" : "mine";
+  // Everyone lands on the whole book; "My accounts" narrows to your own
+  // (?view=mine). Old ?view=all links keep working.
+  const view = params.get("view") === "mine" ? "mine" : "all";
   const includeSsp = params.get("ssp") === "1";
   // Accounts not using MLH (marked ads only / not in MLH / canceled, or no
   // client staff users) are hidden unless ?nonmlh=1. See lib/mlh.ts.
@@ -689,12 +691,12 @@ export default function Portfolio() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex rounded border border-grid bg-surface text-xs">
           <button onClick={() => setParam("view", null)}
-                  className={`px-2.5 py-1 ${view === "mine" ? "bg-ink font-medium text-white" : "text-ink-2"}`}>
-            My accounts
-          </button>
-          <button onClick={() => setParam("view", "all")}
                   className={`px-2.5 py-1 ${view === "all" ? "bg-ink font-medium text-white" : "text-ink-2"}`}>
             All
+          </button>
+          <button onClick={() => setParam("view", "mine")}
+                  className={`px-2.5 py-1 ${view === "mine" ? "bg-ink font-medium text-white" : "text-ink-2"}`}>
+            My accounts
           </button>
         </div>
         <label className="flex items-center gap-1.5 text-xs text-ink-2">
@@ -780,7 +782,7 @@ export default function Portfolio() {
 
       {/* Triage header: the whole book in one strip. Each chip is a click-
           filter (click again to clear); counts reflect the current view's
-          other filters, so "My accounts" chips show MY book's numbers. */}
+          other filters, so under "My accounts" the chips show MY book's numbers. */}
       <div className="mb-2 flex flex-wrap items-center gap-2">
         {BAND_META.map(({ band: b, icon, label }) => {
           const active = band === b;
