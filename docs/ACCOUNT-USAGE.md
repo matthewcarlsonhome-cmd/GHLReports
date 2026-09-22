@@ -139,8 +139,15 @@ What the marking does:
 - Anything but `active` is left out of the AM digest, the daily and weekly
   alert bridge, the Forms tab, the reports, and the portfolio's default
   view.
-- The portfolio's "Show N not using MLH" toggle brings them back.
-- They are still collected, except Luke Gell.
+- The portfolio's "Show N not using MLH" toggle brings them back, marked
+  "not collected".
+- The nightly no longer pulls them from GHL at all (nor do backfill or the
+  reports). Their last snapshot stays in the database.
+  `--include-non-mlh`, or `--location <slug>` for one account, pulls them on
+  demand.
+- Accounts with no client users but not marked (Backyard Oasis) are still
+  collected, so they come back on their own if the client gets a login.
+  Mark them here if they are ads only or gone.
 
 To change a status: `update subaccounts set mlh_status = 'active' where slug = '…'`.
 

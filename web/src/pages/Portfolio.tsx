@@ -22,7 +22,7 @@ import type { FlagRow, LeadHistoryRow, PortfolioRow, PortfolioState } from "../l
 import { dataQuality, fmtDate, fmtHours, fmtMinutes, fmtMoney, fmtNum, fmtPct, stripDecor, UNKNOWN } from "../lib/format";
 import { type Band, bandOf, humanizeCode } from "../lib/grade";
 import { buildAccountInsight } from "../lib/insights";
-import { usesMlh } from "../lib/mlh";
+import { nonMlhReason, notCollected, usesMlh } from "../lib/mlh";
 import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
 import { acknowledgeFlag } from "../lib/writes";
@@ -521,7 +521,8 @@ export default function Portfolio() {
                         the 4-week baseline) */}
                     {noData ? (
                       <span className="text-muted">
-                        no data{row.token_status !== "ok" ? " (token)" : ""}
+                        {notCollected(row) ? "not collected"
+                          : `no data${row.token_status !== "ok" ? " (token)" : ""}`}
                       </span>
                     ) : row.leads_new_7d === null ? (
                       <span className="text-muted">{UNKNOWN}</span>
@@ -593,7 +594,8 @@ export default function Portfolio() {
             </div>
             {row.state === "no_data" ? (
               <div className="text-xs text-muted">
-                no data{row.token_status !== "ok" ? " — token invalid or missing" : ""}
+                {notCollected(row) ? `not collected: ${nonMlhReason(row)}`
+                  : `no data${row.token_status !== "ok" ? " — token invalid or missing" : ""}`}
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-ink-2">
@@ -635,7 +637,10 @@ export default function Portfolio() {
               <div className="flex items-center gap-1 text-xxs text-ink-2">
                 <StateIcon state={row.state} />
                 {row.state === "no_data" ? (
-                  <span className="text-muted">{row.token_status !== "ok" ? "awaiting token" : "no data"}</span>
+                  <span className="text-muted">
+                    {notCollected(row) ? "not collected"
+                      : row.token_status !== "ok" ? "awaiting token" : "no data"}
+                  </span>
                 ) : (
                   <>
                     <span className="tabular">{fmtNum(row.leads_new_7d)} leads</span>
@@ -706,7 +711,7 @@ export default function Portfolio() {
         </label>
         {nonMlhCount > 0 ? (
           <label className="flex items-center gap-1.5 text-xs text-ink-2"
-                 title="Accounts marked ads only, not in MLH or canceled, or with no client staff users">
+                 title="Accounts marked ads only, not in MLH or canceled (no longer collected), or with no client staff users">
             <input type="checkbox" checked={showNonMlh}
                    onChange={(e) => setParam("nonmlh", e.target.checked ? "1" : null)} />
             Show {nonMlhCount} not using MLH

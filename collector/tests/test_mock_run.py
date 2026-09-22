@@ -315,6 +315,24 @@ def test_missing_token_is_pending_not_failed():
     assert store.runs[-1]["details"]["locA"]["status"] == "no_token"
 
 
+def test_accounts_not_using_mlh_are_not_collected(capsys):
+    # Marked ads only / not in MLH: no GHL call by default, so no snapshot and
+    # no run-details row. The parent is always collected.
+    ads_only = {**CLIENT_SUB, "mlh_status": "ads_only"}
+    store = FakeStore(subs=[PARENT_SUB, ads_only])
+    assert run_with(store, make_factory()) == 0
+    assert ("locA", "2026-08-18") not in store.snapshots
+    assert ("locP", "2026-08-18") in store.snapshots
+    assert "locA" not in store.runs[-1]["details"]
+    assert "1 account(s) not using MLH skipped: pilot1" in capsys.readouterr().out
+
+    # --include-non-mlh or naming the account pulls it on demand.
+    for argv in (ARGV + ["--include-non-mlh"], ARGV + ["--location", "pilot1"]):
+        store = FakeStore(subs=[PARENT_SUB, ads_only])
+        assert run_with(store, make_factory(), argv=argv) == 0
+        assert ("locA", "2026-08-18") in store.snapshots
+
+
 def test_digest_mode_builds_from_stored_data(capsys):
     store = happy_store()
     assert run_with(store, make_factory()) == 0

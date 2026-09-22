@@ -34,7 +34,8 @@ docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
 - **Filter live in data, code on this branch:** accounts with no client-staff
   users (All American, Backyard Oasis, Beachfront, G&S, Luke Gell, Pla-Mor,
   Pristine) drop out of the AM digest and hide behind a portfolio toggle.
-  They are still collected.
+  All but Backyard Oasis are now also marked non-MLH and no longer collected
+  (below); Backyard Oasis is still collected.
 - **Forms tab + MLH filter (branch, 2026-09-22 late):**
   - `/forms` lists every form per client account that uses MLH, with form
     ID, type (website / Google ad / Facebook ad / Facebook lead ad), status,
@@ -45,6 +46,12 @@ docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
   - Lisa's list is marked in `subaccounts.mlh_status` and filtered from the
     digest, alerts, reports and default views. Luke Gell (canceled) is set
     inactive.
+  - Marked accounts are no longer pulled from GHL at all (nightly, backfill,
+    reports). The portfolio toggle shows them as "not collected".
+    `--include-non-mlh` or `--location <slug>` pulls one on demand. Saves
+    about 45 s of a ~11 min run (run 36: 43 s across the 7 accounts).
+    Zero-user accounts still marked active (Backyard Oasis) are still
+    collected, so they reappear on their own if the client gets a login.
   - Answer on scaling the weekly test: GHL's API can't edit workflows. See
     `FORM-MONITORING.md` §4.6.
 - **Human-reply fix applied (on the branch):**
@@ -102,11 +109,11 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Repo / branch | `matthewcarlsonhome-cmd/GHLReports`, `claude/gohighlevel-reports-build-l6hlc7` (head `6aedabc`) |
 | Supabase project | `tpavdifpsevkrubplyrg` (query via the Supabase MCP tool; direct HTTPS from the sandbox is blocked) |
 | Dashboard | https://mlhaccountreports.netlify.app — account pages are `/account/<location_id>` |
-| Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--weekly-alerts`, `--send-test`, `--probe`, `--form-urls` |
+| Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--weekly-alerts`, `--send-test`, `--probe`, `--form-urls`, `--form-activity`, `--account-usage`; `--include-non-mlh` adds the accounts marked non-MLH back |
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
 | Migrations | `supabase/migrations/0001`–`0013` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns); all applied live |
-| Tests | `python3 -m pytest collector/tests/ -q` → **192 passing** (branch `claude/lucid-gauss-vz1y98`) |
+| Tests | `python3 -m pytest collector/tests/ -q` → **193 passing** (branch `claude/lucid-gauss-vz1y98`) |
 | Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 
 ## Current state

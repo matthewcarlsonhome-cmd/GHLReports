@@ -403,7 +403,9 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
         # Accounts not using MLH stay out of AM mail: the team marked them
         # ads only / not in MLH / canceled (subaccounts.mlh_status), or they
         # have no client staff users, so nobody at the client can act on a
-        # CRM alert. Still collected; visible behind the portfolio toggle.
+        # CRM alert. Marked accounts are no longer collected at all (see
+        # main.run); zero-user ones are, so they come back once someone can
+        # log in. Both stay visible behind the portfolio toggle.
         snap = snapshots_by_loc.get(sub.get("location_id")) or {}
         if not sub.get("is_parent") and (
                 (sub.get("mlh_status") or "active") != "active" or snap.get("client_users") == 0):

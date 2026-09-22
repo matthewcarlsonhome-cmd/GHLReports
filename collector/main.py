@@ -1236,8 +1236,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--report-dir", default="reports", metavar="DIR",
                         help="where report CSVs are written (default ./reports)")
     parser.add_argument("--include-non-mlh", action="store_true",
-                        help="reports: also include accounts marked ads only / not in MLH "
-                             "(subaccounts.mlh_status); by default they are left out")
+                        help="also collect and report accounts marked ads only / not in "
+                             "MLH (subaccounts.mlh_status); by default no GHL call "
+                             "touches them")
     args = parser.parse_args(argv)
 
     # -- send-test mode -------------------------------------------------------
@@ -1283,6 +1284,18 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             log(f"unknown location {args.location!r}")
             return 1
         targets = [chosen]
+    elif not args.include_non_mlh:
+        # Accounts the team marked ads only / not in MLH (subaccounts.mlh_status)
+        # are out of every GHL pull: the nightly, backfill, and the reports.
+        # Their last snapshot stays in the database; the portfolio shows them
+        # as "not collected" behind its toggle. --location or
+        # --include-non-mlh pulls them on demand.
+        targets = [s for s in subs if automation.uses_mlh(s)]
+        skipped = sorted(s.get("slug") or s["location_id"]
+                         for s in subs if not automation.uses_mlh(s))
+        if skipped:
+            log(f"{len(skipped)} account(s) not using MLH skipped: {', '.join(skipped)} "
+                "(--include-non-mlh includes them)")
 
     # -- probe mode -----------------------------------------------------------
     # Verify endpoint shapes for one location (default: the parent) and
@@ -1329,18 +1342,10 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     if args.form_activity or args.account_usage:
         failed: list[str] = []
         outputs: list[tuple[str, str]] = []
-        report_targets = targets
-        if not args.location and not args.include_non_mlh:
-            report_targets = [s for s in targets if s.get("is_parent")
-                              or (s.get("mlh_status") or "active") == "active"]
-            skipped = len(targets) - len(report_targets)
-            if skipped:
-                log(f"reports: {skipped} account(s) not using MLH left out "
-                    "(pass --include-non-mlh to include them)")
         if args.form_activity:
             from .tools import form_activity as fa
             form_rows, page_rows, account_rows, fa_failed = fa.collect_book(
-                store, report_targets, crawl=args.form_activity_crawl,
+                store, targets, crawl=args.form_activity_crawl,
                 client_factory=client_factory, today=run_date, log=log)
             failed += fa_failed
             outputs += [("form-activity.csv", fa.to_csv(form_rows, fa.FORM_COLUMNS)),
@@ -1349,7 +1354,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         if args.account_usage:
             from .tools import account_usage as au
             usage_rows, au_failed = au.collect_book(
-                store, report_targets, client_factory=client_factory, now_utc=now_utc, log=log)
+                store, targets, client_factory=client_factory, now_utc=now_utc, log=log)
             failed += [f for f in au_failed if f not in failed]
             outputs.append(("account-usage.csv", au.to_csv(usage_rows)))
         os.makedirs(args.report_dir, exist_ok=True)

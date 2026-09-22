@@ -214,4 +214,4 @@ def test_reports_leave_out_accounts_not_using_mlh(tmp_path, capsys):
     assert code == 0
     accounts = (tmp_path / "form-accounts.csv").read_text()
     assert "Flohr Pools" in accounts and "GA Only Pools" not in accounts
-    assert "not using MLH left out" in capsys.readouterr().out
+    assert "1 account(s) not using MLH skipped: gaonly" in capsys.readouterr().out

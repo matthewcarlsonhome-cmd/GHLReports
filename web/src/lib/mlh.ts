@@ -11,6 +11,12 @@ export function usesMlh(row: Pick<PortfolioRow, "is_parent" | "mlh_status" | "cl
   return row.client_users !== 0;
 }
 
+// Accounts the team marked non-MLH get no GHL calls at all (collector/main.py
+// skips them), so their "no data" means "not collected", not a failure.
+export function notCollected(row: Pick<PortfolioRow, "is_parent" | "mlh_status">): boolean {
+  return !row.is_parent && !!row.mlh_status && row.mlh_status !== "active";
+}
+
 // Plain-words reason an account is filtered out, for tooltips and banners.
 export function nonMlhReason(row: Pick<PortfolioRow, "mlh_status" | "mlh_note" | "client_users">): string {
   const labels: Record<string, string> = {
