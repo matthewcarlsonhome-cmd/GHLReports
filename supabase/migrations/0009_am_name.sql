@@ -10,7 +10,7 @@ alter table public.subaccounts add column if not exists am_name text;
 comment on column public.subaccounts.am_name is
   'Account manager display name. am_email is the routing address; a row may have am_name set while am_email is still the fallback.';
 
-update public.subaccounts set am_name = 'Lauren', am_email = 'lgegner@smallscreenproducer.com'
+update public.subaccounts set am_name = 'Lauren', am_email = 'ldegner@smallscreenproducer.com'
  where slug in ('aaapools','aqualeisure','backyardoasis','centraljersey','cypress',
                 'flohr','magnolia','olympic','texaspools','texasswim','burketts');
 

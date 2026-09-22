@@ -1,5 +1,5 @@
 -- Expose am_name through the portfolio view so the dashboard can label an
--- account "Lauren" instead of deriving "lgegner" from the address. Appended
+-- account "Lauren" instead of deriving "ldegner" from the address. Appended
 -- last because CREATE OR REPLACE VIEW only permits new columns at the end.
 -- Applied live 2026-09-22; this file is the same statement, kept for replay.
 create or replace view public.v_portfolio as
