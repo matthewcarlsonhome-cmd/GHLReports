@@ -18,6 +18,7 @@ import { supabase } from "./lib/supabase";
 import { useSession } from "./lib/useSession";
 import { useSnapshotAge } from "./lib/useSnapshotAge";
 import Account from "./pages/Account";
+import Forms from "./pages/Forms";
 import Login from "./pages/Login";
 import Portfolio from "./pages/Portfolio";
 import Runs from "./pages/Runs";
@@ -82,6 +83,9 @@ function Nav() {
       <Link to="/" className="text-xs text-ink-2 hover:text-ink">
         Portfolio
       </Link>
+      <Link to="/forms" className="text-xs text-ink-2 hover:text-ink">
+        Forms
+      </Link>
       <Link to="/runs" className="text-xs text-ink-2 hover:text-ink">
         Runs
       </Link>
@@ -124,6 +128,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Account />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/forms"
+          element={
+            <RequireAuth>
+              <Forms />
             </RequireAuth>
           }
         />

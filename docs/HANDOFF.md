@@ -35,6 +35,18 @@ docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
   users (All American, Backyard Oasis, Beachfront, G&S, Luke Gell, Pla-Mor,
   Pristine) drop out of the AM digest and hide behind a portfolio toggle.
   They are still collected.
+- **Forms tab + MLH filter (branch, 2026-09-22 late):**
+  - `/forms` lists every form per client account that uses MLH, with form
+    ID, type (website / Google ad / Facebook ad / Facebook lead ad), status,
+    days quiet (all-time) and page.
+  - The nightly now stores channel, page_url, subs_30d and the weekly-test
+    result per form, plus Facebook lead-ad form ids (`kind = 'unlisted'`).
+    Migration 0013 was applied live.
+  - Lisa's list is marked in `subaccounts.mlh_status` and filtered from the
+    digest, alerts, reports and default views. Luke Gell (canceled) is set
+    inactive.
+  - Answer on scaling the weekly test: GHL's API can't edit workflows. See
+    `FORM-MONITORING.md` §4.6.
 - **Human-reply fix applied (on the branch):**
   - The message source beats the user tag.
   - Anything sent within 2 minutes of the lead arriving or writing counts as
@@ -93,8 +105,8 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--weekly-alerts`, `--send-test`, `--probe`, `--form-urls` |
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
-| Migrations | `supabase/migrations/0001`–`0012` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix); all applied live |
-| Tests | `python3 -m pytest collector/tests/ -q` → **185 passing** (branch `claude/lucid-gauss-vz1y98`) |
+| Migrations | `supabase/migrations/0001`–`0013` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns); all applied live |
+| Tests | `python3 -m pytest collector/tests/ -q` → **192 passing** (branch `claude/lucid-gauss-vz1y98`) |
 | Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 
 ## Current state

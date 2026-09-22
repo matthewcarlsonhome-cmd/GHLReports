@@ -152,30 +152,9 @@ def list_items(client, path: str, location_id: str, keys: tuple[str, ...]) -> li
 
 def window_counts(client, path: str, id_param: str, location_id: str, item_id: str,
                   hist: dict, today: date) -> dict[int, int | None]:
-    """Real submissions in the last 7/30/90/365 days. Exact from the page
-    of records when it reaches back far enough; otherwise one explicit-
-    window request per uncovered window, minus the form checks seen."""
-    real_days = [d for d in (_day(r["at"]) for r in hist["records"] if not r["check"]) if d]
-    check_days = [d for d in (_day(r["at"]) for r in hist["records"] if r["check"]) if d]
-    oldest = min((_day(r["at"]) for r in hist["records"] if _day(r["at"])), default=None)
-    out: dict[int, int | None] = {}
-    for days in WINDOWS:
-        start = today - timedelta(days=days)
-        if hist["covers_all"] or (oldest is not None and oldest < start):
-            out[days] = sum(1 for d in real_days if d > start)
-            continue
-        try:
-            data = client.request("GET", path, params={
-                "locationId": location_id, id_param: item_id, "limit": 1, "page": 1,
-                "startAt": (start + timedelta(days=1)).isoformat(),
-                "endAt": (today + timedelta(days=1)).isoformat()})
-        except GHLError:
-            out[days] = None
-            continue
-        total = form_history.meta_total(data)
-        checks = sum(1 for d in check_days if d > start)
-        out[days] = None if total is None else max(total - checks, 0)
-    return out
+    """Real submissions in the last 7/30/90/365 days (form_history.window_counts)."""
+    return form_history.window_counts(client, path, id_param, location_id, item_id,
+                                      hist, today, WINDOWS)
 
 
 def aggregate_pages(records: list[dict]) -> dict[str, dict]:
@@ -307,9 +286,7 @@ def collect_account(sub: dict, client, today: date, check_email: str,
             hist = form_history.fetch_history_safe(
                 client, window, path, id_param, location_id, item_id,
                 page_size=REPORT_PAGE_SIZE, check_email=check_email)
-            counts = (window_counts(client, path, id_param, location_id, item_id, hist, today)
-                      if hist["total"] else {d: (0 if hist["total"] == 0 else None)
-                                             for d in WINDOWS})
+            counts = window_counts(client, path, id_param, location_id, item_id, hist, today)
             result["forms"].append({
                 "kind": kind, "form_id": item_id,
                 "name": item.get("name") or f"Unnamed {kind}",

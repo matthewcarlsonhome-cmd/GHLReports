@@ -245,7 +245,47 @@ columns are the inputs.
   The collector alerts when the page said "thanks" but the CRM got nothing.
   PITs never leave the Supabase Vault; Datadog needs no GHL access.
 
-### 4.6 Rollout order
+### 4.6 Scaling without editing every workflow
+
+**Not through the API.** GHL's official spec
+([`apps/workflows.json`](https://github.com/GoHighLevel/highlevel-api-docs/blob/main/apps/workflows.json))
+has one workflows endpoint:
+- `GET /workflows/` (scope `workflows.readonly`), which returns id, name,
+  status, version and dates;
+- nothing to create or edit workflows, triggers or steps;
+- triggers can't even be read, so the API can't tell which workflows a form
+  starts.
+
+This tool is also read-only by rule.
+
+What scales instead:
+
+1. **Submit only where it's needed.** A form with real leads in the last 3
+   business days is "working" (Forms tab, §5), and those leads already prove
+   the whole path. No synthetic submission is needed, and no workflow is
+   touched.
+2. **Render-only checks for every other live form.** Use step 1 of §4.4 (the
+   page still embeds the form), plus a check that `hosted_form_url` loads.
+   - No submission means no workflows fire, so no GHL setup is needed.
+   - This catches the common failures: embed removed, form deleted or
+     unpublished, page broken.
+3. **Synthetic submissions for a short list** of low-traffic forms that
+   matter. Guard their workflows once in SSP's snapshot source account, then
+   use GHL's Snapshot **Push Update** to send the edited workflows to linked
+   accounts.
+   - Caveat, per
+     [GHL's help](https://help.gohighlevel.com/support/solutions/articles/48000982582-load-snapshots-into-existing-sub-account):
+     a conflict can be resolved with **Override**, and an override "cannot
+     be undone".
+   - So push only to accounts whose copies of those workflows are unmodified,
+     and hand-edit the rest.
+4. **Check "Allow Re-entry".** Per
+   [GHL's workflow settings](https://help.gohighlevel.com/support/solutions/articles/48001239875-workflow-settings-overview),
+   a contact enters a workflow with re-entry off only once. The weekly test
+   reuses one contact per account, so such workflows fire only on the first
+   test. The setting isn't readable through the API; check it in the UI.
+
+### 4.7 Rollout order
 
 1. Create the `formcheck@smallscreenproducer.com` group or mailbox.
 2. Run the report (§2) and pick the `datadog_candidate = yes` forms for the
@@ -254,3 +294,34 @@ columns are the inputs.
 4. Record one Datadog test, clone it per form, and run each once by hand.
 5. The next morning, check that the account's forms show a last form check
    and that `FORM_CHECK_MISSED` is absent.
+
+## 5. The Forms tab (dashboard)
+
+`/forms`, in the top navigation. One section per client account that uses
+MLH:
+- Accounts the team marked ads only, not in MLH or canceled
+  (`subaccounts.mlh_status`), and accounts with no client users, are left
+  out.
+- The SSP parent is behind a toggle.
+- "My accounts" / "All" work as on the portfolio.
+
+Per form:
+
+| Column | Meaning |
+|---|---|
+| Form, Form ID | GHL name and id; Facebook lead-ad forms appear as "Facebook lead ad form" with their id |
+| Type | Website form, Google ad form, Facebook ad form, Facebook lead ad, Standalone form link, Landing page form (§2); "(survey)" for surveys |
+| Status | ✓ working (real lead within 3 business days) · ⚠ went quiet (had leads, none since, under 30 days) · ◌ quiet 30+ days · ○ never used · + new |
+| 30d / All time | Real submissions; weekly tests never count |
+| Last submission / Days quiet | Newest real submission, **all-time**: a form quiet for 200 days shows 200 |
+| Lives on | Page of the newest real submission |
+| Weekly test | Last synthetic check (§4): ✓ landed, ⚠ overdue, ✗ no contact |
+
+- Every form shows by default, however long it has been quiet. The status
+  and type filters are optional.
+- The account page's Forms & Surveys card shows the same columns for one
+  account.
+- The nightly collector writes this data (`form_health`). Everything is
+  live-accurate from the first nightly run after the branch is deployed.
+  Rows from before that run still reflect GHL's 30-day default: a form quiet
+  longer than a month shows as "never used" with no date.

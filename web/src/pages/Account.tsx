@@ -47,6 +47,7 @@ import {
   StatTile,
 } from "../components/ui";
 import { buildClientSummary } from "../lib/clientSummary";
+import { FORM_STATUS, formTypeLabel, shortUrl, weeklyTestLabel } from "../lib/forms";
 import type {
   AccountNoteRow,
   FlagAckRow,
@@ -1221,31 +1222,26 @@ export default function Account() {
           <div className="rounded border border-grid bg-surface p-3">
             <DetailTable
               rows={[...data.formHealth].sort((a, b) => {
-                const order = { silent: 0, unknown: 1, active: 2, new: 3, dormant: 4, no_leads: 5 };
-                return (order[a.status] ?? 9) - (order[b.status] ?? 9)
+                return (FORM_STATUS[a.status]?.order ?? 9) - (FORM_STATUS[b.status]?.order ?? 9)
                   || a.name.localeCompare(b.name);
               })}
               empty="No forms or surveys found in this account."
               columns={[
                 { header: "Name", cell: (f) => f.name },
-                { header: "Type", cell: (f) => f.kind },
+                {
+                  header: "Form ID",
+                  cell: (f) => <span className="font-mono text-xxs text-ink-2">{f.form_id}</span>,
+                },
+                { header: "Type", cell: (f) => formTypeLabel(f) },
                 {
                   header: "Status",
                   cell: (f) => {
-                    // icon + label, never color alone
-                    const meta: Record<string, [string, string]> = {
-                      active: ["✓ active", "text-status-good-text"],
-                      silent: ["⚠ went silent", "text-status-critical"],
-                      dormant: ["◌ dormant (30+ days)", "text-muted"],
-                      new: ["+ new", "text-series"],
-                      no_leads: ["○ no leads yet", "text-muted"],
-                      unknown: ["? unknown", "text-muted"],
-                    };
-                    const [label, tone] = meta[f.status] ?? [f.status, "text-ink-2"];
-                    return <span className={`font-medium ${tone}`}>{label}</span>;
+                    const meta = FORM_STATUS[f.status];
+                    return <span className={`font-medium ${meta?.tone ?? "text-ink-2"}`}>{meta?.label ?? f.status}</span>;
                   },
                 },
-                { header: "Submissions (all time)", cell: (f) => fmtNum(f.submissions_total), numeric: true },
+                { header: "30d", cell: (f) => fmtNum(f.subs_30d), numeric: true },
+                { header: "All time", cell: (f) => fmtNum(f.submissions_total), numeric: true },
                 {
                   header: "Last submission",
                   cell: (f) => (f.last_submission_at ? fmtDateTime(f.last_submission_at) : "—"),
@@ -1260,6 +1256,11 @@ export default function Account() {
                   },
                   numeric: true,
                 },
+                {
+                  header: "Lives on",
+                  cell: (f) => (f.page_url ? <ExternalLink href={f.page_url}>{shortUrl(f.page_url)}</ExternalLink> : "—"),
+                },
+                { header: "Weekly test", cell: (f) => weeklyTestLabel(f) },
               ]}
             />
             <p className="mt-1 text-xxs text-muted">

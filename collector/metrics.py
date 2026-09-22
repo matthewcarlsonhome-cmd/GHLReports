@@ -209,6 +209,57 @@ def classify_form(total: int | None, last_at, created_at, today: date,
     return "no_leads"
 
 
+def unlisted_form_rows(submissions: list[dict] | None, listed_ids: set[str],
+                       location_id: str, snapshot_date: str, today: date,
+                       website: str | None, silent_days: int = 3) -> list[dict]:
+    """form_health rows (kind 'unlisted') for form ids that received
+    submissions in the fetched window but are not in Sites > Forms, which
+    in practice means Facebook/Instagram lead-ad forms: GHL records their
+    leads as form submissions under ids its form list doesn't have.
+
+    `submissions` are fetchers._clean_submission rows (form checks already
+    removed). The all-time total is unknown for these, so submissions_total
+    stays None; subs_30d and the newest date come from the window."""
+    from . import lead_channels  # pure module; local import keeps metrics' imports minimal
+    by_form: dict[str, list[dict]] = {}
+    for sub in submissions or []:
+        form_id = str(sub.get("formId") or "")
+        if form_id and form_id not in listed_ids:
+            by_form.setdefault(form_id, []).append(sub)
+    cutoff_30 = today - timedelta(days=30)
+    rows: list[dict] = []
+    for form_id, subs in sorted(by_form.items()):
+        stamped = sorted(((parse_ts(s.get("createdAt")), s) for s in subs if parse_ts(s.get("createdAt"))),
+                         key=lambda pair: pair[0], reverse=True)
+        records = [{"at": ts.isoformat(), "page_url": s.get("page_url") or "", "ad": s.get("ad") or "",
+                    "source": s.get("source") or "", "check": False} for ts, s in stamped]
+        labels: dict[str, int] = {}
+        for rec in records:
+            if rec["source"]:
+                labels[rec["source"]] = labels.get(rec["source"], 0) + 1
+        channel = lead_channels.classify("unlisted", "", records, website or "", labels=labels)
+        newest = stamped[0][0] if stamped else None
+        page = next((r["page_url"] for r in records if r["page_url"]), None)
+        is_lead_ad = channel["channel"] == lead_channels.FACEBOOK_LEAD_AD
+        rows.append({
+            "location_id": location_id,
+            "snapshot_date": snapshot_date,
+            "kind": "unlisted",
+            "form_id": form_id,
+            "name": "Facebook lead ad form" if is_lead_ad else "Form not in Sites > Forms",
+            "status": classify_form(len(stamped), newest, None, today, silent_days=silent_days),
+            "submissions_total": None,
+            "last_submission_at": newest.isoformat() if newest else None,
+            "form_created_at": None,
+            "channel": channel["channel"],
+            "page_url": page,
+            "subs_30d": sum(1 for ts, _ in stamped if ts.date() > cutoff_30),
+            "last_check_at": None,
+            "check_contact_ok": None,
+        })
+    return rows
+
+
 # -- exclusions ----------------------------------------------------------
 
 

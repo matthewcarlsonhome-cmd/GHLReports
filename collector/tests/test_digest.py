@@ -231,3 +231,12 @@ def test_accounts_without_client_users_stay_out_of_am_mail():
     snaps["l2"]["client_users"] = None
     lisa = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")["lisa@smallscreenproducer.com"]
     assert "Quiet Spas" in lisa["text"]
+
+
+def test_accounts_marked_not_using_mlh_stay_out_of_am_mail():
+    subs = [dict(s) for s in SUBS]
+    for sub in subs:
+        if sub["location_id"] == "l2":
+            sub["mlh_status"] = "ads_only"
+    lisa = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-17")["lisa@smallscreenproducer.com"]
+    assert "Quiet Spas" not in lisa["text"] and "Pilot One Pools" in lisa["text"]

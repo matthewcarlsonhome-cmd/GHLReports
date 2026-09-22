@@ -324,3 +324,11 @@ def test_weekly_alerts_respects_the_kill_switch():
                                           env={"AUTOMATION_WEBHOOKS": "off",
                                                "AUTOMATION_WEBHOOK_URL": "https://x"})
     assert tally == {"sent": 0, "dry": 0, "failed": 0, "skipped": 0}
+
+
+def test_alerts_only_for_accounts_using_mlh():
+    from ..automation import uses_mlh
+    assert uses_mlh({"mlh_status": "active"}) and uses_mlh({})          # default: active
+    assert not uses_mlh({"mlh_status": "ads_only"})
+    assert not uses_mlh({"mlh_status": "not_in_mlh"})
+    assert uses_mlh({"mlh_status": "ads_only", "is_parent": True})     # SSP always counts

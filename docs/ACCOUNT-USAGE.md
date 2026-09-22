@@ -125,6 +125,25 @@ Oasis, Beachfront, G&S, Luke Gell, Pla-Mor, Pristine. Six of them are also on
 the "missing from the updated client list — churned?" list. G&S still
 receives about 6 Facebook leads a week, so its ads are live.
 
+**Marked by the team (`subaccounts.mlh_status`, Lisa's list, 2026-09-22):**
+
+| Account | mlh_status | Note |
+|---|---|---|
+| All American, Beachfront, Pla-Mor, Pristine | ads_only | GA only |
+| G&S | ads_only | GA/FB only |
+| Hamlin | not_in_mlh | never onboarded |
+| Kura | not_in_mlh | not in MLH |
+| Luke Gell | canceled | also set inactive: no longer collected |
+
+What the marking does:
+- Anything but `active` is left out of the AM digest, the daily and weekly
+  alert bridge, the Forms tab, the reports, and the portfolio's default
+  view.
+- The portfolio's "Show N not using MLH" toggle brings them back.
+- They are still collected, except Luke Gell.
+
+To change a status: `update subaccounts set mlh_status = 'active' where slug = '…'`.
+
 ## Getting the per-account evidence
 
 `python -m collector.main --account-usage` (or the **Reports** GitHub

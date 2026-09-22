@@ -153,6 +153,9 @@ def test_happy_path_metrics_gate_and_flags():
         ("form", "formA3"): "active",    # last sub Fri; Sat+Sun don't count
         ("form", "formA4"): "new",       # created Aug 10, no subs yet
         ("form", "formA5"): "no_leads",  # old form, never submitted
+        # "form1" receives the account-wide submissions but isn't in the form
+        # list (the shape of a Facebook lead-ad form): it gets its own row
+        ("unlisted", "form1"): "silent",
         ("survey", "survA1"): "silent",  # last response Aug 5
     }
 

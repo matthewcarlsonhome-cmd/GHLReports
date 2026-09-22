@@ -548,3 +548,24 @@ def test_pipeline_movement_ignores_automatic_deal_creation():
          "lastStatusChangeAt": "2026-08-15T12:00:00Z"},
     ]
     assert metrics.pipeline_metrics(opps, NOW, start, end)["opps_moved_30d"] == 2
+
+
+def test_unlisted_form_rows_describe_facebook_lead_ad_forms():
+    from datetime import date
+    today = date(2026, 8, 18)
+    submissions = [
+        {"formId": "fbLeadForm", "createdAt": "2026-08-17T15:00:00Z", "page_url": "", "ad": "",
+         "source": "facebook", "check": False},
+        {"formId": "fbLeadForm", "createdAt": "2026-07-10T15:00:00Z", "page_url": "", "ad": "",
+         "source": "facebook", "check": False},
+        {"formId": "listedForm", "createdAt": "2026-08-17T15:00:00Z", "page_url": "", "ad": "",
+         "source": "", "check": False},
+    ]
+    rows = metrics.unlisted_form_rows(submissions, {"listedForm"}, "locA", "2026-08-18", today,
+                                      "https://client.com")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "unlisted" and row["form_id"] == "fbLeadForm"
+    assert row["channel"] == "Facebook lead ad" and row["name"] == "Facebook lead ad form"
+    assert row["status"] == "active" and row["subs_30d"] == 1
+    assert row["submissions_total"] is None and row["page_url"] is None

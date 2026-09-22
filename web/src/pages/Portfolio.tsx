@@ -22,6 +22,7 @@ import type { FlagRow, LeadHistoryRow, PortfolioRow, PortfolioState } from "../l
 import { dataQuality, fmtDate, fmtHours, fmtMinutes, fmtMoney, fmtNum, fmtPct, stripDecor, UNKNOWN } from "../lib/format";
 import { type Band, bandOf, humanizeCode } from "../lib/grade";
 import { buildAccountInsight } from "../lib/insights";
+import { usesMlh } from "../lib/mlh";
 import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
 import { acknowledgeFlag } from "../lib/writes";
@@ -136,9 +137,9 @@ export default function Portfolio() {
   // param is absent or has an unexpected value.
   const view = params.get("view") === "all" ? "all" : "mine";
   const includeSsp = params.get("ssp") === "1";
-  // Accounts with no client staff users (ads delivery only) are hidden
-  // unless ?nousers=1: nobody at the client can log in to act on them.
-  const showNoUsers = params.get("nousers") === "1";
+  // Accounts not using MLH (marked ads only / not in MLH / canceled, or no
+  // client staff users) are hidden unless ?nonmlh=1. See lib/mlh.ts.
+  const showNonMlh = params.get("nonmlh") === "1";
   const search = params.get("q") ?? "";
   const vertical = params.get("vertical") ?? "";
   const stateFilter = params.get("state") ?? "";
@@ -226,7 +227,7 @@ export default function Portfolio() {
     return rows.filter((row) => {
       // Each check eliminates; a row must survive all of them to show.
       if (row.is_parent && !includeSsp) return false;
-      if (!showNoUsers && row.client_users === 0 && !row.is_parent) return false;
+      if (!showNonMlh && !usesMlh(row)) return false;
       if (view === "mine" && email && !row.is_parent
           && (row.am_email ?? "").toLowerCase() !== email) return false;
       if (needle && !row.name.toLowerCase().includes(needle)
@@ -236,10 +237,9 @@ export default function Portfolio() {
       if (flagFilter && !(flagsByLoc[row.location_id] ?? []).some((f) => f.code === flagFilter)) return false;
       return true;
     });
-  }, [rows, view, includeSsp, showNoUsers, search, vertical, stateFilter, flagFilter, session, flagsByLoc]);
+  }, [rows, view, includeSsp, showNonMlh, search, vertical, stateFilter, flagFilter, session, flagsByLoc]);
 
-  const noUserCount = useMemo(
-    () => (rows ?? []).filter((r) => r.client_users === 0 && !r.is_parent).length, [rows]);
+  const nonMlhCount = useMemo(() => (rows ?? []).filter((r) => !usesMlh(r)).length, [rows]);
 
   const visible = useMemo(() => {
     const banded = band ? baseVisible.filter((row) => bandOf(row) === band) : baseVisible;
@@ -702,12 +702,12 @@ export default function Portfolio() {
                  onChange={(e) => setParam("ssp", e.target.checked ? "1" : null)} />
           Include SSP
         </label>
-        {noUserCount > 0 ? (
+        {nonMlhCount > 0 ? (
           <label className="flex items-center gap-1.5 text-xs text-ink-2"
-                 title="Accounts with no client staff users: ads delivery only, nobody at the client can log in">
-            <input type="checkbox" checked={showNoUsers}
-                   onChange={(e) => setParam("nousers", e.target.checked ? "1" : null)} />
-            Show {noUserCount} with no client users
+                 title="Accounts marked ads only, not in MLH or canceled, or with no client staff users">
+            <input type="checkbox" checked={showNonMlh}
+                   onChange={(e) => setParam("nonmlh", e.target.checked ? "1" : null)} />
+            Show {nonMlhCount} not using MLH
           </label>
         ) : null}
         <input

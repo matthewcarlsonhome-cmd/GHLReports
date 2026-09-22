@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from . import form_history
+from . import form_history, lead_channels
 from .ghl_client import GHLAuthError, GHLClient, GHLError
 
 PAGE_LIMIT = 100
@@ -286,14 +286,22 @@ def _clean_event(event: dict) -> dict:
     }
 
 
-def _clean_submission(submission: dict) -> dict:
-    """Form submission projection: ids and timestamp only. The submitted form
-    answers (names, emails, free text) are exactly what we must not keep."""
+def _clean_submission(submission: dict, check_email: str = "") -> dict:
+    """Form submission projection: ids, timestamp, the page it came from and
+    how the visitor arrived (form_history.project: labels only, query
+    strings stripped). The submitted answers (names, emails, free text) are
+    exactly what we must not keep; the email is only compared with the
+    reserved form-check address."""
+    projected = form_history.project(submission, check_email)
     return {
         "id": _get_id(submission),
         "formId": submission.get("formId"),
         "contactId": submission.get("contactId"),
         "createdAt": submission.get("createdAt"),
+        "page_url": projected["page_url"],
+        "ad": projected["ad"],
+        "source": projected["source"],
+        "check": projected["check"],
     }
 
 
@@ -542,8 +550,12 @@ def fetch_form_submissions(client: GHLClient, cov: Coverage, location_id: str,
                            start_date: str, end_date: str,
                            max_pages: int | None = None) -> list[dict] | None:
     """startAt/endAt are YYYY-MM-DD (spec section 3). Returns None when the
-    endpoint is unavailable so metrics render 'Unknown' rather than zero."""
+    endpoint is unavailable so metrics render 'Unknown' rather than zero.
+    Weekly form-check test submissions are dropped: a synthetic test must
+    never keep a dead account's form volume (FORM_SILENT) looking alive."""
+    check_email = form_history.form_check_email()
     out: list[dict] = []
+    checks = 0
     page = 1
     exhausted = False
     error = None
@@ -560,8 +572,10 @@ def fetch_form_submissions(client: GHLClient, cov: Coverage, location_id: str,
         except GHLError as exc:
             error = str(exc)
             break
-        batch = [_clean_submission(s) for s in _first_list(data, "submissions", "data")]
-        out.extend(batch)
+        batch = [_clean_submission(s, check_email)
+                 for s in _first_list(data, "submissions", "data") if isinstance(s, dict)]
+        checks += sum(1 for s in batch if s["check"])
+        out.extend(s for s in batch if not s["check"])
         if len(batch) < PAGE_LIMIT:
             exhausted = True
             break
@@ -569,6 +583,9 @@ def fetch_form_submissions(client: GHLClient, cov: Coverage, location_id: str,
             note = f"page cap {max_pages} reached"
             break
         page += 1
+    if checks:
+        extra = f"{checks} form-check test submission(s) excluded"
+        note = f"{note}; {extra}" if note else extra
     cov.record("forms", retrieved=len(out), exhausted=exhausted, error=error, note=note)
     return None if (error and not out) else out
 
@@ -609,22 +626,31 @@ def _fetch_inventory_list(client: GHLClient, path: str, location_id: str,
 def _inventory_with_history(client: GHLClient, cov: Coverage, source: str,
                             location_id: str, items: list[dict], history_path: str,
                             id_param: str, noun: str, today: date,
-                            note: str | None, exhausted: bool) -> list[dict]:
-    """Attach each form's/survey's submission history (form_history) and
-    record coverage. A lookup that failed keeps total=None ('unknown'),
-    never a fake zero; a narrowed history window is noted, never silent."""
+                            note: str | None, exhausted: bool,
+                            client_website: str | None = None) -> list[dict]:
+    """Attach each form's/survey's submission history (form_history), its
+    channel (lead_channels: website / Google ad / Facebook ad ...) and its
+    30-day count, and record coverage. A lookup that failed keeps
+    total=None ('unknown'), never a fake zero; a narrowed history window is
+    noted, never silent."""
     window = form_history.SubmissionWindow(today)
     out: list[dict] = []
     for item in items[:PER_ITEM_LOOKUP_CAP]:
         item_id = _get_id(item)
         if not item_id:
             continue
+        name = item.get("name") or f"Unnamed {noun}"
         hist = form_history.fetch_history_safe(
             client, window, history_path, id_param, location_id, item_id,
             page_size=HISTORY_PAGE_SIZE)
-        out.append({"form_id": item_id, "name": item.get("name") or f"Unnamed {noun}",
+        counts = form_history.window_counts(client, history_path, id_param, location_id,
+                                            item_id, hist, today, windows=(30,))
+        channel = lead_channels.classify(noun, name, hist["records"], client_website or "")
+        out.append({"form_id": item_id, "name": name,
                     "created_at": item.get("createdAt") or item.get("dateAdded"),
                     "total": hist["total"], "last_at": hist["last_at"],
+                    "subs_30d": counts.get(30),
+                    "channel": channel["channel"],
                     "last_page_url": hist["last_page_url"],
                     "last_check_at": hist["last_check_at"],
                     "last_check_contact_id": hist["last_check_contact_id"]})
@@ -641,12 +667,13 @@ def _inventory_with_history(client: GHLClient, cov: Coverage, source: str,
 
 def fetch_form_inventory(client: GHLClient, cov: Coverage, location_id: str,
                          max_pages: int | None = None,
-                         today: date | None = None) -> list[dict] | None:
+                         today: date | None = None,
+                         client_website: str | None = None) -> list[dict] | None:
     """Every form in the account with its ALL-TIME real submission count and
     newest real submission (form_history explains why the dates must be
     explicit). Returns [{form_id, name, created_at, total, last_at,
-    last_page_url, last_check_at, last_check_contact_id}] or None when the
-    form list itself is unavailable."""
+    subs_30d, channel, last_page_url, last_check_at, last_check_contact_id}]
+    or None when the form list itself is unavailable."""
     try:
         forms, exhausted, _error, note = _fetch_inventory_list(
             client, "/forms/", location_id, ("forms", "data", "list"), max_pages)
@@ -655,12 +682,13 @@ def fetch_form_inventory(client: GHLClient, cov: Coverage, location_id: str,
         return None
     return _inventory_with_history(client, cov, "form_inventory", location_id, forms,
                                    "/forms/submissions", "formId", "form",
-                                   today or date.today(), note, exhausted)
+                                   today or date.today(), note, exhausted, client_website)
 
 
 def fetch_surveys(client: GHLClient, cov: Coverage, location_id: str,
                   max_pages: int | None = None,
-                  today: date | None = None) -> list[dict] | None:
+                  today: date | None = None,
+                  client_website: str | None = None) -> list[dict] | None:
     """Same shape as fetch_form_inventory, for surveys. Needs the
     surveys.readonly scope, which older tokens were created without — a
     401/403 records the source as SKIPPED (scope not yet granted), not
@@ -676,7 +704,7 @@ def fetch_surveys(client: GHLClient, cov: Coverage, location_id: str,
         return None
     return _inventory_with_history(client, cov, "surveys", location_id, surveys,
                                    "/surveys/submissions", "surveyId", "survey",
-                                   today or date.today(), note, exhausted)
+                                   today or date.today(), note, exhausted, client_website)
 
 
 def fetch_form_check_contacts(client: GHLClient, cov: Coverage,
