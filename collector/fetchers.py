@@ -35,12 +35,16 @@ Key ideas to understand this file:
 
 from __future__ import annotations
 
+from datetime import date
+
+from . import form_history
 from .ghl_client import GHLAuthError, GHLClient, GHLError
 
 PAGE_LIMIT = 100
 BLOG_PAGE_LIMIT = 50
 FORM_LIST_LIMIT = 50       # /forms/ and /surveys/ list endpoints cap at 50/page
 PER_ITEM_LOOKUP_CAP = 200  # safety cap on per-form/per-survey submission lookups
+HISTORY_PAGE_SIZE = 20     # newest submissions read per form (form checks filtered out)
 
 
 class Coverage:
@@ -195,6 +199,7 @@ def _clean_conversation(convo: dict) -> dict:
         "id": _get_id(convo),
         "contactId": convo.get("contactId"),
         "contactName": convo.get("contactName") or convo.get("fullName"),
+        "dateAdded": convo.get("dateAdded"),
         "lastMessageDate": convo.get("lastMessageDate"),
         "lastMessageDirection": convo.get("lastMessageDirection"),
         "lastMessageType": convo.get("lastMessageType"),
@@ -355,6 +360,24 @@ def users_map(users: list[dict]) -> dict[str, str]:
         ) or uid
         out[uid] = str(name)
     return out
+
+
+def users_by_type(users: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+    """({client staff id: name}, {SSP/agency staff id: name}). GHL marks each
+    user roles.type "account" (the client's own team) or "agency" (SSP).
+    A user without a type counts as client staff, so a missing field can
+    never make an account look like it has no client users."""
+    client: dict[str, str] = {}
+    agency: dict[str, str] = {}
+    names = users_map(users)
+    for user in users:
+        uid = _get_id(user)
+        if not uid:
+            continue
+        roles = user.get("roles") if isinstance(user.get("roles"), dict) else {}
+        kind = str(roles.get("type") or "").strip().lower()
+        (agency if kind == "agency" else client)[uid] = names.get(uid, uid)
+    return client, agency
 
 
 def fetch_pipelines(client: GHLClient, cov: Coverage, location_id: str) -> list[dict]:
@@ -551,31 +574,9 @@ def fetch_form_submissions(client: GHLClient, cov: Coverage, location_id: str,
 
 
 # -- form & survey inventory + workflows (docs/FORMS-INTEGRATION.md Phase 1) --
-
-
-def _count_and_latest(client: GHLClient, path: str, params: dict) -> tuple[int | None, str | None]:
-    """One request against a submissions endpoint: (total count, newest
-    submission timestamp). The endpoint's meta carries the total, so limit=1
-    is enough — one cheap request per form/survey (a trick borrowed from the
-    reviewed MLH checker). PII boundary: only the timestamp is taken from the
-    submission record — names, emails, and answers never leave this function.
-    (None, None) means "could not determine", which classifies as 'unknown'
-    rather than a false 'no leads'."""
-    try:
-        data = client.request("GET", path, params=params)
-    except GHLError:
-        return None, None
-    if not isinstance(data, dict):
-        return None, None
-    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-    total = meta.get("total", data.get("total", data.get("count")))
-    subs = _first_list(data, "submissions", "data")
-    last_at = subs[0].get("createdAt") if subs and isinstance(subs[0], dict) else None
-    try:
-        total = int(total) if total is not None else len(subs)
-    except (TypeError, ValueError):
-        total = None
-    return total, last_at
+# Per-form history goes through form_history.fetch_history: explicit
+# all-time dates (GHL's default window is only the last month) and weekly
+# form-check submissions kept apart from real activity.
 
 
 def _fetch_inventory_list(client: GHLClient, path: str, location_id: str,
@@ -605,43 +606,67 @@ def _fetch_inventory_list(client: GHLClient, path: str, location_id: str,
     return items, exhausted, error, note
 
 
+def _inventory_with_history(client: GHLClient, cov: Coverage, source: str,
+                            location_id: str, items: list[dict], history_path: str,
+                            id_param: str, noun: str, today: date,
+                            note: str | None, exhausted: bool) -> list[dict]:
+    """Attach each form's/survey's submission history (form_history) and
+    record coverage. A lookup that failed keeps total=None ('unknown'),
+    never a fake zero; a narrowed history window is noted, never silent."""
+    window = form_history.SubmissionWindow(today)
+    out: list[dict] = []
+    for item in items[:PER_ITEM_LOOKUP_CAP]:
+        item_id = _get_id(item)
+        if not item_id:
+            continue
+        hist = form_history.fetch_history_safe(
+            client, window, history_path, id_param, location_id, item_id,
+            page_size=HISTORY_PAGE_SIZE)
+        out.append({"form_id": item_id, "name": item.get("name") or f"Unnamed {noun}",
+                    "created_at": item.get("createdAt") or item.get("dateAdded"),
+                    "total": hist["total"], "last_at": hist["last_at"],
+                    "last_page_url": hist["last_page_url"],
+                    "last_check_at": hist["last_check_at"],
+                    "last_check_contact_id": hist["last_check_contact_id"]})
+    extras = []
+    if len(items) > PER_ITEM_LOOKUP_CAP:
+        extras.append(f"only first {PER_ITEM_LOOKUP_CAP} of {len(items)} {noun}s checked")
+    if window.limited:
+        extras.append(f"submission history limited to {window.label} window (GHL rejected all-time)")
+    for extra in extras:
+        note = f"{note}; {extra}" if note else extra
+    cov.record(source, retrieved=len(out), exhausted=exhausted, note=note)
+    return out
+
+
 def fetch_form_inventory(client: GHLClient, cov: Coverage, location_id: str,
-                         max_pages: int | None = None) -> list[dict] | None:
-    """Every form in the account, each with its lifetime submission count and
-    newest submission date. Returns [{form_id, name, created_at, total,
-    last_at}] or None when the form list itself is unavailable. A form whose
-    per-form lookup failed keeps total=None ('unknown'), never a fake zero."""
+                         max_pages: int | None = None,
+                         today: date | None = None) -> list[dict] | None:
+    """Every form in the account with its ALL-TIME real submission count and
+    newest real submission (form_history explains why the dates must be
+    explicit). Returns [{form_id, name, created_at, total, last_at,
+    last_page_url, last_check_at, last_check_contact_id}] or None when the
+    form list itself is unavailable."""
     try:
-        forms, exhausted, error, note = _fetch_inventory_list(
+        forms, exhausted, _error, note = _fetch_inventory_list(
             client, "/forms/", location_id, ("forms", "data", "list"), max_pages)
     except GHLError as exc:
         cov.record("form_inventory", error=str(exc))
         return None
-    out: list[dict] = []
-    for form in forms[:PER_ITEM_LOOKUP_CAP]:
-        form_id = _get_id(form)
-        if not form_id:
-            continue
-        total, last_at = _count_and_latest(client, "/forms/submissions", {
-            "locationId": location_id, "formId": form_id, "limit": 1})
-        out.append({"form_id": form_id, "name": form.get("name") or "Unnamed form",
-                    "created_at": form.get("createdAt") or form.get("dateAdded"),
-                    "total": total, "last_at": last_at})
-    if len(forms) > PER_ITEM_LOOKUP_CAP:
-        extra = f"only first {PER_ITEM_LOOKUP_CAP} of {len(forms)} forms checked"
-        note = f"{note}; {extra}" if note else extra
-    cov.record("form_inventory", retrieved=len(out), exhausted=exhausted, error=error, note=note)
-    return out
+    return _inventory_with_history(client, cov, "form_inventory", location_id, forms,
+                                   "/forms/submissions", "formId", "form",
+                                   today or date.today(), note, exhausted)
 
 
 def fetch_surveys(client: GHLClient, cov: Coverage, location_id: str,
-                  max_pages: int | None = None) -> list[dict] | None:
+                  max_pages: int | None = None,
+                  today: date | None = None) -> list[dict] | None:
     """Same shape as fetch_form_inventory, for surveys. Needs the
     surveys.readonly scope, which older tokens were created without — a
     401/403 records the source as SKIPPED (scope not yet granted), not
     unavailable, so rolling the scope out gradually never trips gate G2."""
     try:
-        surveys, exhausted, error, note = _fetch_inventory_list(
+        surveys, exhausted, _error, note = _fetch_inventory_list(
             client, "/surveys/", location_id, ("surveys", "data", "list"), max_pages)
     except GHLAuthError:
         cov.record("surveys", skipped=True, note="scope not yet granted (surveys.readonly)")
@@ -649,17 +674,33 @@ def fetch_surveys(client: GHLClient, cov: Coverage, location_id: str,
     except GHLError as exc:
         cov.record("surveys", error=str(exc))
         return None
-    out: list[dict] = []
-    for survey in surveys[:PER_ITEM_LOOKUP_CAP]:
-        survey_id = _get_id(survey)
-        if not survey_id:
+    return _inventory_with_history(client, cov, "surveys", location_id, surveys,
+                                   "/surveys/submissions", "surveyId", "survey",
+                                   today or date.today(), note, exhausted)
+
+
+def fetch_form_check_contacts(client: GHLClient, cov: Coverage,
+                              contact_ids: list[str]) -> dict[str, bool | None]:
+    """Did each weekly form check land as a CRM contact? {contact_id: True
+    (contact exists) / False (404: gone or never created) / None (could not
+    tell)}. Only existence leaves here: the contact is our own test
+    identity, but the record is still never copied anywhere."""
+    out: dict[str, bool | None] = {}
+    for contact_id in dict.fromkeys(c for c in contact_ids if c):
+        try:
+            data = client.request("GET", f"/contacts/{contact_id}")
+        except GHLAuthError:
+            out[contact_id] = None
             continue
-        total, last_at = _count_and_latest(client, "/surveys/submissions", {
-            "locationId": location_id, "surveyId": survey_id, "limit": 1})
-        out.append({"form_id": survey_id, "name": survey.get("name") or "Unnamed survey",
-                    "created_at": survey.get("createdAt") or survey.get("dateAdded"),
-                    "total": total, "last_at": last_at})
-    cov.record("surveys", retrieved=len(out), exhausted=exhausted, error=error, note=note)
+        except GHLError as exc:
+            out[contact_id] = False if exc.status in (400, 404) else None
+            continue
+        contact = data.get("contact") if isinstance(data, dict) else None
+        out[contact_id] = bool(isinstance(contact, dict)
+                               and str(contact.get("id") or "") == str(contact_id))
+    if out:
+        cov.record("form_checks", retrieved=len(out),
+                   note=f"{sum(1 for v in out.values() if v)} of {len(out)} check contacts found")
     return out
 
 

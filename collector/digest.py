@@ -77,6 +77,7 @@ _CODE_LABELS = {
     "WORKFLOWS_NONE_PUBLISHED": "no published workflows",
     "FORM_WENT_SILENT": "a form went silent",
     "SURVEY_WENT_SILENT": "a survey went silent",
+    "FORM_CHECK_MISSED": "weekly form test didn't arrive",
 }
 
 
@@ -397,6 +398,12 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
     by_am: dict[str, list[dict]] = {}
     for sub in subs:
         if not sub.get("active", True):
+            continue
+        # No client staff users = ads delivery only: nobody at the client
+        # can act on a CRM alert, so the account stays out of AM mail. It is
+        # still collected (lead flow) and visible in the dashboard toggle.
+        snap = snapshots_by_loc.get(sub.get("location_id")) or {}
+        if snap.get("client_users") == 0 and not sub.get("is_parent"):
             continue
         am = (sub.get("am_email") or "").strip().lower()
         if not am.endswith(STAFF_DOMAIN):

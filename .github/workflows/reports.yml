@@ -1,0 +1,113 @@
+# On-demand, read-only reports (no GHL writes, nothing stored in Supabase):
+#   form activity  - every form: channel (website / Google ad / Facebook ad /
+#                    Facebook lead ad), last real submission, days inactive,
+#                    counts, the page it lives on, Datadog candidates
+#   account usage  - per subaccount: are client staff working leads in MLH,
+#                    or is it ads + automation only
+# Output: CSVs in the run's "reports-<id>" artifact (and printed in the log).
+#
+# How to run
+#   * Actions tab -> "Reports" -> Run workflow (available once this file is
+#     on the repository's default branch).
+#   * From any branch: edit .github/reports-request.txt and push. Its first
+#     non-comment line holds the flags (see that file). This is how a branch
+#     is run before it is merged.
+#
+# Secrets (Settings -> Secrets and variables -> Actions -> New repository
+# secret): REPORTS_SUPABASE_URL, REPORTS_SUPABASE_SERVICE_ROLE_KEY and
+# REPORTS_COLLECTOR_KEY, holding the same three values Render uses. The
+# REPORTS_ prefix is deliberate: the nightly collector workflow reads the
+# unprefixed names, and filling those would start a second nightly run next
+# to Render. PITs stay in the Supabase Vault.
+name: Reports
+
+on:
+  workflow_dispatch:
+    inputs:
+      reports:
+        description: "Which reports"
+        type: choice
+        options: [both, form-activity, account-usage]
+        default: both
+      crawl:
+        description: "Also re-check pages and crawl client sites for form embeds"
+        type: boolean
+        default: true
+      location:
+        description: "One account slug (blank = the whole book)"
+        required: false
+        default: ""
+  push:
+    paths:
+      - ".github/reports-request.txt"
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: collector/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r collector/requirements.txt
+
+      - name: Choose report flags
+        id: flags
+        env:
+          EVENT: ${{ github.event_name }}
+          REPORTS: ${{ inputs.reports }}
+          CRAWL: ${{ inputs.crawl }}
+          LOCATION: ${{ inputs.location }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            flags=""
+            case "$REPORTS" in
+              both) flags="--form-activity --account-usage" ;;
+              form-activity) flags="--form-activity" ;;
+              account-usage) flags="--account-usage" ;;
+            esac
+            if [ "$CRAWL" = "true" ] && [ "$REPORTS" != "account-usage" ]; then
+              flags="$flags --form-activity-crawl"
+            fi
+            if [ -n "$LOCATION" ]; then flags="$flags --location $LOCATION"; fi
+          else
+            flags=$(grep -v '^\s*#' .github/reports-request.txt | grep -v '^\s*$' | head -n1)
+          fi
+          # Only report flags may pass: this line becomes a command line.
+          for token in $flags; do
+            case "$token" in
+              --form-activity|--form-activity-crawl|--account-usage|--location) ;;
+              -*) echo "refusing flag: $token"; exit 1 ;;
+              *) echo "$token" | grep -Eq '^[a-z0-9_-]+$' || { echo "bad value: $token"; exit 1; } ;;
+            esac
+          done
+          echo "args=$flags" >> "$GITHUB_OUTPUT"
+          echo "report flags: $flags"
+
+      - name: Run reports
+        env:
+          SUPABASE_URL: ${{ secrets.REPORTS_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.REPORTS_SUPABASE_SERVICE_ROLE_KEY }}
+          COLLECTOR_KEY: ${{ secrets.REPORTS_COLLECTOR_KEY }}
+          GHL_APP_BASE: https://crm.smallscreenproducer.com
+          TZ: America/Chicago
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] || [ -z "$COLLECTOR_KEY" ]; then
+            echo "::warning::Reports skipped: add repository secrets REPORTS_SUPABASE_URL, REPORTS_SUPABASE_SERVICE_ROLE_KEY and REPORTS_COLLECTOR_KEY, then re-run."
+            exit 0
+          fi
+          python -m collector.main ${{ steps.flags.outputs.args }} --report-dir reports
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-${{ github.run_id }}
+          path: reports/
+          retention-days: 14
+          if-no-files-found: ignore

@@ -223,6 +223,10 @@ export type PortfolioState = "no_data" | "attention" | "steady";
 // `attention_score` ranks accounts; `state` buckets them into page sections.
 export interface PortfolioRow {
   location_id: string;
+  // client staff vs SSP staff users on the account (null until collected);
+  // 0 client users = ads delivery only, hidden by default in the portfolio
+  client_users: number | null;
+  ssp_users: number | null;
   name: string;
   slug: string;
   vertical: string | null;
@@ -291,7 +295,7 @@ export interface FormHealthRow {
   kind: "form" | "survey";
   form_id: string;
   name: string;
-  status: "active" | "silent" | "no_leads" | "new" | "unknown";
+  status: "active" | "silent" | "dormant" | "no_leads" | "new" | "unknown";
   submissions_total: number | null;
   last_submission_at: string | null;
   form_created_at: string | null;

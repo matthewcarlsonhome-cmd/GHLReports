@@ -163,6 +163,7 @@ def business_days_between(start: date, end: date) -> int:
 
 
 FORM_NEW_DAYS = 30  # a form this young with zero submissions is 'new', not 'no_leads'
+FORM_DORMANT_DAYS = 30  # quiet longer than this (calendar days) = 'dormant', not 'silent'
 
 
 def classify_form(total: int | None, last_at, created_at, today: date,
@@ -172,12 +173,17 @@ def classify_form(total: int | None, last_at, created_at, today: date,
     Port of the reviewed MLH checker's getStatus() with two fixes: silence is
     measured in BUSINESS days (weekend gaps don't count), and the threshold
     comes from the account's thresholds ("form_silent_days", default 3).
+    `total`/`last_at` are ALL-TIME real submissions (form_history).
 
       unknown  — submission count could not be determined (never guesses)
       active   — has submissions, newest within the silence threshold
-      silent   — had submissions before, nothing within the threshold
+      silent   — went quiet recently: newest submission past the threshold
+                 but within FORM_DORMANT_DAYS (this is what gets flagged)
+      dormant  — had submissions once, none in over FORM_DORMANT_DAYS (a
+                 retired campaign form, not news; never flagged). Before
+                 all-time history these showed as no_leads.
       new      — zero submissions but created in the last FORM_NEW_DAYS
-      no_leads — zero submissions, older than FORM_NEW_DAYS
+      no_leads — zero submissions ever, older than FORM_NEW_DAYS
     """
     if total is None:
         return "unknown"
@@ -185,6 +191,8 @@ def classify_form(total: int | None, last_at, created_at, today: date,
     if total > 0:
         if last is None:
             return "unknown"  # count says active-ish but no timestamp to judge by
+        if (today - last.date()).days > FORM_DORMANT_DAYS:
+            return "dormant"
         quiet = business_days_between(last.date(), today)
         return "active" if quiet < silent_days else "silent"
     created = parse_ts(created_at)

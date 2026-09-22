@@ -220,3 +220,14 @@ def test_one_mailbox_with_two_labels_greets_the_person():
             dict(SUBS[2], am_name="Michael")]
     out = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-24")
     assert out["lisa@smallscreenproducer.com"]["text"].startswith("Michael — week of")
+
+
+def test_accounts_without_client_users_stay_out_of_am_mail():
+    # Zero client staff users = ads delivery only: nobody at the client can
+    # act on a CRM alert. Unknown (None) never hides an account.
+    snaps = {**SNAPSHOTS, "l2": {**SNAPSHOTS["l2"], "client_users": 0}}
+    lisa = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")["lisa@smallscreenproducer.com"]
+    assert "Quiet Spas" not in lisa["text"] and "Pilot One Pools" in lisa["text"]
+    snaps["l2"]["client_users"] = None
+    lisa = build_digests(SUBS, snaps, FLAGS, {}, "2026-08-17")["lisa@smallscreenproducer.com"]
+    assert "Quiet Spas" in lisa["text"]

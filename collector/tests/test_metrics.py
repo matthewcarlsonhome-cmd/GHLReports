@@ -451,6 +451,17 @@ def test_classify_form():
     assert metrics.classify_form(5, "2026-08-13T12:00:00Z", None, tue, silent_days=5) == "active"
 
 
+def test_classify_form_dormant_after_30_days():
+    # All-time history exposes forms whose last lead is months old; those are
+    # 'dormant' (never flagged), not 'silent' and not the old 'no_leads'.
+    from datetime import date
+    tue = date(2026, 8, 18)
+    assert metrics.classify_form(5, "2026-07-19T12:00:00Z", None, tue) == "silent"   # 30 days
+    assert metrics.classify_form(5, "2026-07-18T12:00:00Z", None, tue) == "dormant"  # 31 days
+    assert metrics.classify_form(40, "2025-03-01T12:00:00Z", None, tue) == "dormant"
+    assert metrics.classify_form(0, None, "2025-03-01T00:00:00Z", tue) == "no_leads"
+
+
 def test_business_days_between():
     from datetime import date
     fri, mon, tue = date(2026, 8, 14), date(2026, 8, 17), date(2026, 8, 18)

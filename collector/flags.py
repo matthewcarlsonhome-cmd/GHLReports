@@ -48,6 +48,7 @@ DEFAULT_THRESHOLDS = {
     # forms
     "form_silent_trailing_min": 3.0,
     "form_silent_days": 3,            # business days without a submission before a form is 'silent' (consumed by metrics)
+    "form_check_stale_days": 8,       # weekly form check older than this = it stopped landing
     # response
     "slow_response_min": 3,
     "slow_response_red": 8,
@@ -138,6 +139,16 @@ def _is_won_stage(stage: str | None) -> bool:
         return False
     label = stage.split("\u00b7")[-1].strip().lower()
     return any(word in label for word in _WON_STAGE_WORDS)
+
+
+def _date_of(value) -> date | None:
+    """YYYY-MM-DD[...] string (or date) to a date; None when unparseable."""
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
@@ -488,6 +499,28 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
     silent_surveys = form_health.get("surveys_silent") or []
     if silent_surveys:
         _silent_flag("SURVEY_WENT_SILENT", "Survey", silent_surveys)
+
+    # FORM_CHECK_MISSED — a form under the weekly synthetic check
+    # (docs/FORM-MONITORING.md) stopped receiving it, or the check arrived
+    # without a CRM contact behind it. Only forms whose check landed in the
+    # last 30 days appear in form_checks (main.FORM_CHECK_ACTIVE_DAYS), so a
+    # test that was deliberately retired stops flagging on its own.
+    stale_after = int(th["form_check_stale_days"])
+    missed = []
+    for check in form_health.get("form_checks") or []:
+        at = _date_of(check.get("last_check_at"))
+        stale = today is not None and at is not None and (today - at).days > stale_after
+        if stale or check.get("contact_ok") is False:
+            missed.append(check)
+    if missed:
+        names = ", ".join(c.get("name") or "?" for c in missed[:5])
+        more = f" (+{len(missed) - 5} more)" if len(missed) > 5 else ""
+        flags.append(_flag(
+            "FORM_CHECK_MISSED", "amber", "Weekly form test didn't reach the CRM",
+            "The weekly test submission for these forms didn't arrive as a contact. "
+            "Open the page and submit the form by hand to confirm it still works.",
+            detail=f"{len(missed)} form(s): {names}{more}",
+        ))
 
     # WORKFLOWS_NONE_PUBLISHED — leads are arriving but not a single workflow
     # is published, so nothing is automating follow-up. Ported from the MLH
