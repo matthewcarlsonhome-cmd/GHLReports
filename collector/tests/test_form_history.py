@@ -184,3 +184,41 @@ def test_projection_never_keeps_click_ids():
     rec = fh.project(sub("2026-09-01", url="https://c.com/p?gclid=SECRET123", fbc="fb.1.SECRET"),
                      CHECK)
     assert "SECRET" not in repr(rec) and rec["ad"] == "google"
+
+
+def test_window_counts_uses_records_when_they_reach_back_far_enough():
+    subs = [sub("2026-09-20"), sub("2026-09-01"), sub("2026-07-01"), sub("2026-09-21", email=CHECK)]
+    client = RecordingClient(page_handler(subs))
+    hist = fh.fetch_history(client, fh.SubmissionWindow(TODAY), "/forms/submissions", "formId",
+                            "loc1", "f1", check_email=CHECK)
+    calls_before = len(client.calls)
+    counts = fh.window_counts(client, "/forms/submissions", "formId", "loc1", "f1", hist, TODAY,
+                              windows=(7, 30))
+    assert counts == {7: 1, 30: 2}                   # the form check never counts
+    assert len(client.calls) == calls_before          # answered from the page, no request
+
+
+def test_window_counts_asks_ghl_when_the_page_is_too_short():
+    subs = [sub(f"2026-09-{d:02d}") for d in range(2, 22)] + [sub("2026-08-30")]
+    client = RecordingClient(page_handler(subs))
+    hist = fh.fetch_history(client, fh.SubmissionWindow(TODAY), "/forms/submissions", "formId",
+                            "loc1", "f1", page_size=5, check_email=CHECK)
+    counts = fh.window_counts(client, "/forms/submissions", "formId", "loc1", "f1", hist, TODAY,
+                              windows=(30,))
+    assert counts == {30: 21}
+    assert client.calls[-1]["startAt"] == "2026-08-24" and client.calls[-1]["limit"] == 1
+
+
+def test_account_wide_submissions_drop_form_checks(monkeypatch):
+    # A weekly test must never keep a dead account's form volume alive
+    # (the FORM_SILENT flag reads these counts).
+    from .. import fetchers
+    monkeypatch.setenv("FORM_CHECK_EMAIL", CHECK)
+    subs = [sub("2026-09-20"), sub("2026-09-21", email=CHECK)]
+    cov = fetchers.Coverage()
+    out = fetchers.fetch_form_submissions(RecordingClient(page_handler(subs)), cov, "loc1",
+                                          "2026-08-11", "2026-09-22")
+    assert [s["createdAt"][:10] for s in out] == ["2026-09-20"]
+    assert "1 form-check test submission(s) excluded" in cov.sources["forms"]["note"]
+    # no submitted answers or contact details (ids are GHL's own)
+    assert "email" not in out[0] and "Jane Customer" not in repr(out) and "5551234567" not in repr(out)

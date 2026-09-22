@@ -227,6 +227,10 @@ export interface PortfolioRow {
   // 0 client users = ads delivery only, hidden by default in the portfolio
   client_users: number | null;
   ssp_users: number | null;
+  // Does the client's team work in MLH? Anything but "active" (ads_only,
+  // not_in_mlh, canceled) is filtered from the default views and the digest.
+  mlh_status: "active" | "ads_only" | "not_in_mlh" | "canceled";
+  mlh_note: string | null;
   name: string;
   slug: string;
   vertical: string | null;
@@ -292,13 +296,23 @@ export interface FormHealthRow {
   id: number;
   location_id: string;
   snapshot_date: string;
-  kind: "form" | "survey";
+  // "unlisted" = a form id that receives submissions but isn't in Sites >
+  // Forms (in practice Facebook/Instagram lead-ad forms)
+  kind: "form" | "survey" | "unlisted";
   form_id: string;
   name: string;
   status: "active" | "silent" | "dormant" | "no_leads" | "new" | "unknown";
-  submissions_total: number | null;
+  submissions_total: number | null;   // all-time real submissions (null for unlisted)
   last_submission_at: string | null;
   form_created_at: string | null;
+  // From 2026-09-23: what kind of form it is (collector/lead_channels.py),
+  // the page its newest real submission came from, its 30-day count, and
+  // the weekly synthetic form check (docs/FORM-MONITORING.md §4).
+  channel: string | null;
+  page_url: string | null;
+  subs_30d: number | null;
+  last_check_at: string | null;
+  check_contact_ok: boolean | null;
 }
 
 // One row of the tag_checks table: did the client site's tracking tags fire

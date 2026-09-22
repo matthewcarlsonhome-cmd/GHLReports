@@ -169,6 +169,13 @@ def weekly_pipeline_payload(sub: dict, metrics: dict, run_date: str,
     return payload
 
 
+def uses_mlh(sub: dict) -> bool:
+    """Alerts only go out for accounts whose team works in MLH: the team
+    marks the others ads only / not in MLH / canceled (subaccounts.mlh_status,
+    docs/ACCOUNT-USAGE.md). The SSP parent always counts."""
+    return bool(sub.get("is_parent")) or (sub.get("mlh_status") or "active") == "active"
+
+
 def select_alerts(location_flags: list[dict], prev_codes: list[str] | None) -> list[dict]:
     """Flags to announce for one location: alertable AND not present last run.
 
@@ -292,6 +299,8 @@ def send_run_alerts(store, results: dict, run_date, run_id=None, log=print, env=
     queued: list[tuple[dict, dict]] = []
     for location_id, result in results.items():
         sub = result.get("sub") or {}
+        if not uses_mlh(sub):
+            continue
         try:
             prev_codes = store.read_prev_flag_codes(location_id, run_date)
         except Exception as exc:                        # a read failure is not fatal
@@ -309,6 +318,8 @@ def send_run_alerts(store, results: dict, run_date, run_id=None, log=print, env=
     if run_date.weekday() == 0:
         for location_id, result in results.items():
             sub = result.get("sub") or {}
+            if not uses_mlh(sub):
+                continue
             payload = weekly_pipeline_payload(sub, result.get("metrics") or {},
                                               date_str, dashboard_base)
             if payload and _key(sub, payload) not in already_sent:
@@ -383,6 +394,8 @@ def send_weekly_alerts(store, run_date, log=print, env=None) -> dict:
     for row in store.read_pipeline_snapshots(run_date):
         sub = subs_by_id.get(row.get("location_id"))
         if not sub:
+            continue
+        if not uses_mlh(sub):
             continue
         payload = weekly_pipeline_payload(sub, row, date_str, dashboard_base)
         if payload and _key(sub, payload) not in already_sent:

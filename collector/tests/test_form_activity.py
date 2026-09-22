@@ -202,3 +202,16 @@ def test_main_form_activity_mode_writes_and_prints_reports(tmp_path, capsys):
 def test_history_module_is_the_single_source_of_truth():
     # The report and the nightly share one projection and one window.
     assert fa.form_history is form_history
+
+
+def test_reports_leave_out_accounts_not_using_mlh(tmp_path, capsys):
+    ads_only = dict(SUB, location_id="locX", name="GA Only Pools", slug="gaonly",
+                    mlh_status="ads_only")
+    store = FakeStore(subs=[SUB, ads_only])
+    code = main_mod.run(["--form-activity", "--report-dir", str(tmp_path)], store=store,
+                        client_factory=Client,
+                        now_utc=datetime(2026, 9, 22, 15, 0, tzinfo=timezone.utc))
+    assert code == 0
+    accounts = (tmp_path / "form-accounts.csv").read_text()
+    assert "Flohr Pools" in accounts and "GA Only Pools" not in accounts
+    assert "not using MLH left out" in capsys.readouterr().out

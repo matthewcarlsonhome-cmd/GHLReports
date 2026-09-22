@@ -24,8 +24,9 @@ Key ideas to understand this file
   client's own team) or "agency" (SSP). Only client-staff activity counts
   as the client using MLH; SSP activity is reported separately.
 * An outbound message is automated if its source says so (workflow,
-  campaign, bulk, api) OR it went out within INSTANT_SECONDS of the lead's
-  message or of the conversation starting. The second rule catches
+  campaign, bulk, api) OR it went out within INSTANT_SECONDS (2 minutes,
+  metrics.INSTANT_REPLY_SECONDS) of the lead's message or of the
+  conversation starting. The second rule catches
   workflow replies sent under a user's name, which carry a userId and were
   being counted as human replies (the 0-minute "human" first touches seen
   across the book on 2026-09-22).
@@ -54,7 +55,7 @@ from ..ghl_client import GHLAuthError, GHLClient, GHLError
 WINDOW_DAYS = 28
 CONVO_CAP = 60             # recent conversations whose messages are read per account
 CONVO_PAGE_CAP = 5         # conversation search pages (100 each)
-INSTANT_SECONDS = 60       # outbound this soon after the lead's message = automated reply
+INSTANT_SECONDS = metrics.INSTANT_REPLY_SECONDS   # same rule as the nightly speed-to-lead
 WORKING_MESSAGES = 5       # client-staff replies in 28d that count as working in MLH
 WORKING_DEALS = 2          # deals won or lost in 28d that count as working in MLH
 WORKING_CALLS = 3          # outbound calls in 28d that count as working in MLH

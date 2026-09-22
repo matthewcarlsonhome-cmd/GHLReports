@@ -570,10 +570,11 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     # form-check test submissions (docs/FORM-MONITORING.md) are kept apart,
     # and summarized below so a check that stops landing raises a flag.
     local_today = now_utc.astimezone(tz).date()
+    website = (sub.get("tag_config") or {}).get("website")
     form_inv = fetchers.fetch_form_inventory(client, cov, location_id, max_pages,
-                                             today=local_today)
+                                             today=local_today, client_website=website)
     survey_inv = fetchers.fetch_surveys(client, cov, location_id, max_pages,
-                                        today=local_today)
+                                        today=local_today, client_website=website)
     workflows = fetchers.fetch_workflows(client, cov, location_id)
     form_health_rows: list[dict] = []
     form_checks: list[dict] = []
@@ -593,6 +594,11 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                 "submissions_total": item.get("total"),
                 "last_submission_at": last_dt.isoformat() if last_dt else None,
                 "form_created_at": created_dt.isoformat() if created_dt else None,
+                "channel": item.get("channel"),
+                "page_url": item.get("last_page_url") or None,
+                "subs_30d": item.get("subs_30d"),
+                "last_check_at": None,
+                "check_contact_ok": None,
             })
             check_dt = metrics.parse_ts(item.get("last_check_at"))
             if check_dt and (local_today - check_dt.date()).days <= FORM_CHECK_ACTIVE_DAYS:
@@ -605,6 +611,21 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         client, cov, [c["contact_id"] for c in form_checks])
     for check in form_checks:
         check["contact_ok"] = check_contacts.get(check.pop("contact_id") or "")
+    checks_by_form = {(c["kind"], c["form_id"]): c for c in form_checks}
+    for row in form_health_rows:
+        check = checks_by_form.get((row["kind"], row["form_id"]))
+        if check:
+            row["last_check_at"] = check["last_check_at"]
+            row["check_contact_ok"] = check["contact_ok"]
+
+    # Form ids that received submissions in the 42-day window but are not in
+    # Sites > Forms: mostly Facebook/Instagram lead-ad forms, which never
+    # touch a web page. They get their own rows (kind 'unlisted') so the
+    # Forms tab shows where an account's leads really come from.
+    form_health_rows += metrics.unlisted_form_rows(
+        submissions, {r["form_id"] for r in form_health_rows}, location_id,
+        run_date.isoformat(), local_today, website,
+        silent_days=int(thresholds["form_silent_days"]))
 
     # Relationship metrics (is SSP's own relationship with this client
     # healthy?) come from the PARENT account: calendar events were indexed by
@@ -1214,6 +1235,9 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
                              "is it ads + automation only; prints CSV, writes it, exits")
     parser.add_argument("--report-dir", default="reports", metavar="DIR",
                         help="where report CSVs are written (default ./reports)")
+    parser.add_argument("--include-non-mlh", action="store_true",
+                        help="reports: also include accounts marked ads only / not in MLH "
+                             "(subaccounts.mlh_status); by default they are left out")
     args = parser.parse_args(argv)
 
     # -- send-test mode -------------------------------------------------------
@@ -1305,10 +1329,18 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     if args.form_activity or args.account_usage:
         failed: list[str] = []
         outputs: list[tuple[str, str]] = []
+        report_targets = targets
+        if not args.location and not args.include_non_mlh:
+            report_targets = [s for s in targets if s.get("is_parent")
+                              or (s.get("mlh_status") or "active") == "active"]
+            skipped = len(targets) - len(report_targets)
+            if skipped:
+                log(f"reports: {skipped} account(s) not using MLH left out "
+                    "(pass --include-non-mlh to include them)")
         if args.form_activity:
             from .tools import form_activity as fa
             form_rows, page_rows, account_rows, fa_failed = fa.collect_book(
-                store, targets, crawl=args.form_activity_crawl,
+                store, report_targets, crawl=args.form_activity_crawl,
                 client_factory=client_factory, today=run_date, log=log)
             failed += fa_failed
             outputs += [("form-activity.csv", fa.to_csv(form_rows, fa.FORM_COLUMNS)),
@@ -1317,7 +1349,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         if args.account_usage:
             from .tools import account_usage as au
             usage_rows, au_failed = au.collect_book(
-                store, targets, client_factory=client_factory, now_utc=now_utc, log=log)
+                store, report_targets, client_factory=client_factory, now_utc=now_utc, log=log)
             failed += [f for f in au_failed if f not in failed]
             outputs.append(("account-usage.csv", au.to_csv(usage_rows)))
         os.makedirs(args.report_dir, exist_ok=True)

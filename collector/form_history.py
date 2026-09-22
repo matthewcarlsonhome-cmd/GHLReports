@@ -285,6 +285,46 @@ def fetch_history(client, window: SubmissionWindow, path: str, id_param: str,
     }
 
 
+def _day(ts: str | None) -> date | None:
+    try:
+        return date.fromisoformat(str(ts)[:10]) if ts else None
+    except ValueError:
+        return None
+
+
+def window_counts(client, path: str, id_param: str, location_id: str, item_id: str,
+                  hist: dict, today: date, windows=(7, 30, 90, 365)) -> dict[int, int | None]:
+    """Real submissions in the last N days, for each N in `windows`. Exact
+    from `hist["records"]` when they reach back far enough (no request);
+    otherwise one explicit-window request per uncovered window, minus the
+    form checks seen in the records. None = could not determine."""
+    if hist.get("total") == 0:
+        return {days: 0 for days in windows}
+    if hist.get("total") is None:
+        return {days: None for days in windows}
+    real_days = [d for d in (_day(r["at"]) for r in hist["records"] if not r["check"]) if d]
+    check_days = [d for d in (_day(r["at"]) for r in hist["records"] if r["check"]) if d]
+    oldest = min((d for d in (_day(r["at"]) for r in hist["records"]) if d), default=None)
+    out: dict[int, int | None] = {}
+    for days in windows:
+        start = today - timedelta(days=days)
+        if hist["covers_all"] or (oldest is not None and oldest < start):
+            out[days] = sum(1 for d in real_days if d > start)
+            continue
+        try:
+            data = client.request("GET", path, params={
+                "locationId": location_id, id_param: item_id, "limit": 1, "page": 1,
+                "startAt": (start + timedelta(days=1)).isoformat(),
+                "endAt": (today + timedelta(days=1)).isoformat()})
+        except GHLError:
+            out[days] = None
+            continue
+        total = meta_total(data)
+        checks = sum(1 for d in check_days if d > start)
+        out[days] = None if total is None else max(total - checks, 0)
+    return out
+
+
 UNKNOWN_HISTORY = {
     "total": None, "raw_total": None, "last_at": None, "last_page_url": "",
     "check_total": None, "last_check_at": None, "last_check_contact_id": None,

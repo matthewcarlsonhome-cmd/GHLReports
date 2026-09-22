@@ -102,6 +102,46 @@ def test_classify_outbound():
     assert metrics.classify_outbound({}) == "unknown"
 
 
+def test_classify_outbound_source_beats_user_and_instant_replies_are_automated():
+    lead = utc(2026, 8, 16, 10)
+    # workflows send "as" a user: the automation source wins over the userId
+    assert metrics.classify_outbound({"source": "workflow", "userId": "u1"}) == "automation"
+    # sent 5 seconds after the lead arrived under a user's name: an auto-reply
+    auto = {"userId": "u1", "source": "app", "dateAdded": "2026-08-16T10:00:05Z"}
+    assert metrics.classify_outbound(auto, trigger_at=lead) == "automation"
+    # the same user 25 minutes later is a person
+    later = dict(auto, dateAdded="2026-08-16T10:25:00Z")
+    assert metrics.classify_outbound(later, trigger_at=lead) == "human"
+    # right at the 2-minute edge is still automatic; just past it is not
+    edge = dict(auto, dateAdded="2026-08-16T10:02:00Z")
+    assert metrics.classify_outbound(edge, trigger_at=lead) == "automation"
+    past = dict(auto, dateAdded="2026-08-16T10:02:01Z")
+    assert metrics.classify_outbound(past, trigger_at=lead) == "human"
+
+
+def test_lead_event_ignores_instant_auto_replies_sent_as_a_user():
+    contact = {"id": "c1", "firstName": "Jane", "lastName": "Smith",
+               "dateAdded": "2026-08-16T10:00:00Z"}
+    messages = [
+        {"direction": "outbound", "dateAdded": "2026-08-16T10:00:04Z", "userId": "u1"},
+        {"direction": "inbound", "dateAdded": "2026-08-16T12:00:00Z"},
+        # a reply 40 seconds after the lead wrote back: also automatic
+        {"direction": "outbound", "dateAdded": "2026-08-16T12:00:40Z", "userId": "u1"},
+        {"direction": "outbound", "dateAdded": "2026-08-16T13:30:00Z", "userId": "u1"},
+    ]
+    event = metrics.lead_event(contact, messages)
+    assert event["first_outbound_kind"] == "automation"
+    assert event["first_touch_minutes"] == 0.1
+    assert event["first_human_touch_minutes"] == 210.0      # the 13:30 reply
+
+
+def test_lead_event_with_only_auto_replies_has_no_human_touch():
+    contact = {"id": "c2", "dateAdded": "2026-08-16T10:00:00Z"}
+    messages = [{"direction": "outbound", "dateAdded": "2026-08-16T10:00:02Z", "userId": "u1"}]
+    event = metrics.lead_event(contact, messages)
+    assert event["first_outbound_kind"] == "automation" and event["first_human_touch_at"] is None
+
+
 def test_lead_event_first_touch_minutes():
     contact = {"id": "c1", "firstName": "Jane", "lastName": "Smith",
                "dateAdded": "2026-08-16T10:00:00Z"}
@@ -486,3 +526,46 @@ def test_location_name_matches():
     # with a straight one — both directions must match.
     assert metrics.location_name_matches("Campbell’s Pool and Spa", "Campbell's Pool and Spa")
     assert metrics.location_name_matches("Campbell's Pool and Spa", "Campbell’s Pool and Spa")
+
+
+def test_pipeline_movement_ignores_automatic_deal_creation():
+    start, end = metrics.window_7d(NOW, CT)
+    base = {"status": "open", "monetaryValue": 1000}
+    opps = [
+        # ad lead: created and placed by a workflow 3 seconds later - not movement
+        {**base, "id": "auto", "createdAt": "2026-08-10T12:00:00Z",
+         "lastStageChangeAt": "2026-08-10T12:00:03Z"},
+        # created, never touched - not movement
+        {**base, "id": "new", "createdAt": "2026-08-12T12:00:00Z"},
+        # someone moved it two days after it arrived - movement
+        {**base, "id": "worked", "createdAt": "2026-08-01T12:00:00Z",
+         "lastStageChangeAt": "2026-08-03T15:00:00Z"},
+        # moved long ago - outside the 30 days
+        {**base, "id": "old", "createdAt": "2026-06-01T12:00:00Z",
+         "lastStageChangeAt": "2026-06-20T12:00:00Z"},
+        # closed recently - movement
+        {"status": "won", "id": "won", "createdAt": "2026-07-01T12:00:00Z",
+         "lastStatusChangeAt": "2026-08-15T12:00:00Z"},
+    ]
+    assert metrics.pipeline_metrics(opps, NOW, start, end)["opps_moved_30d"] == 2
+
+
+def test_unlisted_form_rows_describe_facebook_lead_ad_forms():
+    from datetime import date
+    today = date(2026, 8, 18)
+    submissions = [
+        {"formId": "fbLeadForm", "createdAt": "2026-08-17T15:00:00Z", "page_url": "", "ad": "",
+         "source": "facebook", "check": False},
+        {"formId": "fbLeadForm", "createdAt": "2026-07-10T15:00:00Z", "page_url": "", "ad": "",
+         "source": "facebook", "check": False},
+        {"formId": "listedForm", "createdAt": "2026-08-17T15:00:00Z", "page_url": "", "ad": "",
+         "source": "", "check": False},
+    ]
+    rows = metrics.unlisted_form_rows(submissions, {"listedForm"}, "locA", "2026-08-18", today,
+                                      "https://client.com")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "unlisted" and row["form_id"] == "fbLeadForm"
+    assert row["channel"] == "Facebook lead ad" and row["name"] == "Facebook lead ad form"
+    assert row["status"] == "active" and row["subs_30d"] == 1
+    assert row["submissions_total"] is None and row["page_url"] is None
