@@ -694,7 +694,7 @@ export default function Account() {
                     context={`${fmtNum(snapshot.opps_stale)} deals`}
                     tone={(snapshot.opps_stale_value ?? 0) >= 25000 ? "bad" : undefined} />
           <StatTile label="Deals moved 30d" value={fmtNum(snapshot.opps_moved_30d)}
-                    context="created, staged, or closed"
+                    context="stage changes + closes (new deals don't count)"
                     tone={snapshot.opps_moved_30d === 0 && (snapshot.opps_open ?? 0) >= 10
                       ? "bad" : undefined} />
           <StatTile label="Days since publish" value={fmtNum(snapshot.days_since_last_publish)}

@@ -173,6 +173,15 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
     convos_active = metrics.get("convos_active_7d")
     opps_created = metrics.get("opps_created_7d")
     forms_7d = metrics.get("form_submissions_7d")
+    # Nobody on the client's team replied to ANY of this week's leads inside
+    # MLH (only automatic replies went out; speed samples come from human
+    # replies, so none means none). Then "share of leads with no human
+    # touch" is 100% by construction and says nothing about speed: it is a
+    # usage fact, reported once as NOT_WORKING_IN_MLH (info) instead of as
+    # red SLOW_RESPONSE / PIPELINE_FROZEN alarms.
+    nobody_in_person = (bool(metrics.get("speed_kind_known"))
+                        and metrics.get("speed_to_lead_median_min") is None
+                        and (metrics.get("leads_no_human_touch_7d") or 0) > 0)
     forms_avg = metrics.get("form_submissions_trailing_avg")
 
     # INTEGRATION_SUSPECT / LEADS_ZERO — mutually exclusive by construction.
@@ -290,17 +299,23 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
         ratio = no_human / leads
     ratio_fires = (
         ratio is not None and ratio >= th["no_human_ratio"] and (leads or 0) >= th["no_human_min_leads"]
+        and not nobody_in_person
     )
     if (uncontacted is not None and uncontacted >= th["slow_response_min"]) or ratio_fires:
         severity = "amber"
-        if (ratio is not None and ratio >= th["no_human_ratio_red"]) or \
+        if (ratio_fires and ratio >= th["no_human_ratio_red"]) or \
                 (uncontacted is not None and uncontacted >= th["slow_response_red"]):
             severity = "red"
         first = (details.get("uncontacted_leads") or [{}])[0]
+        if uncontacted is not None and uncontacted >= th["slow_response_min"]:
+            action = (f"{uncontacted} leads uncontacted >24h. Send the response-time report; "
+                      "it reframes \"bad leads.\"")
+        else:
+            action = (f"{no_human} of {leads} leads this week got only automatic replies; "
+                      "nobody followed up in person. Ask who owns follow-up.")
         flags.append(_flag(
             "SLOW_RESPONSE", severity, "Leads sitting uncontacted",
-            f"{uncontacted or 0} leads uncontacted >24h. Send the response-time report; "
-            "it reframes \"bad leads.\"",
+            action,
             entity_type="contact", entity_id=first.get("contact_id"),
             entity_name=first.get("name"), deep_link=first.get("deep_link"),
         ))
@@ -363,18 +378,22 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
             ))
 
     # PIPELINE_FROZEN — nothing (or almost nothing) has moved in 30 days
-    # despite a real book of open deals: no stage changes, no new deals, no
-    # closes. Distinct from stale (which is per-deal idleness): this is the
-    # whole pipeline not being worked — the strongest "client stopped using
-    # the CRM for sales, reach out" signal we can compute.
+    # despite a real book of open deals: no stage changes, no closes. New
+    # deals don't count as movement (ads create them automatically; see
+    # metrics.pipeline_metrics). Distinct from stale (which is per-deal
+    # idleness): this is the whole pipeline not being worked — the
+    # strongest "client stopped using the CRM for sales, reach out" signal
+    # we can compute.
     moved = metrics.get("opps_moved_30d")
-    if (moved is not None and opps_open >= th["frozen_min_open"]):
+    not_worked = nobody_in_person and moved == 0
+    if (moved is not None and opps_open >= th["frozen_min_open"] and not not_worked):
         moved_pct = moved / opps_open * 100.0
         if moved == 0:
             flags.append(_flag(
                 "PIPELINE_FROZEN", "red", "Pipeline frozen",
-                f"{opps_open} open deals and not one moved in 30 days (no stage changes, "
-                "no new deals, no closes). Call the client — the pipeline isn't being worked.",
+                f"{opps_open} open deals and not one moved or closed in 30 days (new deals "
+                "that arrived on their own don't count). Call the client — the pipeline "
+                "isn't being worked.",
             ))
         elif moved_pct < th["frozen_moved_pct"]:
             flags.append(_flag(
@@ -382,6 +401,23 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                 f"Only {moved} of {opps_open} open deals ({moved_pct:.0f}%) moved in 30 days. "
                 "Walk the client through their pipeline on the next call.",
             ))
+
+    # NOT_WORKING_IN_MLH — info: this week's leads got only automatic
+    # replies inside MLH and no deal moved or closed in 30 days. The leads
+    # are being handled elsewhere (email/phone from the workflow's
+    # notification) or not at all; either way the CRM numbers don't
+    # describe the client's sales work. A usage conversation, not an alarm,
+    # so info (kept out of the digest) instead of red SLOW_RESPONSE /
+    # PIPELINE_FROZEN. See docs/ACCOUNT-USAGE.md.
+    if not_worked:
+        flags.append(_flag(
+            "NOT_WORKING_IN_MLH", "info", "Leads aren't being worked in MLH",
+            f"This week's {leads or 0} leads got only automatic replies inside MLH and no deal "
+            "moved in 30 days. Confirm how the client follows up (phone, email) before "
+            "reading this account's pipeline numbers as real.",
+            detail=f"{metrics.get('leads_no_human_touch_7d')} leads with only automatic replies; "
+                   f"{opps_open} open deals, 0 moved in 30 days",
+        ))
 
     # PIPELINE_BOTTLENECK — info only: the single stage holding the most
     # idle dollars, when it's real money. Context for the next client call

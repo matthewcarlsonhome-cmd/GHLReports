@@ -77,7 +77,9 @@ def test_happy_path_metrics_gate_and_flags():
     assert snap["opps_won_7d"] == 1
     assert snap["opps_lost_7d"] == 1
     assert snap["opps_created_7d"] == 1
-    assert snap["opps_moved_30d"] == 3   # o2 created 8/12, o3 won 8/15, o4 lost 8/16; o1 untouched since 7/1
+    # o3 won 8/15 and o4 lost 8/16 count; o2 was only created 8/12 (arriving
+    # isn't movement: ad leads create deals on their own); o1 untouched since 7/1
+    assert snap["opps_moved_30d"] == 2
 
     # chart aggregates (uncapped, over the full opportunity set)
     stages = snap["details"]["pipeline_stages"]

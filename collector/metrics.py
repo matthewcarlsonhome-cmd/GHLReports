@@ -50,6 +50,14 @@ REVIEW_TAG = "review-request"
 # Message `source` values that tell a human touch apart from an automated one.
 HUMAN_SOURCES = {"app", "manual", "user"}
 AUTOMATION_SOURCES = {"workflow", "campaign", "bulk_actions", "api"}
+# An outbound message this soon after the lead arrives or writes is an
+# automated reply, whatever its labels say. Live data (2026-09-22, 1,091
+# first replies counted as "human" over 28 days): 61% landed within 6
+# seconds of the lead, 84% within 30 seconds, 91% within 2 minutes.
+INSTANT_REPLY_SECONDS = 120
+# A deal's first stage change this soon after it was created is the
+# automatic placement into a pipeline, not a person moving it.
+PLACEMENT_GRACE = timedelta(minutes=10)
 
 SHOWED_STATUSES = {"showed"}
 NOSHOW_STATUSES = {"noshow", "no_show", "no-show"}
@@ -409,26 +417,39 @@ def peer_median(deltas: list[float]) -> tuple[float | None, int]:
 # -- speed to lead -------------------------------------------------------
 
 
-def classify_outbound(message: dict) -> str:
+def classify_outbound(message: dict, trigger_at: datetime | None = None) -> str:
     """Was this outbound message sent by a human or an automation?
 
-    A userId means a person clicked send. Otherwise the message `source`
-    decides; anything unrecognized is "unknown", which downstream treats as
-    "we can't tell humans from bots for this account".
+    Checked in this order (fixed 2026-09-22; the old order let every
+    workflow auto-reply count as a human one):
+      1. an automation `source` (workflow, campaign, bulk, api) wins over a
+         userId: workflows send "as" a user, so their messages carry one;
+      2. timing: sent within INSTANT_REPLY_SECONDS after `trigger_at` (the
+         lead's creation or its latest message) = automated reply;
+      3. only then does a userId or a human source mean a person clicked
+         send. Anything unrecognized is "unknown", which downstream treats
+         as "we can't tell humans from bots for this account".
     """
-    if message.get("userId"):
-        return "human"
     source = str(message.get("source") or "").strip().lower()
-    if source in HUMAN_SOURCES:
-        return "human"
     if source in AUTOMATION_SOURCES:
         return "automation"
+    sent = parse_ts(message.get("dateAdded"))
+    if (trigger_at is not None and sent is not None
+            and timedelta(0) <= sent - trigger_at <= timedelta(seconds=INSTANT_REPLY_SECONDS)):
+        return "automation"
+    if message.get("userId") or source in HUMAN_SOURCES:
+        return "human"
     return "unknown"
 
 
 def _is_outbound(message: dict) -> bool:
     """True if the message went from the business to the lead."""
     return str(message.get("direction") or "").strip().lower() == "outbound"
+
+
+def _is_inbound(message: dict) -> bool:
+    """True if the lead sent the message."""
+    return str(message.get("direction") or "").strip().lower() == "inbound"
 
 
 def lead_event(contact: dict, messages: list[dict]) -> dict:
@@ -440,15 +461,24 @@ def lead_event(contact: dict, messages: list[dict]) -> dict:
     minutes since the contact was created (the speed-to-lead numbers).
     """
     created = parse_ts(contact.get("dateAdded"))
-    # Timestamped outbound messages, oldest first.
-    outbound = [(parse_ts(m.get("dateAdded")), m) for m in messages if _is_outbound(m)]
-    outbound = [(ts, m) for ts, m in outbound if ts is not None]
-    outbound.sort(key=lambda pair: pair[0])
+    # Walk every timestamped message oldest first. The lead's creation and
+    # each inbound message start the instant-reply clock that
+    # classify_outbound uses to spot automated replies.
+    timeline = [(parse_ts(m.get("dateAdded")), m) for m in messages]
+    timeline = sorted(((ts, m) for ts, m in timeline if ts is not None),
+                      key=lambda pair: pair[0])
+    trigger = created
+    outbound: list[tuple[datetime, str]] = []
+    for ts, message in timeline:
+        if _is_inbound(message):
+            trigger = ts if trigger is None else max(trigger, ts)
+        elif _is_outbound(message):
+            outbound.append((ts, classify_outbound(message, trigger)))
 
     first_outbound_at = outbound[0][0] if outbound else None
-    first_outbound_kind = classify_outbound(outbound[0][1]) if outbound else None
-    human = [(ts, m) for ts, m in outbound if classify_outbound(m) == "human"]
-    first_human_at = human[0][0] if human else None
+    first_outbound_kind = outbound[0][1] if outbound else None
+    human = [ts for ts, kind in outbound if kind == "human"]
+    first_human_at = human[0] if human else None
 
     def minutes_since(ts):
         """Minutes from contact creation to ts; None if either side is missing."""
@@ -870,22 +900,29 @@ def pipeline_metrics(opps: list[dict], now_utc: datetime,
 
     created_7d = sum(1 for o in opps if in_window(parse_ts(o.get("createdAt")), win_start, win_end))
 
-    # Pipeline movement, last 30 days: is the client actually WORKING the
-    # pipeline? A deal counts as moved if in the last 30 days it was created,
-    # changed stage (open deals), or closed (won/lost). Zero movement with a
-    # pipeline full of open deals is the "client stopped using GHL for
-    # sales" smell — worth a call regardless of the stale count.
+    # Pipeline movement, last 30 days: is anyone actually WORKING the
+    # pipeline? A deal counts as moved if in the last 30 days it changed
+    # stage (open deals) or closed (won/lost). Creation does NOT count: ad
+    # leads land in "Ads Pipelines" automatically, so counting new deals
+    # made accounts nobody works look busy (changed 2026-09-22). A stage
+    # change within PLACEMENT_GRACE of creation is the automatic placement
+    # itself, not a person moving the card. Workflows that move deals days
+    # later can't be told apart through the API; that caveat stands.
     cutoff_30 = now_utc - timedelta(days=30)
     moved_30d = 0
     for opp in opps:
         status = str(opp.get("status") or "").lower()
-        stamps = [parse_ts(opp.get("createdAt"))]
         if status == "open":
-            stamps.append(parse_ts(opp.get("lastStageChangeAt")))
+            changed = parse_ts(opp.get("lastStageChangeAt"))
+            created = parse_ts(opp.get("createdAt"))
+            placement = (changed is not None and created is not None
+                         and changed - created <= PLACEMENT_GRACE)
+            if changed is not None and changed >= cutoff_30 and not placement:
+                moved_30d += 1
         else:
-            stamps.append(parse_ts(opp.get("lastStatusChangeAt")))
-        if any(ts is not None and ts >= cutoff_30 for ts in stamps):
-            moved_30d += 1
+            closed = parse_ts(opp.get("lastStatusChangeAt"))
+            if closed is not None and closed >= cutoff_30:
+                moved_30d += 1
 
     return {
         "opps_open": len(open_opps),

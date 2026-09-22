@@ -78,6 +78,7 @@ _CODE_LABELS = {
     "FORM_WENT_SILENT": "a form went silent",
     "SURVEY_WENT_SILENT": "a survey went silent",
     "FORM_CHECK_MISSED": "weekly form test didn't arrive",
+    "NOT_WORKING_IN_MLH": "leads not worked in MLH",
 }
 
 

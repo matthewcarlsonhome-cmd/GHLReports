@@ -35,10 +35,17 @@ docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
   users (All American, Backyard Oasis, Beachfront, G&S, Luke Gell, Pla-Mor,
   Pristine) drop out of the AM digest and hide behind a portfolio toggle.
   They are still collected.
-- **Pending decision:** the "human first touch" metric counts workflow
-  auto-replies sent under a user's name as human. The proposed 60-second rule
-  is in `ACCOUNT-USAGE.md`, not yet applied to the nightly because it moves
-  alerts.
+- **Human-reply fix applied (on the branch):**
+  - The message source beats the user tag.
+  - Anything sent within 2 minutes of the lead arriving or writing counts as
+    automated.
+  - "Deals moved" no longer counts deals that merely arrived.
+  - Accounts where nobody replies in person and no deal moves get one info
+    note, `NOT_WORKING_IN_MLH`, in place of red SLOW_RESPONSE /
+    PIPELINE_FROZEN alarms.
+  - Expect speed-to-lead to show "—" on ads-only accounts and "Deals moved"
+    to drop sharply on the first run after deploy (a one-time step change in
+    the week-over-week comparison).
 
 ## What this is
 
@@ -87,7 +94,7 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
 | Migrations | `supabase/migrations/0001`–`0012` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix); all applied live |
-| Tests | `python3 -m pytest collector/tests/ -q` → **179 passing** (branch `claude/lucid-gauss-vz1y98`) |
+| Tests | `python3 -m pytest collector/tests/ -q` → **185 passing** (branch `claude/lucid-gauss-vz1y98`) |
 | Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 
 ## Current state

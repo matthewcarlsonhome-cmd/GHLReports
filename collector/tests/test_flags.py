@@ -265,3 +265,36 @@ def test_form_check_missed_fires_when_weekly_check_stops_or_lacks_contact():
     assert "FORM_CHECK_MISSED" not in codes(compute(
         thresholds={"form_check_stale_days": 10},
         details={"form_health": {"form_checks": [stale]}}))
+
+
+def test_slow_response_names_automatic_only_replies():
+    # 6 of 10 leads got only automatic replies, none sat uncontacted
+    result = compute({"leads_uncontacted_24h": 0, "leads_no_human_touch_7d": 6})
+    slow = [f for f in result if f["code"] == "SLOW_RESPONSE"]
+    assert slow and slow[0]["severity"] == "red"
+    assert "6 of 10 leads" in slow[0]["action"] and "automatic replies" in slow[0]["action"]
+    # the uncontacted trigger keeps its own wording
+    result = compute({"leads_uncontacted_24h": 4, "leads_no_human_touch_7d": 0})
+    slow = [f for f in result if f["code"] == "SLOW_RESPONSE"]
+    assert "4 leads uncontacted" in slow[0]["action"]
+
+
+def test_nobody_working_leads_in_mlh_is_one_info_flag_not_red_alarms():
+    # Only automatic replies this week (no human speed samples) and no deal moved.
+    not_worked = {"speed_to_lead_median_min": None, "speed_kind_known": True,
+                  "leads_no_human_touch_7d": 8, "leads_uncontacted_24h": 0,
+                  "opps_open": 40, "opps_moved_30d": 0}
+    result = codes(compute(not_worked))
+    assert result.get("NOT_WORKING_IN_MLH") == "info"
+    assert "SLOW_RESPONSE" not in result and "PIPELINE_FROZEN" not in result
+
+    # Deals do move (someone works the pipeline, replies happen elsewhere):
+    # no usage flag, and the 100% no-human ratio still doesn't cry "slow".
+    moving = dict(not_worked, opps_moved_30d=6)
+    result = codes(compute(moving))
+    assert "NOT_WORKING_IN_MLH" not in result and "SLOW_RESPONSE" not in result
+
+    # Leads with no reply of any kind are still a real alarm.
+    silent = dict(not_worked, opps_moved_30d=6, leads_uncontacted_24h=4)
+    flagged = [f for f in compute(silent) if f["code"] == "SLOW_RESPONSE"]
+    assert flagged[0]["severity"] == "amber" and "4 leads uncontacted" in flagged[0]["action"]

@@ -63,12 +63,52 @@ no person does consistently:
 human touch" is under-counted. That hides exactly the accounts where nobody
 is working leads.
 
-**Proposed fix, not yet applied:** a message counts as human only if its
-source isn't an automation source and it was sent more than 60 seconds after
-the lead's last message. It will move the speed-to-lead numbers and the
-alerts built on them, so it waits for a go-ahead. The account-usage report
-below already applies it and prints each account's raw message-source mix,
-so the rule can be checked on live data first.
+**Fix, applied 2026-09-22 (branch `claude/lucid-gauss-vz1y98`):** a message
+counts as human only if
+- its source isn't an automation source (the source now beats the user tag),
+  and
+- it went out more than **2 minutes** after the lead arrived or last wrote.
+
+The cutoff comes from the data. Of 1,091 "human" first replies in 28 days:
+- 61% arrived within 6 seconds,
+- 84% within 30 seconds,
+- 91% within 2 minutes.
+
+Speed-to-lead now measures the first real person's reply, and shows "—"
+where nobody replied in person. The account-usage report uses the same rule
+and prints each account's raw message-source mix, so it can be checked
+against live data.
+
+## Pipeline movement, redefined
+
+"Deals moved (30d)" used to count a deal that was merely **created**. Ad leads
+create deals on their own, so accounts nobody works still showed healthy
+movement (Hamlin: 35 "moved", essentially the 35 deals that arrived).
+
+A deal now counts as moved in the last 30 days only if:
+- it **changed stage** more than 10 minutes after it was created (the first
+  few minutes are the automatic placement), or
+- it was **won or lost**.
+
+**Caveat:** a workflow that moves deals days later, for example to "Nurture"
+after no reply, still counts as movement. The API doesn't say who moved a
+deal.
+
+## What the alerts do with this
+
+- **Leads sitting uncontacted:**
+  - Still fires red or amber when leads got no reply at all.
+  - Still fires when the team replies in person to some leads but misses many.
+  - Its wording now says which of the two happened.
+- **Nobody replies in person and no deal moved in 30 days:** no red alarms.
+  One info note on the account page, "Leads aren't being worked in MLH". Info
+  notes stay out of the AM email.
+
+  Estimate from stored data: without this rule, up to 17 accounts would have
+  gone red on reply speed, against 5 today. That is an upper bound, because
+  stored data only keeps each lead's first "human" reply.
+- **Pipeline frozen:** fires as before for accounts where people do reply in
+  MLH. Its count no longer includes new deals.
 
 ## The usage tiers and the filter
 
