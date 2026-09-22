@@ -195,3 +195,28 @@ def test_oversized_book_splits_into_parts_under_gmail_clip_limit():
         joined += message["html"]
     for i in range(32):
         assert f"Account Number {i:02d}" in joined
+
+
+def test_digest_greets_the_am_by_name():
+    """am_name personalizes the greeting and header; routing stays am_email."""
+    subs = [dict(SUBS[1], am_name="Lisa"), dict(SUBS[2], am_name="Lisa")]
+    out = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-24")
+    msg = out["lisa@smallscreenproducer.com"]
+    assert msg["text"].startswith("Lisa — week of 2026-08-24")
+    assert "SSP Account Health &middot; Lisa" in msg["html"]
+
+
+def test_digest_without_am_name_keeps_the_plain_greeting():
+    out = build_digests(SUBS, SNAPSHOTS, FLAGS, {}, "2026-08-24")
+    msg = out["lisa@smallscreenproducer.com"]
+    assert msg["text"].startswith("Week of 2026-08-24")
+    assert "SSP Account Health</div>" in msg["html"]
+
+
+def test_one_mailbox_with_two_labels_greets_the_person():
+    """Michael owns accounts labelled 'Michael' and 'Michael / Dada (FB)';
+    the greeting uses the person, not the shared-coverage label."""
+    subs = [dict(SUBS[1], am_name="Michael / Dada (FB)"),
+            dict(SUBS[2], am_name="Michael")]
+    out = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-24")
+    assert out["lisa@smallscreenproducer.com"]["text"].startswith("Michael — week of")

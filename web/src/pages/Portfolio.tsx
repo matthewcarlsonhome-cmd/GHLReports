@@ -371,7 +371,7 @@ export default function Portfolio() {
     for (const row of visible) {
       // Raw values per expanded column (unformatted, spreadsheet-friendly).
       const extended: Record<ExpandedKey, unknown> = {
-        am: row.am_email, new_flags: (row.flags_new ?? []).join("; "),
+        am: row.am_name ?? row.am_email, new_flags: (row.flags_new ?? []).join("; "),
         uncontacted: row.leads_uncontacted_24h, waiting: row.convos_waiting,
         stale: row.opps_stale, moves: row.opps_moved_30d,
         bottleneck: row.bottleneck_stage
@@ -384,7 +384,7 @@ export default function Portfolio() {
         quality: dataQuality(row), snapshot: row.snapshot_date,
       };
       lines.push([
-        row.name, row.am_email,
+        row.name, row.am_name ?? row.am_email,
         row.state, row.red, row.amber, row.acked,
         (row.flags_new ?? []).join("; "),
         row.leads_new_7d, row.leads_delta_pct, row.peer_median_delta_pct,
@@ -413,7 +413,7 @@ export default function Portfolio() {
   function cell(row: PortfolioRow, key: ExpandedKey) {
     const noData = row.state === "no_data";
     switch (key) {
-      case "am": return row.am_email?.split("@")[0] ?? "—";
+      case "am": return row.am_name ?? row.am_email?.split("@")[0] ?? "—";
       case "new_flags": return (row.flags_new?.length ?? 0) > 0 ? `+${row.flags_new!.length}` : "—";
       case "uncontacted": return noData ? "—" : fmtNum(row.leads_uncontacted_24h);
       case "waiting":
@@ -668,7 +668,7 @@ export default function Portfolio() {
     if (!groupByAm) return null;
     const groups = new Map<string, PortfolioRow[]>();
     for (const row of visible) {
-      const am = row.am_email ?? "(no AM)";
+      const am = row.am_name ?? row.am_email ?? "(no AM)";
       if (!groups.has(am)) groups.set(am, []);
       groups.get(am)!.push(row);
     }

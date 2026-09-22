@@ -42,6 +42,7 @@ export interface SubaccountRow {
   vertical: string | null;
   services: string[];
   am_email: string | null;
+  am_name: string | null;
   timezone: string;
   ssp_client_contact_id: string | null;
   is_parent: boolean;
@@ -227,6 +228,7 @@ export interface PortfolioRow {
   vertical: string | null;
   services: string[];
   am_email: string | null;
+  am_name: string | null;
   timezone: string;
   is_parent: boolean;
   mrr: number | null;

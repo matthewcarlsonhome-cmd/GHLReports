@@ -307,7 +307,7 @@ def _account_card(info: dict) -> str:
 
 def _render_html(run_date: str, total: int, attention: list[dict],
                  steady_names: list[str], no_data: list[dict],
-                 mrr_at_risk: float) -> str:
+                 mrr_at_risk: float, am_name: str = "") -> str:
     """The full email body. One 600px card on a soft ground."""
     esc = html.escape
     att_ct, steady_ct, nd_ct = len(attention), len(steady_names), len(no_data)
@@ -325,7 +325,8 @@ def _render_html(run_date: str, total: int, attention: list[dict],
         # Header
         '<tr><td style="padding:26px 32px 0;">'
         f'<div style="font-family:{_FONT};font-size:11px;letter-spacing:2px;'
-        f'text-transform:uppercase;color:{_ACCENT};font-weight:600;">SSP Account Health</div>'
+        f'text-transform:uppercase;color:{_ACCENT};font-weight:600;">SSP Account Health'
+        + (f' &middot; {esc(am_name)}' if am_name else '') + '</div>'
         f'<div style="font-family:{_FONT};font-size:22px;font-weight:700;color:{_INK};'
         f'padding-top:6px;">Monday digest &mdash; week of {esc(run_date)}</div>'
         f'<div style="font-family:{_FONT};font-size:13px;color:{_MUTED};padding-top:4px;">'
@@ -407,7 +408,7 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
     # headroom for quoted-printable encoding growth in transit.
     BYTE_BUDGET = 88_000
 
-    def compose(chunk: list[dict]) -> dict:
+    def compose(chunk: list[dict], am_name: str = "") -> dict:
         """Render one email for a subset of an AM's accounts."""
         attention: list[dict] = []
         steady_names: list[str] = []
@@ -439,7 +440,9 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
         # Plain-text body: same shape the first digests used — it is what
         # text-only clients and previews fall back to.
         parts = [
-            f"Week of {run_date}. Your book: {len(chunk)} accounts.",
+            (f"{am_name} — week of {run_date}. Your book: {len(chunk)} accounts."
+             if am_name else
+             f"Week of {run_date}. Your book: {len(chunk)} accounts."),
             "",
         ]
         if attention:
@@ -459,13 +462,19 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
         parts.append(f"Full picture: {DASHBOARD_URL}")
         text = "\n".join(parts)
         html_body = _render_html(run_date, len(chunk), attention,
-                                 steady_names, no_data, mrr_at_risk)
+                                 steady_names, no_data, mrr_at_risk, am_name)
         return {"subject": subject, "text": text, "html": html_body}
 
     digests: dict[str, dict] = {}
     for am, accounts in sorted(by_am.items()):
         ordered = sorted(accounts, key=lambda s: (s.get("name") or "").lower())
-        message = compose(ordered)
+        # One mailbox can cover accounts labelled slightly differently
+        # ("Michael" and "Michael / Dada (FB)"); the shortest label is the
+        # person, which is what belongs in a greeting.
+        names = {(s.get("am_name") or "").strip() for s in ordered}
+        names.discard("")
+        am_name = min(names, key=len) if names else ""
+        message = compose(ordered, am_name)
         if len(message["html"].encode()) > BYTE_BUDGET and len(ordered) > 1:
             # Too big for one email: split into alphabetical parts, each under
             # budget, so no account is ever silently clipped away. Greedy
@@ -475,13 +484,13 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
             for sub in ordered:
                 current.append(sub)
                 if (len(current) > 1
-                        and len(compose(current)["html"].encode()) > BYTE_BUDGET):
+                        and len(compose(current, am_name)["html"].encode()) > BYTE_BUDGET):
                     current.pop()
                     chunks.append(current)
                     current = [sub]
             if current:
                 chunks.append(current)
-            messages = [compose(c) for c in chunks]
+            messages = [compose(c, am_name) for c in chunks]
             total = len(messages)
             for i, msg in enumerate(messages, 1):
                 msg["subject"] = msg["subject"].replace(
