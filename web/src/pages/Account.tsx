@@ -1221,7 +1221,7 @@ export default function Account() {
           <div className="rounded border border-grid bg-surface p-3">
             <DetailTable
               rows={[...data.formHealth].sort((a, b) => {
-                const order = { silent: 0, unknown: 1, active: 2, new: 3, no_leads: 4 };
+                const order = { silent: 0, unknown: 1, active: 2, new: 3, dormant: 4, no_leads: 5 };
                 return (order[a.status] ?? 9) - (order[b.status] ?? 9)
                   || a.name.localeCompare(b.name);
               })}
@@ -1236,6 +1236,7 @@ export default function Account() {
                     const meta: Record<string, [string, string]> = {
                       active: ["✓ active", "text-status-good-text"],
                       silent: ["⚠ went silent", "text-status-critical"],
+                      dormant: ["◌ dormant (30+ days)", "text-muted"],
                       new: ["+ new", "text-series"],
                       no_leads: ["○ no leads yet", "text-muted"],
                       unknown: ["? unknown", "text-muted"],
@@ -1244,7 +1245,7 @@ export default function Account() {
                     return <span className={`font-medium ${tone}`}>{label}</span>;
                   },
                 },
-                { header: "Submissions", cell: (f) => fmtNum(f.submissions_total), numeric: true },
+                { header: "Submissions (all time)", cell: (f) => fmtNum(f.submissions_total), numeric: true },
                 {
                   header: "Last submission",
                   cell: (f) => (f.last_submission_at ? fmtDateTime(f.last_submission_at) : "—"),
@@ -1263,7 +1264,9 @@ export default function Account() {
             />
             <p className="mt-1 text-xxs text-muted">
               "Went silent" counts business days only — a form quiet over the
-              weekend is not an alarm. Checked nightly by the collector.
+              weekend is not an alarm. "Dormant" = had leads once, nothing in
+              over 30 days (old campaign forms; no alert). Checked nightly by
+              the collector.
             </p>
           </div>
         </Collapsible>

@@ -80,6 +80,7 @@ TOKEN_ROTATION_WARN_DAYS = 80   # nag before the 90-day PIT rotation policy bite
 HISTORY_DAYS = 42       # one contacts fetch covers 7d window, 28d baseline, 14-42d cohort, 28d funnel
 CLOSED_OPP_DAYS = 90    # how far back closed (won/lost) opportunities are fetched
 CALL_CONVO_CAP = 30     # missed-call scan: message fetches per location, cap noted in coverage
+FORM_CHECK_ACTIVE_DAYS = 30   # a form whose weekly form check landed this recently is "under test"
 
 
 def log(message: str) -> None:
@@ -372,6 +373,12 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     # Users map (id -> display name) so details can show owner names.
     users = fetchers.fetch_users(client, cov, location_id)
     umap = fetchers.users_map(users)
+    # Client staff vs SSP staff. No client users = nobody on the client side
+    # can log in: the account is ads delivery only and drops out of the
+    # digest and the default portfolio view. None when the users fetch
+    # failed, so a glitch can never hide an account.
+    client_team, ssp_team = fetchers.users_by_type(users)
+    users_ok = cov.status("users") == "complete"
 
     # Pipelines: build {pipeline_id: {name, stages: {stage_id: name}}} for
     # translating opportunity IDs into human-readable names later.
@@ -559,11 +566,17 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     # counts feed the WORKFLOWS_NONE_PUBLISHED rule. Surveys/workflows need
     # scopes older tokens don't have yet — their fetchers record "skipped"
     # (never gate-tripping "unavailable") until the scope is granted.
+    # Counts are ALL-TIME and dates are the newest REAL submission: weekly
+    # form-check test submissions (docs/FORM-MONITORING.md) are kept apart,
+    # and summarized below so a check that stops landing raises a flag.
     local_today = now_utc.astimezone(tz).date()
-    form_inv = fetchers.fetch_form_inventory(client, cov, location_id, max_pages)
-    survey_inv = fetchers.fetch_surveys(client, cov, location_id, max_pages)
+    form_inv = fetchers.fetch_form_inventory(client, cov, location_id, max_pages,
+                                             today=local_today)
+    survey_inv = fetchers.fetch_surveys(client, cov, location_id, max_pages,
+                                        today=local_today)
     workflows = fetchers.fetch_workflows(client, cov, location_id)
     form_health_rows: list[dict] = []
+    form_checks: list[dict] = []
     for kind, inventory in (("form", form_inv), ("survey", survey_inv)):
         for item in inventory or []:
             last_dt = metrics.parse_ts(item.get("last_at"))
@@ -581,6 +594,17 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
                 "last_submission_at": last_dt.isoformat() if last_dt else None,
                 "form_created_at": created_dt.isoformat() if created_dt else None,
             })
+            check_dt = metrics.parse_ts(item.get("last_check_at"))
+            if check_dt and (local_today - check_dt.date()).days <= FORM_CHECK_ACTIVE_DAYS:
+                form_checks.append({
+                    "kind": kind, "form_id": item["form_id"], "name": item["name"],
+                    "last_check_at": check_dt.isoformat(),
+                    "contact_id": item.get("last_check_contact_id"),
+                })
+    check_contacts = fetchers.fetch_form_check_contacts(
+        client, cov, [c["contact_id"] for c in form_checks])
+    for check in form_checks:
+        check["contact_ok"] = check_contacts.get(check.pop("contact_id") or "")
 
     # Relationship metrics (is SSP's own relationship with this client
     # healthy?) come from the PARENT account: calendar events were indexed by
@@ -644,6 +668,8 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     # Flat metric columns for the snapshot row. None means "unknown /
     # unavailable", deliberately distinct from a measured zero.
     metric_values = {
+        "client_users": len(client_team) if users_ok else None,
+        "ssp_users": len(ssp_team) if users_ok else None,
         "leads_new_7d": len(leads_7d),
         "leads_trailing_avg": baseline["leads_trailing_avg"],
         "trailing_n": baseline["trailing_n"],
@@ -760,6 +786,7 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
         "forms_silent": _silent_rows("form"),
         "surveys_silent": _silent_rows("survey"),
         "workflows": workflows,
+        "form_checks": form_checks,
     }
 
     # The snapshot row: one row per location per day (the upsert key), with
@@ -1175,6 +1202,18 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
                              "data) to the log and exit; honors --location")
     parser.add_argument("--form-urls-days", type=int, default=30, metavar="N",
                         help="submission window for --form-urls (default 30)")
+    parser.add_argument("--form-activity", action="store_true",
+                        help="per-form report: channel, last real submission, days "
+                             "inactive, counts, page URLs, Datadog candidates; prints "
+                             "the CSVs to the log, writes them to --report-dir, exits")
+    parser.add_argument("--form-activity-crawl", action="store_true",
+                        help="with --form-activity: also re-check pages and crawl "
+                             "client websites for form embeds")
+    parser.add_argument("--account-usage", action="store_true",
+                        help="per-account report: is anyone working leads in MLH, or "
+                             "is it ads + automation only; prints CSV, writes it, exits")
+    parser.add_argument("--report-dir", default="reports", metavar="DIR",
+                        help="where report CSVs are written (default ./reports)")
     args = parser.parse_args(argv)
 
     # -- send-test mode -------------------------------------------------------
@@ -1255,6 +1294,40 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         print("\n===== form-urls.csv BEGIN (copy the lines between the markers) =====")
         print(form_urls_mod.rows_to_csv_text(rows), end="")
         print("===== form-urls.csv END =====")
+        if failed:
+            log(f"{len(failed)} account(s) not checked: {', '.join(failed)}")
+        return 0 if not failed else 2
+
+    # -- form-activity / account-usage modes -------------------------------------
+    # Read-only reports. Like --form-urls, the CSVs are printed between
+    # markers because the log is what survives a Render run; they are also
+    # written to --report-dir, which the GitHub Actions workflow uploads.
+    if args.form_activity or args.account_usage:
+        failed: list[str] = []
+        outputs: list[tuple[str, str]] = []
+        if args.form_activity:
+            from .tools import form_activity as fa
+            form_rows, page_rows, account_rows, fa_failed = fa.collect_book(
+                store, targets, crawl=args.form_activity_crawl,
+                client_factory=client_factory, today=run_date, log=log)
+            failed += fa_failed
+            outputs += [("form-activity.csv", fa.to_csv(form_rows, fa.FORM_COLUMNS)),
+                        ("form-pages.csv", fa.to_csv(page_rows, fa.PAGE_COLUMNS)),
+                        ("form-accounts.csv", fa.to_csv(account_rows, fa.ACCOUNT_COLUMNS))]
+        if args.account_usage:
+            from .tools import account_usage as au
+            usage_rows, au_failed = au.collect_book(
+                store, targets, client_factory=client_factory, now_utc=now_utc, log=log)
+            failed += [f for f in au_failed if f not in failed]
+            outputs.append(("account-usage.csv", au.to_csv(usage_rows)))
+        os.makedirs(args.report_dir, exist_ok=True)
+        for name, text in outputs:
+            with open(os.path.join(args.report_dir, name), "w", newline="") as fh:
+                fh.write(text)
+            print(f"\n===== {name} BEGIN (copy the lines between the markers) =====")
+            print(text, end="")
+            print(f"===== {name} END =====")
+        log(f"reports written to {args.report_dir}/: {', '.join(n for n, _ in outputs)}")
         if failed:
             log(f"{len(failed)} account(s) not checked: {', '.join(failed)}")
         return 0 if not failed else 2

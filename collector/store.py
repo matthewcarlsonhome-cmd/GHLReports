@@ -337,7 +337,7 @@ class Store:
         snaps = self.client.table("snapshots").select(
             "location_id,gate_passed,flags_new,flags_resolved,"
             "opps_open,opps_stale,opps_moved_30d,"
-            "speed_to_lead_median_min,leads_uncontacted_24h"
+            "speed_to_lead_median_min,leads_uncontacted_24h,client_users"
         ).eq("snapshot_date", snapshot_date.isoformat()).execute().data or []
         flags = self.client.table("flags").select(
             "location_id,code,severity,action"

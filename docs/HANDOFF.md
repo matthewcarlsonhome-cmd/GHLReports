@@ -1,8 +1,44 @@
 # Handoff — GHL Account Health Dashboard
 
-State as of **2026-09-22**. Read this first in a new thread; the other docs
-(`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`) hold the
-detail.
+State as of **2026-09-22 (evening)**. Read this first in a new thread; the other
+docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
+`FORM-MONITORING.md`, `ACCOUNT-USAGE.md`) hold the detail.
+
+## Update 2026-09-22 evening (branch `claude/lucid-gauss-vz1y98`)
+
+- **The "30-day limit" was wrong.** GHL's `/forms/submissions` defaults to the
+  last month when `startAt`/`endAt` are omitted, per GHL's own API spec; it is
+  not a retention cap. The nightly now reads all-time history
+  (`collector/form_history.py`) with a new `dormant` status. The Aug 25
+  `SSPFormInventory` workbook's "CONFIRMED: 30-day window" note is wrong.
+  Details: `FORM-MONITORING.md` §1.
+- **New read-only reports** (`--form-activity`, `--account-usage`; GitHub
+  workflow **Reports**, which needs repository secrets
+  `REPORTS_SUPABASE_URL`, `REPORTS_SUPABASE_SERVICE_ROLE_KEY` and
+  `REPORTS_COLLECTOR_KEY`):
+  - per form: channel (website / Google ad / Facebook ad / Facebook lead ad),
+    last real submission, days inactive, page URLs, Datadog candidates;
+  - per account: are client staff working leads in MLH, or is it ads +
+    automation only.
+- **Weekly form test design** (Datadog plus GHL workflow guard, and a
+  collector-side check that the test landed as a contact, with the
+  `FORM_CHECK_MISSED` flag): `FORM-MONITORING.md` §4. Needs the
+  `formcheck@smallscreenproducer.com` mailbox or group first.
+- **Applied live:**
+  - migration 0011 (`dormant` status);
+  - migration 0012: `snapshots.client_users`/`ssp_users`, plus a
+    **`v_portfolio` security fix**. 0010 had dropped `security_invoker`, so the
+    view skipped the staff row policies; it is restored.
+  - Lisa's dashboard login `lhoffman@` (Lauren and Pam already had accounts,
+    never used).
+- **Filter live in data, code on this branch:** accounts with no client-staff
+  users (All American, Backyard Oasis, Beachfront, G&S, Luke Gell, Pla-Mor,
+  Pristine) drop out of the AM digest and hide behind a portfolio toggle.
+  They are still collected.
+- **Pending decision:** the "human first touch" metric counts workflow
+  auto-replies sent under a user's name as human. The proposed 60-second rule
+  is in `ACCOUNT-USAGE.md`, not yet applied to the nightly because it moves
+  alerts.
 
 ## What this is
 
@@ -50,8 +86,9 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--weekly-alerts`, `--send-test`, `--probe`, `--form-urls` |
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
-| Migrations | `supabase/migrations/0001`–`0010` (0009 = AM names, 0010 = `v_portfolio.am_name`) |
-| Tests | `python3 -m pytest collector/tests/ -q` → **140 passing** |
+| Migrations | `supabase/migrations/0001`–`0012` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix); all applied live |
+| Tests | `python3 -m pytest collector/tests/ -q` → **179 passing** (branch `claude/lucid-gauss-vz1y98`) |
+| Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 
 ## Current state
 

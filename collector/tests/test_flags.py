@@ -242,3 +242,26 @@ def test_thresholds_override_per_account():
     assert "STALE_PIPELINE" not in codes(compute(
         {"opps_stale": 1, "opps_stale_value": 30000.0},
         thresholds={"stale_value_usd": 50000}))
+
+
+def test_form_check_missed_fires_when_weekly_check_stops_or_lacks_contact():
+    fresh = {"form_id": "f1", "name": "Contact Us", "last_check_at": "2026-08-14T10:00:00+00:00",
+             "contact_ok": True}
+    stale = {"form_id": "f2", "name": "Get a Quote", "last_check_at": "2026-08-08T10:00:00+00:00",
+             "contact_ok": True}
+    no_contact = {"form_id": "f3", "name": "Brochure", "last_check_at": "2026-08-17T10:00:00+00:00",
+                  "contact_ok": False}
+    unknown_contact = dict(fresh, form_id="f4", name="Service", contact_ok=None)
+
+    def run(checks):
+        return compute(details={"form_health": {"form_checks": checks}})
+
+    assert "FORM_CHECK_MISSED" not in codes(run([fresh, unknown_contact]))
+    flagged = [f for f in run([fresh, stale, no_contact]) if f["code"] == "FORM_CHECK_MISSED"]
+    assert len(flagged) == 1 and flagged[0]["severity"] == "amber"
+    assert "Get a Quote" in flagged[0]["detail"] and "Brochure" in flagged[0]["detail"]
+    assert "Contact Us" not in flagged[0]["detail"]
+    # threshold override: a 10-day tolerance clears the 10-day-old check
+    assert "FORM_CHECK_MISSED" not in codes(compute(
+        thresholds={"form_check_stale_days": 10},
+        details={"form_health": {"form_checks": [stale]}}))

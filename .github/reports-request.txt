@@ -1,0 +1,10 @@
+# Pushing a change to this file runs .github/workflows/reports.yml on the
+# pushed branch (read-only reports; CSVs land in the run's artifact).
+# The first non-comment line is the flag set. Allowed flags:
+#   --form-activity          per-form activity, channels, pages, Datadog candidates
+#   --form-activity-crawl    also re-check pages / crawl client sites (slower)
+#   --account-usage          who actually works leads in MLH
+#   --location <slug>        one account only
+# Change the request id below to re-run with the same flags.
+--form-activity --form-activity-crawl --account-usage
+# request 1 (2026-09-22)

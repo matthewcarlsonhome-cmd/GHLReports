@@ -10,6 +10,12 @@ card, a Tracking-tags card, and a Silent-forms portfolio column. §2 (the
 review) and §6 (the roster seed — since superseded by Matthew's active-client
 list, already seeded) remain as the historical record.
 
+> **Correction 2026-09-22.** The per-form counts below came from
+> `GET /forms/submissions` without `startAt`/`endAt`, which GHL defaults to the
+> last month, so "no_leads" often meant "quiet for 30+ days", not "never".
+> The nightly now reads all-time history (`collector/form_history.py`) and has
+> a `dormant` status. See docs/FORM-MONITORING.md §1.
+
 This doc covers (1) a code review of Jeorge's "MLH Forms Health Dashboard"
 (`mlh-dashboard-main`, Node.js single-file server, ~2,900 lines) against the
 GoHighLevel API v2, and (2) a concrete design to fold its capabilities into
