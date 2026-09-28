@@ -96,6 +96,9 @@ def test_send_via_smtp_filters_recipients_and_ccs_staff(monkeypatch):
     monkeypatch.setenv("SMTP_PASS", "app-password")
     # CC list mixes a staff address with an outsider; only staff survives.
     monkeypatch.setenv("DIGEST_CC", "pvinje@smallscreenproducer.com, evil@example.com")
+    monkeypatch.setenv("DIGEST_ALLOWLIST",
+                       "lisa@smallscreenproducer.com, pvinje@smallscreenproducer.com")
+    monkeypatch.delenv("DIGEST_REDIRECT", raising=False)
     monkeypatch.delenv("DIGEST_FROM", raising=False)
     monkeypatch.setattr(digest_mod.smtplib, "SMTP_SSL", lambda *a, **k: FakeServer())
 
@@ -262,3 +265,104 @@ def test_digest_skips_an_am_email_that_smuggles_a_second_address():
     subs = [{"location_id": "loc1", "name": "Acme Pools", "active": True, "token_status": "ok",
              "am_email": "x@evil.example, lisa@smallscreenproducer.com"}]
     assert build_digests(subs, {"loc1": {"gate_passed": True}}, {}, {}, "2026-09-28") == {}
+
+
+# -- who receives it: nobody unless someone chose (2026-09-28) ------------------------------
+# A manual Monday run mailed every AM before the pilot started. Since then
+# the digest goes only to DIGEST_REDIRECT (every AM's copy, labelled) or to
+# the AMs on DIGEST_ALLOWLIST; with neither set it goes to nobody.
+
+LISA = "lisa@smallscreenproducer.com"
+LAUREN = "lauren@smallscreenproducer.com"
+MATTHEW = "mcarlson@smallscreenproducer.com"
+SMTP_ENV = {"SMTP_USER": MATTHEW, "SMTP_PASS": "app-password"}
+
+
+class _Outbox:
+    """Stands in for the SMTP server and keeps what would have been sent."""
+
+    def __init__(self):
+        self.sent = []
+
+    def login(self, user, password):
+        pass
+
+    def send_message(self, msg):
+        self.sent.append(msg)
+
+    def quit(self):
+        pass
+
+
+def _outbox(monkeypatch):
+    outbox = _Outbox()
+    monkeypatch.setattr(digest_mod.smtplib, "SMTP_SSL", lambda *a, **k: outbox)
+    return outbox
+
+
+def _digest(subject, am_name=""):
+    return {"subject": subject, "text": "t", "html": "<p>t</p>", "am_name": am_name}
+
+
+def test_digest_goes_to_nobody_until_someone_chooses(monkeypatch):
+    outbox = _outbox(monkeypatch)
+    logs = []
+    result = digest_mod.send_digests({LISA: _digest("s1", "Lisa")}, log=logs.append,
+                                     env=dict(SMTP_ENV))
+    assert result == (0, 0)
+    assert outbox.sent == []
+    assert any("none sent" in line for line in logs)
+
+
+def test_redirect_sends_every_digest_to_one_address_labelled(monkeypatch):
+    outbox = _outbox(monkeypatch)
+    two_parts = dict(_digest("Account health (1/2)", "Lauren"),
+                     extra_parts=[_digest("Account health (2/2)", "Lauren")])
+    env = dict(SMTP_ENV, DIGEST_REDIRECT=MATTHEW, DIGEST_CC="pvinje@smallscreenproducer.com")
+    sent, failed = digest_mod.send_digests(
+        {LISA: _digest("s1", "Lisa"), LAUREN: two_parts, MATTHEW: _digest("s3", "Matthew")},
+        log=lambda *_: None, env=env)
+    assert (sent, failed) == (4, 0)
+    assert {m["To"] for m in outbox.sent} == {MATTHEW}
+    assert [m["Subject"] for m in outbox.sent] == [
+        "[for Lisa] s1", "[for Lauren] Account health (1/2)",
+        "[for Lauren] Account health (2/2)", "s3"]
+    assert all(m["Cc"] is None for m in outbox.sent)     # a rehearsal has one reader
+
+
+def test_allowlist_limits_who_gets_their_digest_and_who_is_copied(monkeypatch):
+    outbox = _outbox(monkeypatch)
+    env = dict(SMTP_ENV, DIGEST_ALLOWLIST=f"{LISA}, {MATTHEW}",
+               DIGEST_CC=f"pvinje@smallscreenproducer.com, {MATTHEW}")
+    sent, failed = digest_mod.send_digests(
+        {LISA: _digest("s1", "Lisa"), LAUREN: _digest("s2", "Lauren")},
+        log=lambda *_: None, env=env)
+    assert (sent, failed) == (1, 0)                      # Lauren is not listed: held
+    assert outbox.sent[0]["To"] == LISA
+    assert outbox.sent[0]["Cc"] == MATTHEW               # the unlisted CC is left off
+    assert outbox.sent[0]["Subject"] == "s1"             # her own digest: no label
+
+
+def test_malformed_recipient_settings_send_nothing(monkeypatch):
+    outbox = _outbox(monkeypatch)
+    for bad in ({"DIGEST_REDIRECT": f"{MATTHEW}, x@evil.example"},
+                {"DIGEST_REDIRECT": f"Matthew <{MATTHEW}>"},
+                {"DIGEST_ALLOWLIST": f"{LISA}, x@evil.example"}):
+        assert digest_mod.send_digests({LISA: _digest("s1")}, log=lambda *_: None,
+                                       env=dict(SMTP_ENV, **bad)) == (0, 0)
+    assert outbox.sent == []
+
+
+def test_only_an_am_reading_their_own_digest_counts_as_told():
+    redirect = digest_mod.Recipients.from_env({"DIGEST_REDIRECT": MATTHEW})
+    assert redirect.reaches(MATTHEW) and not redirect.reaches(LISA)
+    listed = digest_mod.Recipients.from_env({"DIGEST_ALLOWLIST": LISA})
+    assert listed.reaches(LISA) and not listed.reaches(LAUREN)
+    assert not digest_mod.Recipients.from_env({}).reaches(LISA)
+
+
+def test_built_digests_carry_the_am_name_for_the_redirect_label():
+    assert build()["lisa@smallscreenproducer.com"]["am_name"] == ""
+    subs = [dict(SUBS[1], am_name="Lisa")]
+    digests = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-17")
+    assert digests["lisa@smallscreenproducer.com"]["am_name"] == "Lisa"

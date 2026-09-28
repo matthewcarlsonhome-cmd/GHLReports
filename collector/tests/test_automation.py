@@ -575,6 +575,24 @@ def test_digest_section_renders_and_is_marked_delivered_once():
     assert A.cleared_for_digest(store.read_alert_state(), [SUB], monday) == {}
 
 
+
+def test_a_redirected_digest_does_not_close_out_cleared_lines(monkeypatch):
+    # The cleared line waits until Lauren reads her own digest: a copy sent
+    # to the rehearsal address told her nothing.
+    from .. import main
+    monday = date(2026, 9, 28)
+    store = FakeStore(subs=[SUB])
+    store.alert_state[("locA", "SLOW_RESPONSE", "")] = _resolved_row(LAUREN)
+    cleared = A.cleared_for_digest(store.read_alert_state(), [SUB], monday)
+    monkeypatch.delenv("DIGEST_ALLOWLIST", raising=False)
+    monkeypatch.setenv("DIGEST_REDIRECT", MATTHEW)
+    main._close_out_cleared(store, cleared, sent=1, failed=0)
+    assert A.cleared_for_digest(store.read_alert_state(), [SUB], monday)
+    monkeypatch.delenv("DIGEST_REDIRECT")
+    monkeypatch.setenv("DIGEST_ALLOWLIST", LAUREN)
+    main._close_out_cleared(store, cleared, sent=1, failed=0)
+    assert A.cleared_for_digest(store.read_alert_state(), [SUB], monday) == {}
+
 # -- recipient and webhook hygiene (SECURITY-SPEC SEC-03, SEC-12) ----------------------------
 
 def test_settings_refuse_bad_recipients_and_never_echo_the_url():

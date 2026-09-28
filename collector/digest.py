@@ -6,10 +6,17 @@ already shows: account names, counts, amounts, and flag actions.
 
 Requires SMTP_USER and SMTP_PASS (the same Google Workspace account + app
 password the Supabase auth mailer uses); without them the digest is skipped
-with a log line, never an error. Optional: SMTP_HOST (default smtp.gmail.com),
-SMTP_PORT (default 465), DIGEST_FROM (default SMTP_USER), DIGEST_CC (comma
-list CC'd on every digest — e.g. a manager who wants the whole picture), and
-DASHBOARD_URL for the link in the footer.
+with a log line, never an error. SMTP_USER is the sender, not a recipient.
+Optional: SMTP_HOST (default smtp.gmail.com), SMTP_PORT (default 465),
+DIGEST_FROM (default SMTP_USER), DIGEST_CC (comma list CC'd on every digest,
+e.g. a manager who wants the whole picture), and DASHBOARD_URL for the link
+in the footer.
+
+Who receives it (Recipients below) is opt-in, and nobody is the default:
+DIGEST_REDIRECT sends every AM's digest to one address, labelled with the AM
+it was meant for (the rehearsal setting); otherwise only AMs listed in
+DIGEST_ALLOWLIST get theirs. Added 2026-09-28 after a manual Monday run
+mailed the AMs before the pilot had started.
 
 How this fits in
 ----------------
@@ -43,6 +50,7 @@ import os
 import re
 import smtplib
 import ssl
+from dataclasses import dataclass
 from email.message import EmailMessage
 
 STAFF_DOMAIN = "@smallscreenproducer.com"
@@ -61,6 +69,58 @@ def staff_address(raw) -> str | None:
         return None
     address = raw.strip().lower()
     return address if _STAFF_ADDRESS.fullmatch(address) else None
+
+
+@dataclass(frozen=True)
+class Recipients:
+    """Who may receive a digest, read from the environment at send time.
+
+    Nobody, unless someone chose otherwise. The team decides when AMs start
+    getting mail, not the calendar: before this gate, any run on a Monday
+    mailed every AM (2026-09-28, a manual run did exactly that).
+
+    redirect   DIGEST_REDIRECT: one staff address that receives every
+               digest instead of its AM, subject labelled "[for Lauren]",
+               no CC. The rehearsal setting. When set, the allowlist is not
+               consulted: only this one address gets mail.
+    allowlist  DIGEST_ALLOWLIST: comma list of staff addresses. With no
+               redirect, an AM gets their digest only when listed, and a
+               DIGEST_CC address is kept only when listed. Empty = nobody.
+    problems   malformed entries. Any problem stops every send (fail closed).
+    """
+    redirect: str
+    allowlist: frozenset
+    problems: tuple
+
+    @classmethod
+    def from_env(cls, env=None) -> "Recipients":
+        env = env if env is not None else os.environ
+        raw_redirect = (env.get("DIGEST_REDIRECT") or "").strip()
+        redirect = staff_address(raw_redirect) or ""
+        entries = [a for a in (env.get("DIGEST_ALLOWLIST") or "").split(",") if a.strip()]
+        bad = sum(1 for a in entries if staff_address(a) is None)
+        problems = []
+        if raw_redirect and not redirect:
+            problems.append("DIGEST_REDIRECT is not a single staff address")
+        if bad:
+            problems.append(f"DIGEST_ALLOWLIST has {bad} entry(ies) that are not a single "
+                            "staff address")
+        allowlist = frozenset(filter(None, (staff_address(a) for a in entries)))
+        return cls(redirect, allowlist, tuple(problems))
+
+    def destination(self, am: str) -> str | None:
+        """Where the digest for AM address `am` goes, or None (held)."""
+        if self.problems:
+            return None
+        if self.redirect:
+            return self.redirect
+        return am if am in self.allowlist else None
+
+    def reaches(self, am) -> bool:
+        """True when AM `am` reads their own digest (not a rehearsal copy).
+        main.py uses it so cleared lines count as told only to that AM."""
+        am = staff_address(am)
+        return am is not None and self.destination(am) == am
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "https://mlhaccountreports.netlify.app")
 SMTP_HOST_DEFAULT = "smtp.gmail.com"
 SMTP_PORT_DEFAULT = 465
@@ -549,6 +609,8 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
                 msg["subject"] = msg["subject"].replace(
                     "Account health", f"Account health ({i}/{total})", 1)
             message = {**messages[0], "extra_parts": messages[1:]}
+        # Kept beside the email so a redirected copy can say whose it is.
+        message["am_name"] = am_name
         digests[am] = message
     return digests
 
@@ -572,48 +634,74 @@ def _connect(host: str, port: int, user: str, password: str) -> smtplib.SMTP:
     return server
 
 
-def send_digests(digests: dict[str, dict], log=print) -> tuple[int, int]:
+def send_digests(digests: dict[str, dict], log=print, env=None) -> tuple[int, int]:
     """Send each digest over SMTP. Returns (sent, failed).
 
     The only networked function in the module — called by main.py on Mondays
-    (or --digest). Missing SMTP config is a logged no-op, not an error, so
+    (or --digest). Nothing leaves unless Recipients allows it: with neither
+    DIGEST_REDIRECT nor DIGEST_ALLOWLIST set, every digest is held and the
+    log says so. Missing SMTP config is a logged no-op too, not an error, so
     environments without email (local dev, staging) collect normally. One
     connection is reused across messages (with a single reconnect attempt if
     the server drops it mid-batch); one AM's failed email never blocks the
     others. Non-staff recipients are refused here as well as in
     build_digests — belt and braces around client data.
     """
-    user = os.environ.get("SMTP_USER")
-    password = os.environ.get("SMTP_PASS")
+    env = env if env is not None else os.environ
+    rules = Recipients.from_env(env)
+    if rules.problems:
+        for problem in rules.problems:
+            log(f"digest: {problem}; nothing sent")
+        return 0, 0
+    if not rules.redirect and not rules.allowlist:
+        log(f"digest: {len(digests)} built, none sent (set DIGEST_REDIRECT or "
+            "DIGEST_ALLOWLIST to choose who receives it)")
+        return 0, 0
+    user = env.get("SMTP_USER")
+    password = env.get("SMTP_PASS")
     if not user or not password:
         log("digest: SMTP_USER / SMTP_PASS not set — skipping send")
         return 0, 0
-    host = os.environ.get("SMTP_HOST", SMTP_HOST_DEFAULT)
+    host = env.get("SMTP_HOST", SMTP_HOST_DEFAULT)
     try:
-        port = int(os.environ.get("SMTP_PORT", SMTP_PORT_DEFAULT))
+        port = int(env.get("SMTP_PORT", SMTP_PORT_DEFAULT))
     except ValueError:
         port = SMTP_PORT_DEFAULT
-    from_addr = os.environ.get("DIGEST_FROM") or user
-    cc = _staff_addresses(os.environ.get("DIGEST_CC", ""))
+    from_addr = env.get("DIGEST_FROM") or user
+    cc_listed = _staff_addresses(env.get("DIGEST_CC", ""))
+    # A redirect is a rehearsal: one reader, no copies. Otherwise a CC
+    # address needs to be on the allowlist like everyone else.
+    cc = [] if rules.redirect else [a for a in cc_listed if a in rules.allowlist]
+    if len(cc) < len(cc_listed):
+        log(f"digest: {len(cc_listed) - len(cc)} DIGEST_CC address(es) left off "
+            + ("(redirected)" if rules.redirect else "(not on DIGEST_ALLOWLIST)"))
 
     sent = failed = 0
     server: smtplib.SMTP | None = None
-    for to, first in digests.items():
-        if staff_address(to) is None:
-            log(f"digest: {to} skipped (not a staff address)")
+    for key, first in digests.items():
+        am = staff_address(key)
+        if am is None:
+            log(f"digest: {key} skipped (not a staff address)")
             continue
+        to = rules.destination(am)
+        if to is None:
+            log(f"digest: {am} held (not on DIGEST_ALLOWLIST)")
+            continue
+        # A redirected copy names the AM it was written for.
+        label = "" if to == am else f"[for {first.get('am_name') or am}] "
+        copies = [a for a in cc if a != to]
         # An oversized book arrives as numbered parts (see build_digests's
         # BYTE_BUDGET) — each part is its own email so Gmail never clips.
         every_part = [first] + list(first.get("extra_parts") or [])
         if len(every_part) > 1:
-            log(f"digest: {to} split into {len(every_part)} parts (size)")
+            log(f"digest: {am} split into {len(every_part)} parts (size)")
         for message in every_part:
             msg = EmailMessage()
             msg["From"] = from_addr
             msg["To"] = to
-            if cc:
-                msg["Cc"] = ", ".join(cc)
-            msg["Subject"] = message["subject"]
+            if copies:
+                msg["Cc"] = ", ".join(copies)
+            msg["Subject"] = label + message["subject"]
             msg.set_content(message["text"])
             msg.add_alternative(message["html"], subtype="html")
             try:
@@ -621,7 +709,7 @@ def send_digests(digests: dict[str, dict], log=print) -> tuple[int, int]:
                     server = _connect(host, port, user, password)
                 server.send_message(msg)
                 sent += 1
-                log(f"digest: sent to {to}")
+                log(f"digest: sent to {to}" + (f" (for {am})" if label else ""))
             except (smtplib.SMTPException, OSError):
                 # The server may have dropped an idle connection — reconnect
                 # once for this message; a second failure counts as failed and
@@ -634,7 +722,8 @@ def send_digests(digests: dict[str, dict], log=print) -> tuple[int, int]:
                     server = _connect(host, port, user, password)
                     server.send_message(msg)
                     sent += 1
-                    log(f"digest: sent to {to} (after reconnect)")
+                    log(f"digest: sent to {to} (after reconnect)"
+                        + (f" (for {am})" if label else ""))
                 except (smtplib.SMTPException, OSError) as exc:
                     failed += 1
                     log(f"digest: {to} failed ({type(exc).__name__})")

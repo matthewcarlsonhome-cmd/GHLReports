@@ -339,7 +339,13 @@ To enable, set on the scheduler (Render env vars or GitHub Actions secrets):
 |---|---|
 | `SMTP_USER` | the Workspace mailbox (e.g. `mcarlson@smallscreenproducer.com`) |
 | `SMTP_PASS` | that account's Google **app password** |
-| `DIGEST_CC` | optional — comma list CC'd on every digest (e.g. a manager) |
+| `DIGEST_CC` | optional — comma list CC'd on every digest (e.g. a manager); each address must also be on `DIGEST_ALLOWLIST` |
+| `DIGEST_REDIRECT` | one address that receives **every** AM's digest, labelled "[for Lauren]", no CC. The rehearsal setting (2026-09-28: `mcarlson@smallscreenproducer.com`) |
+| `DIGEST_ALLOWLIST` | comma list; with no redirect, only these AMs get their digest. **Empty = nobody** |
+
+**Nobody receives the digest unless `DIGEST_REDIRECT` or `DIGEST_ALLOWLIST`
+is set** (added 2026-09-28, after a manual Monday run mailed the AMs before
+the pilot). Any run on a Monday builds it, including a manual Trigger Run.
 
 Also populate `subaccounts.am_email` for each client — that's what routes
 each account into its AM's email. Unset SMTP variables = the digest is

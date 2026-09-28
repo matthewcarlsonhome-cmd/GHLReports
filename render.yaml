@@ -1,7 +1,8 @@
-# OPTIONAL ALTERNATIVE — the primary scheduler is GitHub Actions
-# (.github/workflows/collector.yml). Keep exactly ONE of the two enabled:
-# if the GitHub Actions workflow is running nightly, suspend or delete the
-# Render cron job so the collector doesn't run twice per night.
+# LIVE SCHEDULER (as of 2026-09-28): this Render cron job runs the nightly
+# collector. The GitHub Actions copy (.github/workflows/collector.yml) was
+# meant to replace it, but its secrets were never set and it fails every day.
+# If that cutover ever happens, suspend this job first: exactly ONE
+# scheduler may run, or the collector runs twice a night.
 services:
   - type: cron
     name: ghl-health-collector
@@ -31,11 +32,21 @@ services:
         sync: false
       - key: DIGEST_CC          # optional, comma list CC'd on every digest
         sync: false
+      # Who receives the digest. NOBODY unless one of these is set.
+      # DIGEST_REDIRECT: one address that gets EVERY AM's digest, subject
+      # labelled "[for Lauren]", no CC (the rehearsal; for now
+      # mcarlson@smallscreenproducer.com). DIGEST_ALLOWLIST: comma list; with
+      # no redirect, only listed AMs (and listed DIGEST_CC addresses) get it.
+      - key: DIGEST_REDIRECT
+        sync: false
+      - key: DIGEST_ALLOWLIST
+        sync: false
       # -- AM notes (collector/automation.py, docs/AM-NOTIFY-WORKFLOW-SPEC.md) --
       # AUTOMATION_WEBHOOKS is the kill switch: off (default) does nothing,
       # dry runs everything and logs the notes instead of posting them, on
-      # posts to the GHL workflow. Flip it here and press Trigger Run; no
-      # deploy needed.
+      # posts to the GHL workflow. Changing it needs no deploy; it applies
+      # to the next run. Careful: Trigger Run with COLLECTOR_ARGS empty is a
+      # full nightly run, and on a Monday that includes the digest.
       - key: AUTOMATION_WEBHOOKS
         value: "off"
       - key: AUTOMATION_WEBHOOK_URL   # the GHL Inbound Webhook URL — treat as a secret
@@ -52,4 +63,6 @@ services:
       #
       # One-off modes without a terminal: set COLLECTOR_ARGS in the Render
       # dashboard (e.g. "--probe", "--backfill 12"), click "Trigger Run",
-      # read the logs, then clear it to resume nightly runs.
+      # read the logs, then clear it to resume nightly runs. With
+      # COLLECTOR_ARGS empty, Trigger Run is a full nightly run (on a Monday,
+      # digest included).

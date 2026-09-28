@@ -38,7 +38,8 @@ In plain English, one normal daily run does this:
 6. AM notes (automation.notify_run): one note per client account, only for
    what is new, worse, or due for a reminder; off unless AUTOMATION_WEBHOOKS
    is dry or on.
-7. On Mondays, send the AM digest emails; finally record run totals.
+7. On Mondays, build the AM digest emails (sent only where DIGEST_REDIRECT or
+   DIGEST_ALLOWLIST allows); finally record run totals.
 
 Exit codes (what the scheduler sees): 0 = every location collected and passed
 its sanity gate; 2 = at least one location was held or failed (partial data);
@@ -1227,10 +1228,19 @@ def build_monday_digests(store, run_date: date) -> tuple[dict, dict]:
 
 def _close_out_cleared(store, cleared: dict, sent: int, failed: int) -> None:
     """Mark the digest's cleared lines delivered, but only when every digest
-    went out; otherwise they wait for the next note or next Monday."""
-    if cleared and sent and not failed:
+    went out; otherwise they wait for the next note or next Monday. Only
+    lines whose AM read their own digest count: a copy redirected to
+    someone else (DIGEST_REDIRECT) or a digest held back by the allowlist
+    told the AM nothing."""
+    rules = digest_mod.Recipients.from_env()
+    told: dict = {}
+    for loc, rows in cleared.items():
+        kept = [row for row in rows if rules.reaches(row.get("notified_to"))]
+        if kept:
+            told[loc] = kept
+    if told and sent and not failed:
         try:
-            automation.mark_cleared_delivered(store, cleared)
+            automation.mark_cleared_delivered(store, told)
         except Exception as exc:  # noqa: BLE001 — bookkeeping must not fail the run
             log(f"digest: cleared lines not marked delivered ({type(exc).__name__})")
 
@@ -1445,9 +1455,13 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             log("digest: no AMs with client accounts; nothing to send")
             return 0
         if args.dry_run:
+            # The header shows where each digest would really go under the
+            # current DIGEST_REDIRECT / DIGEST_ALLOWLIST ("nobody" = held).
+            rules = digest_mod.Recipients.from_env()
             for am, first in digests.items():
+                dest = rules.destination(am) or "nobody"
                 for message in [first] + list(first.get("extra_parts") or []):
-                    print(f"--- {am} :: {message['subject']} ---\n{message['text']}\n")
+                    print(f"--- {am} -> {dest} :: {message['subject']} ---\n{message['text']}\n")
             log(f"digest dry run: {len(digests)} emails built, none sent")
             return 0
         sent, digest_failed = digest_mod.send_digests(digests, log=log)
@@ -1679,11 +1693,12 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     except Exception as exc:                    # never fatal — see automation.py
         log(f"notices: failed ({type(exc).__name__}); run continues")
 
-    # Monday digest (Tier 2): sent at the end of the Monday run when SMTP is
-    # configured. weekday() == 0 means Monday, judged by the snapshot date —
-    # so the auto-send happens exactly once per week without a separate cron
-    # entry, and any other day skips this block entirely. (send_digests is a
-    # no-op that logs when SMTP_USER / SMTP_PASS are unset.)
+    # Monday digest (Tier 2): built at the end of the Monday run.
+    # weekday() == 0 means Monday, judged by the snapshot date, so any run
+    # on a Monday (the cron or a manual Trigger Run) reaches this block, and
+    # a second Monday run builds it again. Who receives it is opt-in:
+    # digest.Recipients sends nothing unless DIGEST_REDIRECT or
+    # DIGEST_ALLOWLIST is set, and nothing without SMTP_USER / SMTP_PASS.
     if run_date.weekday() == 0:
         digests, cleared = build_monday_digests(store, run_date)
         if digests:

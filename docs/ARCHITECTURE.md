@@ -275,9 +275,11 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
   recipients — To and CC — restricted to `@smallscreenproducer.com`) and
   sends it over the agency's own Google Workspace SMTP (`SMTP_USER` +
   `SMTP_PASS` app password; optional `DIGEST_CC`, `DIGEST_FROM`,
-  `DASHBOARD_URL`). Routing comes from `subaccounts.am_email`. With nothing
-  configured every run skips the digest as a logged no-op. Preview without
-  sending: `python -m collector.main --digest --dry-run`.
+  `DASHBOARD_URL`). Routing comes from `subaccounts.am_email`, but nobody
+  receives it unless `DIGEST_REDIRECT` (every digest to one address,
+  labelled per AM) or `DIGEST_ALLOWLIST` (listed AMs only) is set. With
+  nothing configured every run skips the digest as a logged no-op. Preview
+  without sending: `python -m collector.main --digest --dry-run`.
 - **Copy-ready weekly client summary** — deterministic template fill in the
   drilldown (`web/src/lib/clientSummary.ts`): client-facing wording, unknown
   lines omitted, no flag/risk language, one-click copy.
