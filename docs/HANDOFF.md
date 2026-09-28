@@ -71,10 +71,21 @@ is kept). Fixed the same day in `5c0a894`: `digest.Recipients` sends
 nothing unless a recipient is chosen (§3.4). A second run on the same
 Monday still sends a second digest to whoever is chosen (next step C3).
 
-### 3.4 Render settings: what they should be now
-An agent cannot see Render; these are the intended values, set by Matthew.
+### 3.4 Render settings: live status and intended test configuration
 
-| Setting | Now | Meaning |
+Chrome recheck on 2026-09-28: `AUTOMATION_WEBHOOKS=off`.
+`AM_NOTIFY_ALLOWLIST`, `AM_NOTIFY_REDIRECT`, `DIGEST_ALLOWLIST`,
+`DIGEST_REDIRECT`, and `COLLECTOR_ARGS` are absent. No linked environment
+groups are shown. Both email paths therefore currently send to nobody;
+a Matthew-only shadow setup has **not** been enabled. The table below is
+an intended test configuration, not a claim about current values.
+
+The SSP workflow remains Saved / Draft. It still shows the legacy
+Create contact, PIPELINE_WEEKLY condition, task, and Matthew notification
+structure. The v2 Test?/Valid?/AM route flow still needs completion.
+Do not confuse the earlier notification-formatting edits with that rebuild.
+
+| Setting | Intended test value | Meaning |
 |---|---|---|
 | `DIGEST_REDIRECT` | `mcarlson@smallscreenproducer.com` | every AM's digest goes only to Matthew, labelled "[for Lauren]" |
 | `DIGEST_ALLOWLIST` | empty | with no redirect, only listed AMs get their digest; empty = nobody |
