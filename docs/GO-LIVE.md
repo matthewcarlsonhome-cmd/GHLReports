@@ -6,6 +6,11 @@ installs.** The app runs on Netlify, the Python collector runs on GitHub Actions
 the database runs on Supabase. Sign-in emails come straight from Supabase's
 built-in mailer — no third-party email service to configure.
 
+> **Actual state (2026-09-28):** the collector runs on **Render**
+> (`render.yaml`), not GitHub Actions; Part 4 below was never completed (no
+> repository secrets) and the scheduled workflows fail daily. Current state
+> and next steps: [`HANDOFF.md`](HANDOFF.md).
+
 **Today's finish line is your free Netlify URL** —
 `https://<your-site>.netlify.app`. That address is the dashboard until you
 choose to add the custom domain. Everything tied to

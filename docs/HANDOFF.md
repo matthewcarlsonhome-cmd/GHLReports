@@ -1,259 +1,330 @@
-# Handoff — GHL Account Health Dashboard
+# Handoff: GHL Account Health Dashboard
 
-State as of **2026-09-28**. Read this first in a new thread; the other
-docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
-`FORM-MONITORING.md`, `ACCOUNT-USAGE.md`, `AM-NOTIFY-WORKFLOW-SPEC.md`) hold
-the detail.
+State as of **2026-09-28, end of day** (live checks at 16:10 to 16:20 UTC).
+This is the file a new session starts from. Rules for agents are in
+`/AGENTS.md`; read them first. Detail lives in `CODE-MAP.md` (how the Python
+works), `AM-NOTIFY-WORKFLOW-SPEC.md` (AM notes), `SECURITY-SPEC.md`,
+`ARCHITECTURE.md`, `GO-LIVE.md`, `FORM-MONITORING.md`, `ACCOUNT-USAGE.md`.
 
-## Update 2026-09-28 (AM notes, Part A built)
-
-- **AM notes built** (`collector/automation.py`, migration 0014, spec build
-  notes at the top of `docs/AM-NOTIFY-WORKFLOW-SPEC.md`). One note per client
-  per day, only for what is new, worse, or due for a reminder; cleared lines
-  ride along or go in the Monday digest. Replaces the never-enabled Phase 1
-  bridge; `--weekly-alerts` is retired. No Supabase edge function exists:
-  the nightly Python job on Render makes the webhook call.
-- **Pilot picks** (from Matthew, 2026-09-28): Lauren = Flohr, Central Jersey
-  with T2 leads going cold and T3 customers left waiting. Lisa = Pettis,
-  Liverpool, McKinney, AAA Spa & Pool; her alert types are not chosen yet,
-  so they start on the same two (provisional). T4 website capture was
-  dropped the same day (migration 0015): form problems go to the GHL team.
-  Stored in `subaccounts.alert_triggers`; T2 accounts also got
-  `thresholds.slow_response_min = 2`, so the dashboard shows SLOW_RESPONSE
-  from 2 leads for those six.
-- **September replay** (`--notify-preview 28` logic on stored data, T2 and
-  T3): 16 notes in 28 nights (Lauren 10, Lisa 6) vs 95 for one email per
-  account per night while anything is open. T3 is a standing backlog at
-  Central Jersey, Flohr and McKinney (15 to 40 waiting every night). Pettis
-  gets no notes at all, so it tests nothing; consider swapping it.
-- **Proposed, not built (awaiting Matthew):** widen T2 to count leads that
-  got only automated replies (Liverpool: 88 to 93% of leads got no personal
-  reply from Sep 22 and no warning fired), a "Facebook leads stopped" alert,
-  and a "slow first personal reply" alert in place of T3.
-- **Still off.** Nothing sends until `AUTOMATION_WEBHOOKS` is `dry`/`on` and
-  `AM_NOTIFY_ALLOWLIST` is set in Render. Go-live order: dry 3 to 5 nights,
-  `--send-test`, update the "MC Account Health - Alerts" workflow (Draft;
-  needs a session on Matthew's computer with Chrome, steps in spec §4),
-  shadow week with `AM_NOTIFY_REDIRECT`, then live.
-- **GitHub Actions nightly job fails every day** (runs 35 to 39: missing
-  secrets). Render is the live scheduler. Disable the Actions schedule or
-  finish the cutover; GitHub emails Matthew on each failure.
-- **Security review: `docs/SECURITY-SPEC.md`** (20 findings). Top item: the
-  repository is **public** (client roster, staff emails, notes, and every
-  Actions log). Make it private before adding any GitHub secret. SEC-03,
-  SEC-04, SEC-11 and the webhook parts of SEC-12/13 are fixed in code.
-
-## Update 2026-09-22 evening (branch `claude/lucid-gauss-vz1y98`)
-
-- **The "30-day limit" was wrong.** GHL's `/forms/submissions` defaults to the
-  last month when `startAt`/`endAt` are omitted, per GHL's own API spec; it is
-  not a retention cap. The nightly now reads all-time history
-  (`collector/form_history.py`) with a new `dormant` status. The Aug 25
-  `SSPFormInventory` workbook's "CONFIRMED: 30-day window" note is wrong.
-  Details: `FORM-MONITORING.md` §1.
-- **New read-only reports** (`--form-activity`, `--account-usage`; GitHub
-  workflow **Reports**, which needs repository secrets
-  `REPORTS_SUPABASE_URL`, `REPORTS_SUPABASE_SERVICE_ROLE_KEY` and
-  `REPORTS_COLLECTOR_KEY`):
-  - per form: channel (website / Google ad / Facebook ad / Facebook lead ad),
-    last real submission, days inactive, page URLs, Datadog candidates;
-  - per account: are client staff working leads in MLH, or is it ads +
-    automation only.
-- **Weekly form test design** (Datadog plus GHL workflow guard, and a
-  collector-side check that the test landed as a contact, with the
-  `FORM_CHECK_MISSED` flag): `FORM-MONITORING.md` §4. Needs the
-  `formcheck@smallscreenproducer.com` mailbox or group first.
-- **Applied live:**
-  - migration 0011 (`dormant` status);
-  - migration 0012: `snapshots.client_users`/`ssp_users`, plus a
-    **`v_portfolio` security fix**. 0010 had dropped `security_invoker`, so the
-    view skipped the staff row policies; it is restored.
-  - Lisa's dashboard login `lhoffman@` (Lauren and Pam already had accounts,
-    never used).
-- **Filter live in data, code on this branch:** accounts with no client-staff
-  users (All American, Backyard Oasis, Beachfront, G&S, Luke Gell, Pla-Mor,
-  Pristine) drop out of the AM digest and hide behind a portfolio toggle.
-  All but Backyard Oasis are now also marked non-MLH and no longer collected
-  (below); Backyard Oasis is still collected.
-- **Forms tab + MLH filter (branch, 2026-09-22 late):**
-  - `/forms` lists every form per client account that uses MLH, with form
-    ID, type (website / Google ad / Facebook ad / Facebook lead ad), status,
-    days quiet (all-time) and page.
-  - The nightly now stores channel, page_url, subs_30d and the weekly-test
-    result per form, plus Facebook lead-ad form ids (`kind = 'unlisted'`).
-    Migration 0013 was applied live.
-  - Lisa's list is marked in `subaccounts.mlh_status` and filtered from the
-    digest, alerts, reports and default views. Luke Gell (canceled) is set
-    inactive.
-  - Marked accounts are no longer pulled from GHL at all (nightly, backfill,
-    reports). The portfolio toggle shows them as "not collected".
-    `--include-non-mlh` or `--location <slug>` pulls one on demand. Saves
-    about 45 s of a ~11 min run (run 36: 43 s across the 7 accounts).
-    Zero-user accounts still marked active (Backyard Oasis) are still
-    collected, so they reappear on their own if the client gets a login.
-  - Answer on scaling the weekly test: GHL's API can't edit workflows. See
-    `FORM-MONITORING.md` §4.6.
-- **Human-reply fix applied (on the branch):**
-  - The message source beats the user tag.
-  - Anything sent within 2 minutes of the lead arriving or writing counts as
-    automated.
-  - "Deals moved" no longer counts deals that merely arrived.
-  - Accounts where nobody replies in person and no deal moves get one info
-    note, `NOT_WORKING_IN_MLH`, in place of red SLOW_RESPONSE /
-    PIPELINE_FROZEN alarms.
-  - Expect speed-to-lead to show "—" on ads-only accounts and "Deals moved"
-    to drop sharply on the first run after deploy (a one-time step change in
-    the week-over-week comparison).
-
-## What this is
+## 1. What this is
 
 A nightly, **read-only** health check across Small Screen Producer's (SSP)
-GoHighLevel client subaccounts. It collects each account's data, flags
-problems (lead flow dropping, leads left uncontacted, forms going silent,
-pipelines stalling), and surfaces them to account managers (AMs) so they can
-call the client and book a review. Owner: Matthew Carlson
-(mcarlson@smallscreenproducer.com).
+GoHighLevel client subaccounts. It collects each account's CRM data, flags
+problems (leads left uncontacted, customers waiting for replies, lead flow
+dropping, forms going quiet, pipelines stalling), and tells the account
+managers (AMs) which clients need a call. Owner: Matthew Carlson
+(mcarlson@smallscreenproducer.com). AMs: Lauren Degner (`ldegner@`), Lisa
+Hoffman (`lhoffman@`), Michael (`madams@`, out of scope for the pilot).
 
-## Rules that must survive every thread
+## 2. Where things run
 
-- **Read-only against client GHL accounts.** No writes, ever. ("We're not
-  doing writes through this tool.")
-- **Never send email to staff or clients without an explicit request for that
-  specific send.** No test alerts to anyone.
-- **Never put a GHL token (PIT) or the GHL webhook URL in chat.** PITs live in
-  Supabase Vault only; the webhook URL is an env var only.
-- **No customer PII in outbound payloads** — no contact names, phones, emails,
-  or deal names (GHL deal names are customer names).
-- Digest recipients must end in `@smallscreenproducer.com` (enforced in code).
-- **Michael's accounts are out of scope for the pilot.**
-- Communication to AMs: plain language, short, no tech terms (no "API",
-  "PIT", "webhook"). AMs just need to know when a client needs a meeting.
+| Piece | Where | Status (2026-09-28) |
+|---|---|---|
+| Nightly collector | **Render** cron `ghl-health-collector`, 05:30 CT (`30 10 * * *` UTC), deploys from the default branch | **Live.** Runs 40 to 43 (Sep 25 to 28) all ok, 21 locations each, about 10 minutes. Run 44 was a manual Trigger Run at 10:58 CT, ok, and it **mailed the Monday digest to the AMs** (see §3.3). |
+| GitHub Actions `collector.yml`, `tagchecker.yml`, `reports.yml` | GitHub | **Not configured.** No secrets, so the scheduled collector and tag checker runs fail every day (GitHub emails Matthew). The tag checker has never produced a row (`tag_checks` is empty). The cutover from Render never happened. |
+| Database | Supabase `tpavdifpsevkrubplyrg` (Postgres, Vault for PITs, Auth) | Migrations 0001 to 0015 applied. No edge functions. |
+| Dashboard | Netlify, https://mlhaccountreports.netlify.app (`/account/<location_id>`) | Live, deploys on every push. |
+| Monday digest | the collector, over SMTP (`SMTP_USER` = Matthew's Workspace account, the sender) | Since commit `5c0a894`, goes to **nobody** unless `DIGEST_REDIRECT` or `DIGEST_ALLOWLIST` is set. |
+| AM notes | the collector POSTs one message per client account to the GHL Inbound Webhook workflow "MC Account Health - Alerts" in SSP's own subaccount (`ZnckuEDPIcWu8fn72ppi`), which emails the AM | Code built and deployed (Part A). **Off.** Workflow not yet rebuilt (Part B). |
 
-## Next up (as of 2026-09-28)
+## 3. Current state
 
-1. **AM notes go-live:** Part A is built and deployed. Next: Matthew sets
-   `AUTOMATION_WEBHOOKS=dry` + `AM_NOTIFY_ALLOWLIST` in Render; Part B
-   (update the "MC Account Health - Alerts" workflow, Draft only) from a
-   session on Matthew's computer with Chrome; Lisa confirms her alert types.
-2. **Form cleanup list:** add a cleanup-candidate column to the form report
-   (never used or quiet 60+ days, excluding standard snapshot forms such as
-   Unsubscribe, A2P opt-in, How did we do?, booking). Matthew's team retires
-   forms manually in GHL (rename "ZZ-RETIRE", wait 2 weeks, delete).
-3. **Open questions:** AAA Pools pool-builder-ga/fb pages send leads under
-   two form ids (one not in Sites > Forms); `cwf-<locationId>` ids are
-   probably the chat widget (unconfirmed). Backyard Oasis: no client users,
-   not marked; ask Lisa whether to mark it non-MLH.
-4. Monday digest recipients (see the decision section below) and the
-   `REPORTS_*` GitHub secrets are still Matthew's to settle.
+### 3.1 Accounts (live, 16:18 UTC)
+- 28 active rows: SSP's own parent account (Matthew), **20 client accounts
+  collected nightly** (Lauren 10, Lisa 7, Michael 2, "Michael / Dada (FB)"
+  1), and 7 marked not using MLH (`mlh_status`), which are not pulled from
+  GHL (Lisa 2, Michael 4, Michael / Dada 1). 3 inactive rows.
+- `subaccounts.am_email` points at the real AMs. **Keep it that way**
+  (Matthew, 2026-09-28): who actually receives mail is decided by the Render
+  settings in §3.4, so switching the AMs on later is a settings change, not a
+  data change.
 
-## Architecture (one paragraph)
+### 3.2 AM notes pilot
+- Six accounts, all on **T2 leads going cold** and **T3 customers left
+  waiting**, with `thresholds.slow_response_min = 2`:
+  Lauren: Flohr Pools, Central Jersey Pool & Spas. Lisa: Pettis Pools &
+  Patio, Liverpool Pool & Spa, McKinney Custom Pools, AAA Spa & Pool
+  Services (her types are provisional until she picks).
+- T4 website capture was dropped (migration 0015): form problems go to the
+  GHL team, not AM notes, for now.
+- Live check after run 44: `alert_state` 0 rows, `automation_sends` 0 rows,
+  no account has `alert_tracking_since`. So the notes have never run in dry
+  or on mode: `AUTOMATION_WEBHOOKS` is off in Render, or its settings were
+  rejected (the run log would then have a `notices: ...; nothing sent`
+  line).
+- Design in one paragraph: each issue (account, code, form) is a row in
+  `alert_state`. It must show on 2 nightly runs (T2, T3) before anyone hears
+  about it; then the AM is told once. After that they hear again only when
+  it gets worse (severity up, or the number at least doubles and rises by 3
+  or more) or when a bounded reminder is due. At most one note per client
+  account per day, 8 per AM per day, and nothing at all if more than 25
+  would go out in one run. A cleared issue is mentioned only alongside the
+  next note or in the Monday digest, never alone. Details: spec build notes
+  and `collector/automation.py` docstring.
 
-Python collector (`collector/`) runs nightly at 05:30 CT, reads each
-subaccount's PIT from Supabase Vault, pulls GHL API v2 data, computes metrics
-and flags, and writes to Supabase (`snapshots`, `flags`, `form_health`, …).
-A React dashboard (`web/`, Netlify) reads it. Two outbound paths:
-**(1) Monday digest** — HTML email per AM via SMTP, grouped by
-`subaccounts.am_email`; **(2) daily alert bridge** — POSTs a flat payload to a
-GHL inbound-webhook workflow, gated by `AUTOMATION_WEBHOOKS` (off/dry/on).
-Scheduler: Render cron is what's actually been used; a GitHub Actions workflow
-also exists (`.github/workflows/collector.yml`) — cutover still pending.
+### 3.3 The digest incident (2026-09-28)
+Any run on a Monday built the digest and sent it to every account's
+`am_email`. Matthew's manual Trigger Run at 10:58 CT on Monday Sep 28 (run
+44) sent it to Lauren, Lisa and Michael before the pilot started. Whether
+the 05:30 scheduled run also sent one is unknown (no record of digest sends
+is kept). Fixed the same day in `5c0a894`: `digest.Recipients` sends
+nothing unless a recipient is chosen (§3.4). A second run on the same
+Monday still sends a second digest to whoever is chosen (next step C3).
 
-## Where things are
+### 3.4 Render settings: what they should be now
+An agent cannot see Render; these are the intended values, set by Matthew.
+
+| Setting | Now | Meaning |
+|---|---|---|
+| `DIGEST_REDIRECT` | `mcarlson@smallscreenproducer.com` | every AM's digest goes only to Matthew, labelled "[for Lauren]" |
+| `DIGEST_ALLOWLIST` | empty | with no redirect, only listed AMs get their digest; empty = nobody |
+| `DIGEST_CC` | empty | dropped under a redirect; otherwise each address must be allowlisted |
+| `AUTOMATION_WEBHOOKS` | `off` (`dry` is safe: it logs notes, sends nothing) | kill switch for AM notes |
+| `AM_NOTIFY_ALLOWLIST` | Lauren's and Lisa's addresses, when notes are tested | whose notes are written; empty = nobody |
+| `AM_NOTIFY_REDIRECT` | `mcarlson@smallscreenproducer.com` | every note goes to Matthew, labelled; the payload's `route` becomes `matthew` |
+| `AUTOMATION_WEBHOOK_URL` | set by Matthew only | secret; never in chat, files or logs |
+| `COLLECTOR_ARGS` | empty except during a one-off run | empty + Trigger Run = full nightly run (on Mondays, digest included) |
+
+**Switching the AMs on when the pilot starts** (Matthew's call, not an
+agent's): digest: clear `DIGEST_REDIRECT`, set `DIGEST_ALLOWLIST` to the
+pilot AMs' addresses. Notes: clear `AM_NOTIFY_REDIRECT` (the allowlist
+already names the pilot AMs). Both take effect on the next run, no deploy.
+
+### 3.5 Code and tests
+- 237 tests passing (`python3 -m pytest collector/tests/ tagchecker/tests/ -q`).
+- Security: SEC-03, SEC-04, SEC-11 and the webhook parts of SEC-12/13 are
+  fixed in code; the rest is open (`SECURITY-SPEC.md` Status).
+- The repository is **public** (checked 16:0x UTC). Making it private is
+  step A1.
+
+## 4. Next steps
+
+Order: A before B. C to F can run in parallel with B. Items marked
+**(go needed)** wait for Matthew's explicit approval.
+
+### A. Owner actions (Matthew; an agent cannot do these)
+- **A1. Make the repository private** (SEC-01). Then check that Render and
+  Netlify still deploy (re-authorize their GitHub connection if not) and
+  that Codex or any other agent still has access. Check: a logged-out
+  browser gets 404 on the repo URL.
+- **A2. Set the Render values in §3.4.** Wait for the `5c0a894` deploy (or
+  later) to be live first.
+- **A3. Pause the failing GitHub Actions schedules** (collector, tag
+  checker), or decide to finish the cutover (see F1). Check: no failure mail
+  for a week.
+- **A4. Tell the three AMs** to ignore today's digest, if wanted.
+- **A5. Settings checks the security review could not see** (SEC-08 to
+  SEC-10): Supabase sign-ups off, inactivity timeout, leaked-password
+  protection, exposed schemas; who has access to Render, Netlify, the
+  Supabase org; a dedicated SMTP sender instead of Matthew's own mailbox.
+  Date each result in this file.
+
+### B. AM notes go-live (spec §4 and §5)
+- **B1. Dry run.** `AUTOMATION_WEBHOOKS=dry`, allowlist and redirect as in
+  §3.4. Run 3 to 5 nights. Check each morning: the Render log has a line
+  `notices: 0 sent, N dry, ...` (N can be 0 on the first night, since an
+  issue needs two nights), and the notes logged above it read well.
+  `select code, status, count(*) from alert_state group by 1, 2;` shows
+  rows. Each pilot account gets at most one note a night and the same issue
+  does not repeat night to night.
+- **B2. Update the "MC Account Health - Alerts" workflow** (Part B, spec
+  §4.4), in Draft only. Needs an agent with a browser connected to
+  Matthew's logged-in Chrome, or Matthew by hand. Order matters:
+  1. Confirm the account on screen is Small Screen Producer. Set the
+     workflow to **Draft** before anything is posted to it: the old steps
+     have no test guard.
+  2. List the existing steps (names and types) for the hand-back, then
+     leave the Inbound Webhook trigger as it is. Opening the trigger shows
+     its URL: never copy, paste, repeat or screenshot it.
+  3. Matthew runs `COLLECTOR_ARGS=--send-test` once on Render (his go for
+     that one POST, which carries `is_test = true`; the workflow is in
+     Draft, so nothing runs and nobody is emailed), then clears it. In
+     GHL: open the trigger, Fetch sample requests, pick the newest
+     (`schema_version` 2), save. If samples cannot be fetched while in
+     Draft (V3), stop and report; do not publish.
+  4. Build §4.4 steps 1 to 5: Test? guard, Valid? guard (event
+     `am_account_health`, schema 2), Route on `route` with branches
+     `lauren`, `lisa`, `matthew` and None; each branch one Internal
+     Notification email to that one person, From name "Account Health",
+     subject `{{inboundWebhookRequest.subject}}`, message
+     `{{inboundWebhookRequest.body_html}}` (fall back to `body_text` if the
+     preview shows raw tags); None branch an in-app note to Matthew.
+  5. Check V1 to V4 (§4.5) with the in-action Preview only. Never press
+     Test on a path that emails a person. If V1 fails, use the §6.1
+     fallback (one SSP-side contact) and report.
+  6. Leave it in Draft. Hand back: screenshot without the URL, the old
+     step list, V1 to V4 results, the users picked per branch. Offer the
+     option of pointing the `lauren` and `lisa` branches at Matthew for
+     the shadow week as a second safety.
+- **B3. Shadow week (go needed):** Matthew publishes the workflow and sets
+  `AUTOMATION_WEBHOOKS=on` with the §3.4 redirect. Only Matthew gets notes.
+- **B4. Live (go needed):** the switch-on in §3.4. Kill switch at any time:
+  `AUTOMATION_WEBHOOKS=off`, or the workflow back to Draft.
+
+### C. Agent tasks, safe to start now
+- **C1. Security spec gap review.** Re-check `docs/SECURITY-SPEC.md` against
+  the current code, workflows, migrations and docs. Deliver: an addendum
+  "Review YYYY-MM-DD" in that file with new findings numbered SEC-21 on (same
+  columns: evidence with file:line, severity, why it matters, fix, effort),
+  corrections to existing items (fixed, wrong, stale line references), and
+  an updated Status block. No behaviour changes in the same pass. Candidate
+  gaps to check (not verified):
+  - Webhook authenticity: anyone holding the webhook URL can make SSP's GHL
+    email staff arbitrary HTML (`body_html`). A shared-secret field checked
+    in the workflow's Valid? step may be worth it.
+  - Deploy path: every push to the default branch deploys to Render and
+    Netlify with no review, and agents hold push rights. That is the
+    owner's chosen workflow; record it as an accepted risk with its
+    compensating controls, or propose branch protection.
+  - Digest duplicates on a same-day rerun (C3) and the digest incident's
+    root cause (a calendar-triggered send with no allowlist).
+  - What reaches Render logs in dry mode (the rendered notes: account names
+    and counts).
+  - GitHub settings a public repo relies on: secret scanning and push
+    protection, Dependabot alerts, who can approve workflow runs from forks.
+  - `web/` for any raw HTML rendering; Supabase RLS on tables added since the
+    review (`alert_state`), and on the `automation_sends` columns.
+- **C2. `AM_NOTIFY_ALLOWLIST` duplicates:** `automation.Settings` counts a
+  repeated address as malformed and blocks every note. Fails closed, but
+  the message is wrong. Mirror `digest.Recipients` (count invalid entries).
+- **C3. Record digest sends.** Store one row per digest sent (run date,
+  recipient, AM it was for, parts). Skip a Monday resend for the same date
+  unless `--digest` is run on purpose. Check: two Monday runs in a row send
+  once.
+- **C4. Security code items from `SECURITY-SPEC.md` §4:** SEC-12 (refuse a
+  PIT with control characters, redact any Bearer value), SEC-13 (neutralize
+  CSV cells starting `=`, `+`, `-`, `@` in every CSV writer), SEC-14
+  (crawler: https on the client's host only, no private IPs, time budget),
+  SEC-16 (report-only CSP; `ExternalLink` http and https only), SEC-19
+  (`.gitignore` `reports/` and `*.csv`; probe output to an ignored file),
+  SEC-06 (hash-locked requirements), SEC-05 (tag checker browser without
+  secrets). SEC-07 (retention) and SEC-17 (column grants) need a migration
+  that Matthew applies.
+- **C5. Form cleanup-candidate list for the GHL team:** a column in the form
+  report (`--form-activity`) marking forms never used or quiet 60+ days,
+  excluding standard snapshot forms (Unsubscribe, A2P opt-in, "How did we
+  do?", booking). The team retires forms by hand (rename "ZZ-RETIRE", wait
+  2 weeks, delete).
+
+### D. Alert changes proposed, waiting for Matthew (go needed; do not build)
+Evidence is from stored September snapshots.
+- **D1. Widen T2** to count leads that got only automated replies.
+  Liverpool: 88 to 93% of leads got no personal reply from Sep 22 and no
+  warning fired, because `NOT_WORKING_IN_MLH` (needs 0 deals moved)
+  suppresses the SLOW_RESPONSE ratio. Check: `--notify-preview 28` shows
+  Liverpool T2 notes in late September.
+- **D2. "Facebook leads stopped"** (needs per-source newest-lead dates
+  stored; today only weekly counts per source exist). Facebook share of
+  leads: AAA Spa 88%, Liverpool 80%, Flohr and McKinney about 60%. Open
+  question: AM alert or GHL-team report?
+- **D3. "Slow first personal reply"** in place of, or beside, T3: Central
+  Jersey median 17 to 23 hours on 5 of 7 nights; McKinney 7 to 13 hours on
+  4 of 7. Needs Lauren's OK.
+- **D4. Drop form warnings from the AM Monday digest** (forms go to the GHL
+  team).
+- **D5. Swap Pettis:** it produced no notes in the September replay, so it
+  tests nothing. Lisa's call, with her alert types.
+
+### E. Data-quality fixes (`CODE-MAP.md` §6; each needs tests and a replay)
+- **E1.** Counts read 0, not "unknown", when their fetch fails. Return None
+  and let the gate and flags treat it as missing.
+- **E2.** Busy accounts hit fetch caps, which mark sources "partial"; two
+  partials hold a healthy account (G3). Count cap hits separately.
+- **E3.** Problems age out of 7-day and 14-day windows with nobody acting.
+  The AM notes' cleared line for T2/T3 checks the current count, so an
+  aged-out backlog can read "cleared". Decide whether T2/T3 need a
+  "resolved by action" signal before go-live.
+- **E4.** `NO_CLIENT_TOUCH` never fires: `ssp_client_contact_id` is empty
+  for every account. Matthew fills it with
+  `collector/tools/find_client_contact.py`.
+- **E5.** Win rate and days to close are unreliable where deals are created
+  already won (Central Jersey 98.5%, Flohr 92.9%, about 0 days to close).
+  Keep them out of AM messages.
+
+### F. Backlog
+- **F1. Scheduler cutover or retirement.** If GitHub Actions takes over:
+  private repo first, a protected environment for secrets (SEC-02), pass
+  `AUTOMATION_*`, `AM_NOTIFY_*`, `DIGEST_REDIRECT` and `DIGEST_ALLOWLIST`
+  through (the workflow passes none today, which fails closed), then
+  suspend Render. Otherwise delete the schedules.
+- **F2. Daylight saving:** the cron is UTC, so from Nov 1 the run is at
+  04:30 CT. Fine unless someone relies on 05:30.
+- F3. 30 new subaccounts need PITs (worksheet delivered Sep 1), then AM
+  mapping.
+- F4. 7 dashboard accounts missing from the updated client list (All
+  American, Aqua Pros, Beachfront, G&S, Luke Gell, Pla-Mor, Pristine):
+  churned? Burkett's is Active on the list but paused here. Texas Pools
+  returns no data (PIT probably on the wrong location). Dada has no address
+  (Exquisite, G&S Facebook).
+- F5. AAA Pools' pool-builder pages send leads under two form ids (one not
+  in Sites > Forms). `cwf-<locationId>` form ids are probably the chat
+  widget (unconfirmed). Backyard Oasis has no client users and is not
+  marked non-MLH: ask Lisa.
+- F6. Digest recipient decision for the pilot: which AMs, and whether the
+  digest and the notes switch on together.
+
+## 5. Decisions (dated, Matthew's unless noted)
+- 2026-09-22: form history is read all-time (GHL's 30-day default is not a
+  retention cap); accounts marked non-MLH are not pulled from GHL; the
+  message source beats the user tag, and anything within 2 minutes of the
+  lead counts as automated.
+- 2026-09-28:
+  - AM notes: one workflow in SSP's account; all logic in the collector;
+    state in `alert_state`, not GHL tags. Told once, then only when worse or
+    at a bounded reminder; cleared lines never sent alone.
+  - Pilot: Lauren = Flohr, Central Jersey; Lisa = Pettis, Liverpool,
+    McKinney, AAA Spa & Pool; T2 and T3. T4 dropped (forms to the GHL team).
+  - The weekly pipeline webhook send is retired; the digest carries the
+    pipeline read.
+  - **No emails to the team yet.** Only Matthew receives test copies (digest
+    and notes). AM addresses stay in the data for the pilot switch-on.
+  - Render stays the scheduler for now.
+  - Development continues in Codex; push straight to the default branch, no
+    pull requests.
+
+## 6. Findings not to re-derive
+- September replay of the pilot on T2 and T3: 16 notes in 28 nights
+  (Lauren 10, Lisa 6) against 95 for "one email per account per night while
+  anything is open". T3 is a standing backlog at Central Jersey, Flohr and
+  McKinney (15 to 40 waiting every night). Pettis gets none.
+- Pipeline: about 94% of open deals are stale; deals are created
+  automatically and advanced by hand, with no forced exits.
+- Website capture (Aug 31 crawl of 42 sites): many sites do not send leads
+  into GHL (Backyard Oasis uses Keap, Russo's SharpSpring, Juniper HubSpot,
+  Fossil Creek monday.com; Pettis, Liverpool and most of Lisa's book use
+  WordPress forms). GHL cannot automate leads it never receives.
+- Professional Pools & Care's sitemap lists about 130 casino-spam posts:
+  probably a hacked WordPress; tell their web team.
+- AAA Pools' stored site `learn.aaapools.com` is a dead 404; Aqua Pros'
+  canonical domain is `aquapoolspapros.com`.
+- GHL's API never says where a form is embedded. Submissions carry the page
+  URL (`form_urls.py`); silent forms need the site crawl (`find_embeds.py`).
+  GHL's API cannot edit workflows.
+- The Google Sheets used in the pilot (review sheet, pipeline analysis for
+  Pam) are in Matthew's Drive; links are in this file's history before
+  2026-09-28 and are deliberately not repeated in a public repo.
+
+## 7. Where things are
 
 | Thing | Location |
 |---|---|
-| Repo / branch | `matthewcarlsonhome-cmd/GHLReports`, `claude/gohighlevel-reports-build-l6hlc7` is main (default branch; Render and Netlify deploy from it). Matthew's rule: push straight to main, no pull requests. |
-| Supabase project | `tpavdifpsevkrubplyrg` (query via the Supabase MCP tool; direct HTTPS from the sandbox is blocked) |
-| Dashboard | https://mlhaccountreports.netlify.app — account pages are `/account/<location_id>` |
-| Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--send-test`, `--notify-preview [DAYS]`, `--probe`, `--form-urls`, `--form-activity`, `--account-usage`; `--include-non-mlh` adds the accounts marked non-MLH back (`--weekly-alerts` is retired) |
-| Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
-| Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
-| Migrations | `supabase/migrations/0001`–`0014` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns, 0014 = `alert_state` + `alert_triggers` + pilot seed, 0015 = pilot without T4) |
-| Tests | `python3 -m pytest collector/tests/ tagchecker/tests/ -q` → **230 passing** |
-| Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
+| Repo, default branch | `matthewcarlsonhome-cmd/GHLReports`, `claude/gohighlevel-reports-build-l6hlc7` (Render and Netlify deploy from it) |
+| Collector entry and modes | `collector/main.py`: nightly (no args), `--digest [--dry-run]`, `--send-test`, `--notify-preview [DAYS]`, `--probe`, `--backfill N`, `--form-urls`, `--form-activity`, `--account-usage`, `--location <slug>`, `--include-non-mlh`, `--dry-run` (`--weekly-alerts` is retired) |
+| Logic | `metrics.py` (math, gate), `flags.py` (flag rules), `automation.py` (AM notes), `digest.py` (Monday email, `Recipients`) |
+| I/O | `store.py` (Supabase), `ghl_client.py` (GHL, read-only guard), `fetchers.py` (per endpoint, strips personal data) |
+| Tools | `collector/tools/`: `pit.py`, `find_client_contact.py`, `form_urls.py`, `find_embeds.py`, `form_activity.py`, `account_usage.py` |
+| Migrations | `supabase/migrations/0001` to `0015` (next: `0016`) |
+| Tests | `collector/tests/` (fakes in `fakes.py`), `tagchecker/tests/` |
+| Web app | `web/` (Vite, React, TypeScript) |
 
-## Current state
-
-- **29 active subaccounts** in the dashboard, all collecting nightly.
-- **AM mapping is live** (`subaccounts.am_name` + `am_email`):
-  Lauren `ldegner@` — 10 · Lisa `lhoffman@` — 9 · Michael `madams@` — 9
-  (Exquisite + G&S are "Michael / Dada (FB)"; Dada has no address) ·
-  Matthew `mcarlson@` — SSP.
-- Digest header/greeting names the AM; dashboard shows AM names.
-- `AUTOMATION_WEBHOOKS` defaults to `off` in `render.yaml` — **live Render
-  value not verified.**
-
-## ⚠ Decide before Monday Sep 28
-
-Until today every `am_email` was Matthew's, so all mail went to him. **It now
-points at the real AMs.** The Monday run auto-sends the digest (SMTP) to each
-`am_email`, and the daily alert payload carries `am_email` too. Unless changed,
-**Lisa, Lauren and Michael receive their first digest Mon Sep 28 ~05:30 CT** —
-before the intro email and pilot picks. Options: (a) let it go, (b) point
-`am_email` back to Matthew and keep `am_name` until the pilot starts (one SQL
-update), or (c) add a recipient allowlist in `digest.py`/`automation.py` so
-only pilot accounts' AMs get mail. Matthew's call.
-
-## The AM alert pilot (where we are)
-
-- **Goal:** one pilot account each for Lauren and Lisa; each alert = one
-  plain-English email to that AM → AM books a client review.
-- **Candidates** (ranked on Sep 22 data by how hard daily alerts fire):
-  Lauren — Flohr, Central Jersey, AAA Pools (all have working GHL website
-  forms). Lisa — AAA Spa & Pool, McKinney, Hamlin (all capture website leads
-  outside GHL; Campbell's is the swap if a GHL-capturing site is wanted).
-- **8 alert types** offered to AMs (T1 lead flow stopped · T2 leads going
-  cold · T3 customers left waiting · T4 website capture broken · T5 emails
-  not delivering · T6 social disconnected · T7 pipeline frozen (weekly) ·
-  T8 deal money parked (weekly)); cap 5/day, only new-or-worse.
-- **Review sheet:** https://docs.google.com/spreadsheets/d/1BLTqKBXPyHHaFjdhXymHJRI2fM7WkNAdTzSv72iBXZM/edit
-- **Intro email** to Lisa, Lauren, Pam: drafted (short, plain-language), for
-  Matthew to send himself. Not sent by us.
-- **Not built yet:** per-account trigger rules from AM picks, and the T1–T8
-  mapping onto existing flag codes in `automation.py`. v4 spec (change-based
-  ranking, no health grade, acute vs. chronic backlog):
-  https://claude.ai/code/artifact/c05835c5-97e7-41e7-b917-af64cc19b4d2
-
-## Findings not to re-derive
-
-- **Pipeline:** ~94% of open deals stale; mechanism is auto-create /
-  manual-advance with no forced exits. Analysis for Pam:
-  https://docs.google.com/spreadsheets/d/1Am602BJNCiWeV8-CG5eKAG-MaAl2vYpQKXE_-mtR5GQ/edit
-- **Website capture (Aug 31 crawl, 42 sites):** many sites don't send leads
-  into GHL — Backyard Oasis (Keap), Russo's (SharpSpring), Juniper (HubSpot),
-  Fossil Creek (monday.com), Pettis/Liverpool/most of Lisa's book (WordPress
-  forms). GHL can't automate leads it never receives.
-- **Professional Pools & Care** site has ~130 casino-spam posts in its sitemap
-  (`/post-sitemap.xml`) — likely a hacked WordPress; tell their web team.
-- AAA Pools' stored site `learn.aaapools.com` is a dead 404; Aqua Pros'
-  canonical domain is `aquapoolspapros.com`.
-- GHL API never exposes where a form is embedded; submissions carry
-  `others.eventData.page.url` (`form_urls.py`), and silent forms need the
-  site crawl (`find_embeds.py`).
-
-## Open items
-
-1. **Monday send decision** (above).
-2. Lisa/Lauren pick pilot accounts → build pilot trigger rules → turn on for
-   those two only.
-3. **30 new subaccounts need PITs** (worksheet delivered Sep 1:
-   `New-Subaccount-PIT-Worksheet.xlsx`). Then map their AMs the same way.
-4. 7 dashboard accounts missing from the updated client list (All American,
-   Aqua Pros, Beachfront, G&S, Luke Gell, Pla-Mor, Pristine) — churned?
-5. Burkett's is Active on the list but paused in the dashboard.
-6. Texas Pools returns no data — PIT likely wired to the wrong location.
-7. Dada's address (for Exquisite / G&S Facebook).
-8. Scheduler: finish GitHub Actions cutover; cron shifts to 04:30 CT when DST
-   ends in November.
-
-## Tooling gotchas
-
-- Google Drive connector **cannot edit cell contents** — only title/folder.
-  To "update" a Sheet, create a new one from CSV (`create_file`,
-  `text/csv`) and trash/rename the old.
-- Uploading xlsx to Drive as base64 corrupts above ~10KB — use CSV→Sheet or
-  send the file directly.
-- Supabase and client websites are unreachable over direct HTTPS from the
-  sandbox; use the Supabase MCP tool and FireCrawl.
-- Gmail clips HTML email over ~102KB; `digest.py` splits into numbered parts
-  under an 88KB budget.
+## 8. Tooling notes
+- Supabase and client websites were unreachable over direct HTTPS from
+  Claude's cloud sandbox; the Supabase MCP tool and FireCrawl worked. Codex
+  may have neither: ask Matthew for read-only SQL results instead.
+- The Google Drive connector cannot edit cell contents; to update a Sheet,
+  upload a new CSV as a Sheet. Base64 xlsx uploads corrupt above about 10 KB.
+- Gmail clips HTML email over about 102 KB; `digest.py` splits a digest into
+  numbered parts under an 88 KB budget.
+- The one-page design summary of the AM notes is a private claude.ai
+  artifact in Matthew's account; other tools cannot open it. The spec and
+  the `automation.py` docstring hold the same content.

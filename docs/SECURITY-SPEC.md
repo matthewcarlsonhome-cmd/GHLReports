@@ -32,6 +32,12 @@ Render, Netlify, GHL, Google Workspace).
 - SEC-19 (JWT): the token at `docs/GO-LIVE.md:33` decodes to role `anon`,
   the public key the dashboard ships anyway. Not a leak.
 
+**Changed after this review (2026-09-28, late):** a manual Render run on a
+Monday mailed the digest to the AMs before the pilot. The digest now goes
+to nobody unless `DIGEST_REDIRECT` or `DIGEST_ALLOWLIST` is set
+(`digest.Recipients`, commit `5c0a894`); see `HANDOFF.md` §3.3. Not yet
+re-reviewed as a whole: `HANDOFF.md` §4 C1 asks for a gap review.
+
 **Open, owner action first:** SEC-01 (make the repository private; do this
 before adding any GitHub secret), SEC-02 (fence the secrets), SEC-08, SEC-09,
 SEC-10 (settings checks), SEC-15 (pause the failing schedules).

@@ -1,8 +1,9 @@
 # Spec: Account Health → Account Manager notifications
 
-Status: **Part A built 2026-09-28** (collector code, migration 0014, 208
-tests). Part B (the GHL workflow) is next and needs a session on Matthew's
-computer with Chrome. Written 2026-09-22; owner: Matthew Carlson.
+Status: **Part A built 2026-09-28** (collector code, migrations 0014 and
+0015). Part B (the GHL workflow) is next and needs a browser session
+connected to Matthew's Chrome; the ordered steps are in `HANDOFF.md` §4 B2.
+Written 2026-09-22; owner: Matthew Carlson.
 
 ## Build notes (2026-09-28): what changed from this spec, and why
 

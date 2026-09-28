@@ -20,6 +20,13 @@ notes; those are the only writes in the whole system.
 > (the args box feeds `COLLECTOR_ARGS`). Render (`render.yaml`) remains a
 > documented alternative scheduler.
 
+> **Actual state (2026-09-28):** the nightly collector runs on **Render**
+> (`render.yaml`); one-off modes go through Render's `COLLECTOR_ARGS` +
+> Trigger Run. The GitHub Actions workflows described in this README and in
+> GO-LIVE are not configured (no secrets) and fail daily; the tag checker
+> has never run. Start from [`docs/HANDOFF.md`](docs/HANDOFF.md) (current
+> state, next steps); agent rules are in [`AGENTS.md`](AGENTS.md).
+
 - **Go-live setup guide (browser-only):** [`docs/GO-LIVE.md`](docs/GO-LIVE.md)
 - **Design spec (historical requirements):** [`docs/DESIGN.md`](docs/DESIGN.md) (build spec v3.0)
 - **As-built architecture (current):** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
@@ -36,13 +43,13 @@ live only in Supabase Vault.
 
 | Path | What it is |
 |---|---|
-| `supabase/migrations/` | Complete schema (0001) + additive migrations 0002–0006 (missed calls, form_health, tag_checks, pipeline movement, bottleneck) — all applied to the live project |
+| `supabase/migrations/` | Complete schema (0001) + additive migrations through 0015 (list in `docs/HANDOFF.md`) — all applied to the live project |
 | `supabase/seed.sql` | Parent + pilot subaccount rows (edit the placeholders first) |
 | `collector/` | Python 3.11 collector, tools, and test suite (incl. the PII boundary test) |
 | `tagchecker/` | Playwright tag/pixel checker (no GHL tokens; own requirements.txt) |
-| `.github/workflows/` | The schedulers: nightly collector + daily tag checker (manual dispatch too) |
+| `.github/workflows/` | Planned schedulers (nightly collector, daily tag checker, reports); not configured yet |
 | `web/` | Vite + React + TypeScript + Tailwind + Recharts SPA |
-| `render.yaml` | OPTIONAL alternative scheduler (GitHub Actions is primary) |
+| `render.yaml` | The live scheduler: Render cron for the nightly collector |
 | `netlify.toml` | Netlify build config + iframe CSP for the SPA |
 | `docs/` | Go-live guide, design spec, as-built architecture, forms/tags integration |
 
@@ -289,13 +296,14 @@ Agency view → Settings → Custom Menu Links → Create New:
 
 ## 3. Day-to-day usage
 
-**Operations happen in the browser.** The collector runs itself nightly via
-GitHub Actions; one-off modes run from the repo's **Actions tab → Nightly
-collector → Run workflow**, typing the args in the box (e.g. `--probe`,
-`--backfill 12`, `--location <slug>`) and reading the run's log. The tag
-checker runs daily the same way. (On the optional Render alternative, the
-same modes go through the `COLLECTOR_ARGS` environment variable + Trigger
-Run.) Token health lives on the app's `/runs` page; tokens are added and
+**Operations happen in the browser.** The collector runs itself nightly on
+Render; one-off modes go through the `COLLECTOR_ARGS` environment variable +
+Trigger Run in the Render dashboard (e.g. `--probe`, `--backfill 12`,
+`--location <slug>`), then clear it. With `COLLECTOR_ARGS` empty, Trigger
+Run is a full nightly run, and on a Monday that includes the digest. The
+GitHub Actions route (**Actions tab → Nightly collector → Run workflow**)
+is the planned alternative and is not configured yet; the tag checker runs
+only there, so it has not run. Token health lives on the app's `/runs` page; tokens are added and
 rotated in the Supabase Vault UI.
 
 For developers with the optional local setup:

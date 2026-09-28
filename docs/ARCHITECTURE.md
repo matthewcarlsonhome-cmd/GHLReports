@@ -14,7 +14,7 @@ flowchart LR
         PA["SSP parent subaccount<br/>appts · client convos"]
     end
 
-    subgraph GHA["GitHub Actions (primary scheduler)"]
+    subgraph GHA["Schedulers · collector on Render cron · tag checker on GitHub Actions, not yet running"]
         COL["Python collector — nightly 05:30 CT<br/>fetch → strip PII → metrics → gate → flags"]
         TAG["Tag checker — daily 08:00 CT<br/>headless Chromium loads client sites,<br/>verifies GA4/GTM/Meta/Ads/TikTok fire"]
     end
@@ -99,7 +99,7 @@ docs/                        DESIGN.md (spec v3, historical requirements) ·
                              GO-LIVE.md (setup, browser-only) ·
                              FORMS-INTEGRATION.md (forms/tags review + design) ·
                              this file (as-built)
-render.yaml                  OPTIONAL alternative scheduler (GitHub Actions is primary)
+render.yaml                  the live scheduler (Render cron, nightly collector)
 netlify.toml                 Netlify build + SPA redirect + frame-ancestors CSP
 VERIFICATION.md              endpoint-shape verification log (--probe appends here)
 ```
@@ -236,16 +236,17 @@ the JWT email. Public sign-up is disabled and staff are pre-provisioned; the
 
 ## Deploys & operations
 
-- **Collector**: GitHub Actions (`.github/workflows/collector.yml`),
-  nightly `30 10 * * *` UTC = 05:30 CT during CDT (revisit in November);
-  three repo secrets (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-  `COLLECTOR_KEY`). Manual runs via the Actions tab; the args box feeds
-  `COLLECTOR_ARGS` (`--probe`, `--backfill 12`, ...). A failed scheduled
-  run emails the repo owner — the dead-man's switch. Render (`render.yaml`)
-  is a documented alternative; run exactly one scheduler.
+- **Collector**: Render cron (`render.yaml`), nightly `30 10 * * *` UTC =
+  05:30 CT during CDT, 04:30 CT from Nov 1. One-off modes via
+  `COLLECTOR_ARGS` + Trigger Run (empty = a full nightly run, digest
+  included on Mondays). The GitHub Actions workflow
+  (`.github/workflows/collector.yml`: three repo secrets, Actions-tab runs,
+  failure email as the dead-man's switch) is the planned replacement; as of
+  2026-09-28 it has no secrets and fails daily. Run exactly one scheduler.
 - **Tag checker**: GitHub Actions (`tagchecker.yml`), daily 08:00 CT,
   installs Chromium on the runner; needs only the two Supabase secrets and
-  no GHL tokens. Skips accounts without `tag_config` expectations.
+  no GHL tokens. Skips accounts without `tag_config` expectations. Not
+  running yet: no secrets, and `tag_checks` is empty.
 - **SPA**: Netlify from `web/`, auto-deploys on every push. Lives at the
   free `*.netlify.app` URL until the Later phase adds
   `health.smallscreenproducer.com`; `frame-ancestors` CSP for GHL hosts, no
