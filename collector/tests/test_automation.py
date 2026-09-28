@@ -573,3 +573,22 @@ def test_digest_section_renders_and_is_marked_delivered_once():
     assert "Cleared since your last alert (1)" in message["html"]
     A.mark_cleared_delivered(store, cleared)
     assert A.cleared_for_digest(store.read_alert_state(), [SUB], monday) == {}
+
+
+# -- recipient and webhook hygiene (SECURITY-SPEC SEC-03, SEC-12) ----------------------------
+
+def test_settings_refuse_bad_recipients_and_never_echo_the_url():
+    bad = dict(ENV, AM_NOTIFY_ALLOWLIST=f"{LAUREN}, x@evil.example",
+               AM_NOTIFY_REDIRECT=f"x@evil.example, {MATTHEW}",
+               AUTOMATION_WEBHOOK_URL="http://hooks.example.invalid/secret-123")
+    problems = A.Settings.from_env(bad).problems
+    assert len(problems) == 3
+    assert not any("secret-123" in p for p in problems)
+
+
+def test_a_smuggled_second_address_is_held():
+    sub = dict(SUB, am_email=f"x@evil.example, {LAUREN}")
+    sim = Sim(env=dict(ENV, AM_NOTIFY_ALLOWLIST=LAUREN))
+    sim.night(day(0, sub=sub, leads_uncontacted_24h=3))
+    assert sim.night(day(1, sub=sub, leads_uncontacted_24h=3)) == []
+    assert [n.status for n in sim.last_plan.notices] == ["held"]

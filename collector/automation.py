@@ -72,7 +72,7 @@ from urllib.parse import urlsplit
 
 from . import flags as flags_mod
 from . import lead_channels
-from .digest import STAFF_DOMAIN
+from .digest import staff_address
 
 # -- constants ----------------------------------------------------------------
 
@@ -803,17 +803,23 @@ class Settings:
         env = env if env is not None else os.environ
         mode = mode or mode_from_env(env)
         url = (env.get("AUTOMATION_WEBHOOK_URL") or "").strip()
-        allowlist = frozenset(a.strip().lower() for a in
-                              (env.get("AM_NOTIFY_ALLOWLIST") or "").split(",") if a.strip())
-        redirect = (env.get("AM_NOTIFY_REDIRECT") or "").strip().lower()
+        entries = [a.strip() for a in (env.get("AM_NOTIFY_ALLOWLIST") or "").split(",") if a.strip()]
+        allowlist = frozenset(filter(None, (staff_address(a) for a in entries)))
+        raw_redirect = (env.get("AM_NOTIFY_REDIRECT") or "").strip()
+        redirect = staff_address(raw_redirect) or ""
         problems = []
         if mode == "on" and not url:
             problems.append("AUTOMATION_WEBHOOKS is on but AUTOMATION_WEBHOOK_URL is not set")
-        if redirect and not redirect.endswith(STAFF_DOMAIN):
-            problems.append("AM_NOTIFY_REDIRECT is not a staff address")
-        outside = sorted(a for a in allowlist if not a.endswith(STAFF_DOMAIN))
-        if outside:
-            problems.append(f"AM_NOTIFY_ALLOWLIST has {len(outside)} non-staff address(es)")
+        if url:
+            parts = urlsplit(url)
+            if parts.scheme != "https" or not parts.netloc or any(c.isspace() for c in url):
+                # Never echo the value: it is a secret even when malformed.
+                problems.append("AUTOMATION_WEBHOOK_URL is not a valid https address")
+        if raw_redirect and not redirect:
+            problems.append("AM_NOTIFY_REDIRECT is not a single staff address")
+        if len(allowlist) != len(entries):
+            problems.append(f"AM_NOTIFY_ALLOWLIST has {len(entries) - len(allowlist)} "
+                            "entry(ies) that are not a single staff address")
         base = (env.get("DASHBOARD_URL") or DEFAULT_DASHBOARD_URL).strip().rstrip("/")
         return cls(mode, url, allowlist, redirect, base, tuple(problems))
 
@@ -1151,7 +1157,8 @@ def _apply_limits(notices: list[Notice], settings: Settings) -> None:
     for notice in notices:
         if notice.status:
             continue
-        if (not notice.am_email.endswith(STAFF_DOMAIN)
+        if (staff_address(notice.am_email) != notice.am_email
+                or staff_address(notice.recipient) != notice.recipient
                 or notice.am_email not in settings.allowlist):
             notice.status = "held"
     by_am: dict = {}
@@ -1193,9 +1200,12 @@ def post_alert(url: str, payload: dict, timeout: float = 15.0) -> tuple[int | No
                 return exc.code, f"HTTP {exc.code}"
             last_error = f"HTTP {exc.code}"
         except Exception as exc:                       # network, DNS, timeout
-            # The message can quote the URL; scrub it so the secret never
-            # reaches a log line or the automation_sends.error column.
-            last_error = f"{type(exc).__name__}: {str(exc).replace(url, '<webhook url>')}"[:200]
+            # Only the error's type goes on record: free text can quote the
+            # URL, and the URL is a secret (logs and automation_sends.error
+            # are readable by every staff member). SECURITY-SPEC SEC-12.
+            last_error = type(exc).__name__
+            if isinstance(exc, urllib.error.URLError) and not isinstance(exc.reason, str):
+                last_error += f" ({type(exc.reason).__name__})"
         if attempt == 1:
             continue
     return None, last_error

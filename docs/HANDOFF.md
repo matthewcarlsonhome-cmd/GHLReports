@@ -32,6 +32,10 @@ the detail.
 - **GitHub Actions nightly job fails every day** (runs 35 to 39: missing
   secrets). Render is the live scheduler. Disable the Actions schedule or
   finish the cutover; GitHub emails Matthew on each failure.
+- **Security review: `docs/SECURITY-SPEC.md`** (20 findings). Top item: the
+  repository is **public** (client roster, staff emails, notes, and every
+  Actions log). Make it private before adding any GitHub secret. SEC-03,
+  SEC-04, SEC-11 and the webhook parts of SEC-12/13 are fixed in code.
 
 ## Update 2026-09-22 evening (branch `claude/lucid-gauss-vz1y98`)
 
@@ -159,7 +163,7 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
 | Migrations | `supabase/migrations/0001`–`0014` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns, 0014 = `alert_state` + `alert_triggers` + pilot seed) |
-| Tests | `python3 -m pytest collector/tests/ -q` → **208 passing** |
+| Tests | `python3 -m pytest collector/tests/ tagchecker/tests/ -q` → **230 passing** |
 | Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 
 ## Current state

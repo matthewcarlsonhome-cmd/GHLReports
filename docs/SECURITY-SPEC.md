@@ -13,6 +13,32 @@ client site was called.
 **Needs check** = depends on a setting this review cannot see (Supabase Auth,
 Render, Netlify, GHL, Google Workspace).
 
+## Status (2026-09-28, end of day)
+
+**Fixed in code** (with tests, same day):
+- SEC-03: one strict staff-address check (`digest.staff_address`: exactly
+  one bare `@smallscreenproducer.com` address) for digest To and CC and for
+  the AM notes (allowlist, redirect, each note). Bypass strings are tested.
+- SEC-04: the CONVOS_WAITING action no longer names the customer (the
+  dashboard link keeps the name); `--dry-run` drops entity names, ids and
+  links for people and deals; probe redaction covers name and title values;
+  name-canary tests cover the digest and `--dry-run` output.
+- SEC-11: the GHL client allows exactly two POST paths (`fullmatch`);
+  every other POST and every write method is refused before any request.
+- SEC-12 (webhook part): the webhook URL is checked at startup (https, no
+  spaces) and never echoed; a failed POST records only the error type.
+- SEC-13 (webhook part): the AM-notes rewrite HTML-escapes every value in
+  `body_html` and no longer sends raw flag titles or actions.
+- SEC-19 (JWT): the token at `docs/GO-LIVE.md:33` decodes to role `anon`,
+  the public key the dashboard ships anyway. Not a leak.
+
+**Open, owner action first:** SEC-01 (make the repository private; do this
+before adding any GitHub secret), SEC-02 (fence the secrets), SEC-08, SEC-09,
+SEC-10 (settings checks), SEC-15 (pause the failing schedules).
+
+**Open, code:** SEC-05, 06, 07, 12 (PIT control characters), 13 (CSV cells),
+14, 16, 17, 18, 20.
+
 ## 1. Scope and what we protect
 
 Scope: `collector/` (nightly job, reports, tools), `tagchecker/`, `web/`,
@@ -72,10 +98,9 @@ docs.
 
 ## 4. Update plan
 
-`collector/digest.py`, `flags.py`, `automation.py`, `store.py`, `main.py` and
-the tests are being rewritten for the AM-notify work
-(`docs/AM-NOTIFY-WORKFLOW-SPEC.md`). Land SEC-03, SEC-04, SEC-12 and SEC-13
-inside that work or right after it.
+The AM-notify rewrite (`docs/AM-NOTIFY-WORKFLOW-SPEC.md`) landed on
+2026-09-28 together with SEC-03, SEC-04, SEC-11 and the webhook parts of
+SEC-12 and SEC-13 (see Status above). Items 3 and 4 below are done.
 
 ### Do now (this week)
 

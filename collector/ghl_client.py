@@ -31,6 +31,7 @@ Key ideas to understand this file:
 
 from __future__ import annotations
 
+import re
 import time
 
 import requests
@@ -57,13 +58,15 @@ SCOPE_HINTS = [
 
 # The only POST endpoints we will ever hit. GHL implements a few *search*
 # operations as POST (the filter body is too rich for a query string), but
-# they are still read-only. Anything else POSTed would be a write — refused.
-# Caution: request() matches these as path PREFIXES, so any POST under
-# /social-media-posting/ passes, including GHL endpoints that create posts.
-# Today only the PIT's read-only scopes stop such a call; exact-path matching
-# is planned (docs/SECURITY-SPEC.md SEC-11). Never add a prefix here without
-# checking every endpoint underneath it.
-ALLOWED_POST_PATHS = ("/contacts/search", "/social-media-posting/")
+# they are still read-only. Anything else POSTed would be a write, so it is
+# refused before the request is built. These are EXACT patterns (fullmatch),
+# not prefixes: a prefix like "/social-media-posting/" would also let through
+# the endpoint that creates a post (docs/SECURITY-SPEC.md SEC-11). Add a new
+# search endpoint here only after checking it cannot change anything.
+ALLOWED_POST_PATTERNS = (
+    re.compile(r"/contacts/search"),
+    re.compile(r"/social-media-posting/[A-Za-z0-9_-]+/posts/list"),
+)
 
 
 def scope_hint(path: str) -> str:
@@ -197,7 +200,7 @@ class GHLClient:
         method = method.upper()
         if method not in ("GET", "POST"):
             raise GHLError(f"refusing non-read method {method}")
-        if method == "POST" and not any(path.startswith(p) for p in ALLOWED_POST_PATHS):
+        if method == "POST" and not any(p.fullmatch(path) for p in ALLOWED_POST_PATTERNS):
             raise GHLError(f"refusing POST to {path}: not a documented search endpoint")
 
         url = BASE_URL + path

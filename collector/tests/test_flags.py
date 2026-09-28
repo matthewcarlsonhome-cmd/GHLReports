@@ -179,7 +179,10 @@ def test_convos_waiting_amber_then_red():
     red = compute({"convos_waiting": 2, "convos_waiting_max_hours": 25.0}, details=details)
     assert codes(red).get("CONVOS_WAITING") == "red"
     flag = next(f for f in red if f["code"] == "CONVOS_WAITING")
-    assert "Friday Fred" in flag["action"]
+    # The action is mailed in the Monday digest, so it must never carry a
+    # customer's name (SECURITY-SPEC SEC-04); the dashboard link keeps it.
+    assert "Friday Fred" not in flag["action"]
+    assert flag["entity_name"] == "Friday Fred" and flag["deep_link"] == "x"
 
 
 def test_stale_pipeline_count_vs_value_severity():

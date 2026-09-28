@@ -240,3 +240,25 @@ def test_accounts_marked_not_using_mlh_stay_out_of_am_mail():
             sub["mlh_status"] = "ads_only"
     lisa = build_digests(subs, SNAPSHOTS, FLAGS, {}, "2026-08-17")["lisa@smallscreenproducer.com"]
     assert "Quiet Spas" not in lisa["text"] and "Pilot One Pools" in lisa["text"]
+
+
+# -- one strict staff-address rule (SECURITY-SPEC SEC-03) --------------------------
+
+def test_staff_address_accepts_one_plain_staff_address_only():
+    from collector.digest import staff_address, _staff_addresses
+    assert staff_address(" LHoffman@SmallScreenProducer.com ") == "lhoffman@smallscreenproducer.com"
+    for bypass in ("x@evil.example, y@smallscreenproducer.com",     # two addresses
+                   "x@evil.example;y@smallscreenproducer.com",      # other separator
+                   "Lisa <lhoffman@smallscreenproducer.com>",       # display-name form
+                   "a@smallscreenproducer.com.evil.example",        # look-alike domain
+                   "a@sub.smallscreenproducer.com", "", None, 42):
+        assert staff_address(bypass) is None, bypass
+    assert _staff_addresses("a@smallscreenproducer.com, x@evil.example, "
+                            "y@evil.example;b@smallscreenproducer.com") == ["a@smallscreenproducer.com"]
+
+
+def test_digest_skips_an_am_email_that_smuggles_a_second_address():
+    from collector.digest import build_digests
+    subs = [{"location_id": "loc1", "name": "Acme Pools", "active": True, "token_status": "ok",
+             "am_email": "x@evil.example, lisa@smallscreenproducer.com"}]
+    assert build_digests(subs, {"loc1": {"gate_passed": True}}, {}, {}, "2026-09-28") == {}

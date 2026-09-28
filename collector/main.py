@@ -927,12 +927,27 @@ def peer_pass(store, subs_by_id: dict, run_date: date) -> dict[str, tuple[float 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 PHONE_RE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
 BODY_KEYS = ("body", "lastmessagebody", "snippet", "message")
+# Keys whose values name a person (or a deal, which GHL names after the
+# customer) or can contain one (appointment titles like "Consult - Jane
+# Doe"). The probe only needs field names and shapes, never these values.
+NAME_KEY_PARTS = ("name", "title")
+# Flag entity types that point at a person or a deal; see _log_safe_flag.
+PERSON_ENTITY_TYPES = frozenset({"contact", "conversation", "opportunity"})
+
+
+def _log_safe_flag(flag: dict) -> dict:
+    """A flag row fit for a log line: person- or deal-shaped entities lose
+    their name, id and link; forms, sources and pipelines keep theirs."""
+    if flag.get("entity_type") in PERSON_ENTITY_TYPES:
+        return {**flag, "entity_name": None, "entity_id": None, "deep_link": None}
+    return flag
 
 
 def _redact(obj):
     """Recursively scrub PII from probe samples before they hit disk.
 
-    Dict values under sensitive-looking keys become the literal marker
+    Dict values under sensitive-looking keys (email, phone, address, any
+    name or title, message bodies) become the literal marker
     "«redacted»"; lists are truncated to 2 items (shape matters, volume does
     not); free strings get email/phone patterns replaced. Everything else
     passes through untouched.
@@ -941,7 +956,8 @@ def _redact(obj):
         out = {}
         for key, value in obj.items():
             lower = key.lower()
-            if any(word in lower for word in ("email", "phone", "address")) or lower in BODY_KEYS:
+            if (any(word in lower for word in ("email", "phone", "address", *NAME_KEY_PARTS))
+                    or lower in BODY_KEYS):
                 out[key] = "«redacted»" if value else value
             else:
                 out[key] = _redact(value)
@@ -1616,12 +1632,16 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             sub = result["sub"]
             location_flags = flags_mod.compute_flags(
                 result["metrics"], sub.get("thresholds"), result["details"], sub, today=run_date)
+            # Logs are read by the whole team (and, for GitHub Actions, by
+            # anyone who can see the repo), so flag rows lose the entity
+            # name, id and link when they point at a person or a deal
+            # (SECURITY-SPEC SEC-04).
             printable = {
                 "location": sub.get("slug") or location_id,
                 "gate_passed": result["gate_passed"],
                 "gate_reasons": result["gate_reasons"],
                 "metrics": result["metrics"],
-                "flags": location_flags,
+                "flags": [_log_safe_flag(f) for f in location_flags],
             }
             print(json.dumps(printable, indent=2, default=str))
         log("dry run complete; nothing written")

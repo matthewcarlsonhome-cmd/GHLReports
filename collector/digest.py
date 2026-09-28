@@ -40,11 +40,27 @@ from __future__ import annotations
 import contextlib
 import html
 import os
+import re
 import smtplib
 import ssl
 from email.message import EmailMessage
 
 STAFF_DOMAIN = "@smallscreenproducer.com"
+# Exactly one bare address at exactly our domain. A suffix check on the raw
+# string is not enough: "x@evil.example, y@smallscreenproducer.com" ends with
+# the domain, and the mail library would send to both (SECURITY-SPEC SEC-03).
+_STAFF_ADDRESS = re.compile(r"[a-z0-9._%+-]+@smallscreenproducer\.com")
+
+
+def staff_address(raw) -> str | None:
+    """The staff address in `raw`, lowercased, or None if `raw` is anything
+    other than one plain @smallscreenproducer.com address (no second
+    address, no separators, no display name). Every outbound recipient in
+    the collector goes through this: digest To and CC, and the AM notes."""
+    if not isinstance(raw, str):
+        return None
+    address = raw.strip().lower()
+    return address if _STAFF_ADDRESS.fullmatch(address) else None
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "https://mlhaccountreports.netlify.app")
 SMTP_HOST_DEFAULT = "smtp.gmail.com"
 SMTP_PORT_DEFAULT = 465
@@ -428,8 +444,8 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
         if not sub.get("is_parent") and (
                 (sub.get("mlh_status") or "active") != "active" or snap.get("client_users") == 0):
             continue
-        am = (sub.get("am_email") or "").strip().lower()
-        if not am.endswith(STAFF_DOMAIN):
+        am = staff_address(sub.get("am_email"))
+        if am is None:
             continue
         by_am.setdefault(am, []).append(sub)
 
@@ -538,9 +554,9 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
 
 
 def _staff_addresses(raw: str) -> list[str]:
-    """Comma-separated addresses filtered to the staff domain, trimmed."""
-    return [a.strip() for a in raw.split(",")
-            if a.strip() and a.strip().lower().endswith(STAFF_DOMAIN)]
+    """Comma-separated list (DIGEST_CC) reduced to valid staff addresses."""
+    return [addr for addr in (staff_address(part) for part in (raw or "").split(","))
+            if addr]
 
 
 def _connect(host: str, port: int, user: str, password: str) -> smtplib.SMTP:
@@ -583,7 +599,7 @@ def send_digests(digests: dict[str, dict], log=print) -> tuple[int, int]:
     sent = failed = 0
     server: smtplib.SMTP | None = None
     for to, first in digests.items():
-        if not to.strip().lower().endswith(STAFF_DOMAIN):
+        if staff_address(to) is None:
             log(f"digest: {to} skipped (not a staff address)")
             continue
         # An oversized book arrives as numbered parts (see build_digests's

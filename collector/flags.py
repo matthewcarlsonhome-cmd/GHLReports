@@ -355,8 +355,11 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
         oldest = (details.get("waiting_convos") or [{}])[0]
         flags.append(_flag(
             "CONVOS_WAITING", severity, "Inbound conversations waiting",
+            # No contact name in the action: action text is mailed in the
+            # Monday digest, and customer names never leave the app. The
+            # name stays in entity_name for the dashboard's link.
             f"{waiting} inbound waiting, longest {max_hours:.0f}h. "
-            f"Oldest: {oldest.get('contact', '(no name)')}.",
+            "Open the oldest from the dashboard.",
             entity_type="conversation", entity_id=oldest.get("conversation_id"),
             entity_name=oldest.get("contact"), deep_link=oldest.get("deep_link"),
         ))

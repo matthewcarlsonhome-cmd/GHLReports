@@ -107,3 +107,44 @@ def test_form_names_and_pages_still_come_through():
         "form_checks": []})
     assert '"Hot Tub Brochure" form went quiet' in payload["subject"]
     assert "acme.example/hot-tubs" in payload["body_text"]
+
+
+def _fixture_person_names() -> set[str]:
+    """Every customer or deal name in the fixtures (SECURITY-SPEC SEC-04)."""
+    from .fakes import load
+    names = {c.get("contactName") for c in load("conversations.json").get("conversations", [])}
+    for contact in load("contacts_new.json").get("contacts", []):
+        full = f"{contact.get('firstName') or ''} {contact.get('lastName') or ''}".strip()
+        names.add(full)
+        names.add(contact.get("contactName"))
+    names |= {o.get("name") for o in load("opportunities.json").get("opportunities", [])}
+    return {n for n in names if n and len(n) > 3}
+
+
+def test_no_customer_names_in_the_monday_digest():
+    """The digest is mailed, so it may carry account names and counts but
+    never a lead's or a deal's name."""
+    from datetime import date
+    from collector import digest
+
+    store = FakeStore(subs=[PARENT_SUB, CLIENT_SUB])
+    assert run_with(store, make_factory()) == 0
+    data = store.read_portfolio(date(2026, 8, 18))
+    digests = digest.build_digests(data["subs"], data["snapshots_by_loc"], data["flags_by_loc"],
+                                   data["acked_by_loc"], "2026-08-18")
+    assert digests, "the fixture account should produce a digest"
+    blob = json.dumps(digests)
+    names = _fixture_person_names()
+    assert names, "fixtures should contain names to test against"
+    for name in names:
+        assert name not in blob, f"{name!r} reached the digest"
+
+
+def test_no_customer_names_in_dry_run_output(capsys):
+    """--dry-run prints to the log, which the whole team (and, on GitHub
+    Actions, anyone who can see the repo) can read."""
+    store = FakeStore(subs=[PARENT_SUB, CLIENT_SUB])
+    run_with(store, make_factory(), argv=["--date", "2026-08-18", "--dry-run"])
+    out = capsys.readouterr().out
+    for name in _fixture_person_names():
+        assert name not in out, f"{name!r} printed by --dry-run"
