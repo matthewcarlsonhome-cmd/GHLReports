@@ -133,6 +133,17 @@ filters, default vs detailed views, customer-table disclosure, missing/held
 counts, corrected dates, and desktop/390px layouts. The existing bundle-size
 warning remains. Local preview mocks live outside the repository.
 
+### 3.7 Speed to lead restored to account overview (2026-09-28)
+
+At Matthew's request, the default account Follow-up view now includes a
+third summary card for speed to lead. It uses the existing snapshot median,
+90th percentile, human-only vs automation-inclusive label, and duration
+formatter. No measurement or trigger logic changed. Missing or held data
+shows Unknown. The existing detailed speed reports and charts remain intact.
+Validation: all 237 Python and 7 web tests pass; production build passes;
+Chrome sample-data checks confirmed the three-card layout, existing duration
+formatting, and held-data handling.
+
 ## 4. Next steps
 
 Order: A before B. C to F can run in parallel with B. Items marked

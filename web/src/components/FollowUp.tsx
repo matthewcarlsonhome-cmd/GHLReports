@@ -1,8 +1,8 @@
 // A small default workspace; all of the existing reporting remains one click away.
 import { useSearchParams, Link } from "react-router-dom";
-import type { PortfolioRow } from "../lib/database.types";
+import type { PortfolioRow, SnapshotRow } from "../lib/database.types";
 import { followUpSummary, type FollowUpInput } from "../lib/followUp";
-import { fmtDate } from "../lib/format";
+import { fmtDate, fmtMinutes } from "../lib/format";
 import { usesMlh } from "../lib/mlh";
 import { EmptyState, Skeleton } from "./ui";
 
@@ -17,9 +17,11 @@ export function ReportViews({ detailed }: { detailed: boolean }) {
   </nav>;
 }
 
-export function FollowUpCounts({ row }: { row: FollowUpInput | null }) {
+export function FollowUpCounts({ row }: { row: (FollowUpInput & Pick<SnapshotRow,
+  "speed_kind_known" | "speed_to_lead_median_min" | "speed_to_lead_p90_min">) | null }) {
   const summary = followUpSummary(row);
-  return <div className="mb-5 grid gap-3 sm:grid-cols-2">
+  const speedAvailable = row?.gate_passed === true;
+  return <div className="mb-5 grid gap-3 sm:grid-cols-3">
     {[
       { title: "Leads needing a first response", count: summary.leads, detail: "New leads from the past 7 days, uncontacted for over 24 hours." },
       { title: "Customers waiting for a reply", count: summary.replies, detail: "Inbound conversations waiting 4+ hours, adjusted for weekends." },
@@ -28,6 +30,14 @@ export function FollowUpCounts({ row }: { row: FollowUpInput | null }) {
       <p className={`my-2 text-3xl font-semibold tabular ${(item.count ?? 0) > 0 ? "text-status-critical" : "text-ink"}`}>{item.count ?? "—"}</p>
       <p className="text-xs leading-relaxed text-ink-2">{item.count === null ? "Data unavailable. Review coverage in Detailed reports." : item.detail}</p>
     </div>)}
+    <div className="rounded-xl border border-grid bg-surface p-5">
+      <p className="text-sm font-medium text-ink-2">{row?.speed_kind_known ? "Speed to lead (human)" : "Speed to lead (automation incl.)"}</p>
+      <p className="my-2 text-3xl font-semibold tabular">{fmtMinutes(speedAvailable ? row.speed_to_lead_median_min : null)}</p>
+      <p className="text-xs leading-relaxed text-ink-2">Median first response · 90th percentile: {fmtMinutes(speedAvailable ? row.speed_to_lead_p90_min : null)}</p>
+      <p className="mt-1 text-xs leading-relaxed text-ink-2">{!speedAvailable || row.speed_to_lead_median_min === null
+        ? "Data unavailable. Review coverage in Detailed reports."
+        : row.speed_kind_known ? "Human replies only." : "Includes automated replies."}</p>
+    </div>
   </div>;
 }
 
