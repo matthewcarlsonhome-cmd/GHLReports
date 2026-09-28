@@ -1,8 +1,8 @@
 // A small default workspace; all of the existing reporting remains one click away.
 import { useSearchParams, Link } from "react-router-dom";
 import type { PortfolioRow, SnapshotRow } from "../lib/database.types";
-import { followUpSummary, type FollowUpInput } from "../lib/followUp";
-import { fmtDate, fmtMinutes } from "../lib/format";
+import { followUpSummary, reportingMetrics, sourceComplete } from "../lib/followUp";
+import { fmtDate, fmtHours, fmtMinutes, fmtNum, fmtPct } from "../lib/format";
 import { usesMlh } from "../lib/mlh";
 import { EmptyState, Skeleton } from "./ui";
 
@@ -17,26 +17,42 @@ export function ReportViews({ detailed }: { detailed: boolean }) {
   </nav>;
 }
 
-export function FollowUpCounts({ row }: { row: (FollowUpInput & Pick<SnapshotRow,
-  "speed_kind_known" | "speed_to_lead_median_min" | "speed_to_lead_p90_min">) | null }) {
+export function FollowUpCounts({ row }: { row: SnapshotRow | null }) {
   const summary = followUpSummary(row);
-  const speedAvailable = row?.gate_passed === true;
-  return <div className="mb-5 grid gap-3 sm:grid-cols-3">
+  const metrics = row ? reportingMetrics(row) : null;
+  const speedAvailable = sourceComplete(row, "contacts", "speed_to_lead");
+  const volumeKnown = metrics?.leads_new_7d !== null && metrics?.leads_new_7d !== undefined;
+  const baseline = metrics?.leads_trailing_avg;
+  return <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="rounded-xl border border-grid bg-surface p-5">
+      <p className="text-sm font-medium text-ink-2">New leads · last 7 days</p>
+      <p className="my-2 text-3xl font-semibold tabular">{fmtNum(metrics?.leads_new_7d)}</p>
+      <p className="text-xs leading-relaxed text-ink-2">{!volumeKnown
+        ? "Data incomplete or unavailable. Review coverage in Detailed reports."
+        : baseline === null || baseline === undefined ? `Building a baseline (${row?.trailing_n ?? 0}/4 weeks).`
+        : `Typical week: ${fmtNum(baseline)} leads · previous ${row?.trailing_n ?? 4} weeks.`}</p>
+      {volumeKnown && baseline !== null && baseline !== undefined ? <p className="mt-1 text-xs leading-relaxed text-ink-2">
+        {metrics?.leads_delta_pct !== null && metrics?.leads_delta_pct !== undefined
+          ? `${fmtPct(metrics.leads_delta_pct)} compared with a typical week.`
+          : "Too few leads for a reliable percentage comparison."}
+      </p> : null}
+    </div>
     {[
-      { title: "Leads needing a first response", count: summary.leads, detail: "New leads from the past 7 days, uncontacted for over 24 hours." },
-      { title: "Customers waiting for a reply", count: summary.replies, detail: "Inbound conversations waiting 4+ hours, adjusted for weekends." },
+      { title: "Leads needing a first response", count: summary.leads, detail: "New leads from the past 7 days, uncontacted for over 24 hours.", oldest: null },
+      { title: "Customers waiting for a reply", count: summary.replies, detail: "Inbound conversations waiting 4+ hours, adjusted for weekends.", oldest: (summary.replies ?? 0) > 0 ? `Oldest waiting reply: ${fmtHours(metrics?.convos_waiting_max_hours)}` : null },
     ].map((item) => <div key={item.title} className="rounded-xl border border-grid bg-surface p-5">
       <p className="text-sm font-medium text-ink-2">{item.title}</p>
-      <p className={`my-2 text-3xl font-semibold tabular ${(item.count ?? 0) > 0 ? "text-status-critical" : "text-ink"}`}>{item.count ?? "—"}</p>
-      <p className="text-xs leading-relaxed text-ink-2">{item.count === null ? "Data unavailable. Review coverage in Detailed reports." : item.detail}</p>
+      <p className={`my-2 text-3xl font-semibold tabular ${(item.count ?? 0) > 0 ? "text-status-critical" : "text-ink"}`}>{item.count ?? "Unknown"}</p>
+      <p className="text-xs leading-relaxed text-ink-2">{item.count === null ? "Data incomplete or unavailable. Review coverage in Detailed reports." : item.detail}</p>
+      {item.oldest ? <p className="mt-1 text-xs font-medium text-ink-2">{item.oldest}</p> : null}
     </div>)}
     <div className="rounded-xl border border-grid bg-surface p-5">
       <p className="text-sm font-medium text-ink-2">{row?.speed_kind_known ? "Speed to lead (human)" : "Speed to lead (automation incl.)"}</p>
-      <p className="my-2 text-3xl font-semibold tabular">{fmtMinutes(speedAvailable ? row.speed_to_lead_median_min : null)}</p>
-      <p className="text-xs leading-relaxed text-ink-2">Median first response · 90th percentile: {fmtMinutes(speedAvailable ? row.speed_to_lead_p90_min : null)}</p>
-      <p className="mt-1 text-xs leading-relaxed text-ink-2">{!speedAvailable || row.speed_to_lead_median_min === null
-        ? "Data unavailable. Review coverage in Detailed reports."
-        : row.speed_kind_known ? "Human replies only." : "Includes automated replies."}</p>
+      <p className="my-2 text-3xl font-semibold tabular">{fmtMinutes(metrics?.speed_to_lead_median_min)}</p>
+      <p className="text-xs leading-relaxed text-ink-2">Median first response · 90th percentile: {fmtMinutes(metrics?.speed_to_lead_p90_min)}</p>
+      <p className="mt-1 text-xs leading-relaxed text-ink-2">{!speedAvailable || metrics?.speed_to_lead_median_min === null
+        ? "Data incomplete or unavailable. Review coverage in Detailed reports."
+        : row?.speed_kind_known ? "Human replies only." : "Includes automated replies."}</p>
     </div>
   </div>;
 }

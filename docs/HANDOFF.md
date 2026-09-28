@@ -144,6 +144,37 @@ Validation: all 237 Python and 7 web tests pass; production build passes;
 Chrome sample-data checks confirmed the three-card layout, existing duration
 formatting, and held-data handling.
 
+### 3.8 Core reporting additions and display coverage (2026-09-28)
+
+Matthew approved restoring weekly lead volume, oldest waiting reply, and
+unassigned leads requiring action. Account Follow-up now has four summary
+cards: new leads (7 days, existing baseline and percentage comparison),
+uncontacted leads, waiting replies (with oldest age), and speed to lead.
+Small baselines retain the collector's suppressed percentage; absent
+baselines show progress. The existing unassigned-lead table now appears
+under Next steps when its verified count is positive, with an assignment
+prompt. It remains available in Detailed reports when zero/unknown.
+
+`followUp.sourceComplete` checks the relevant coverage entries, not just the
+overall gate: contacts for volume/baseline/ownership; contacts plus
+speed_to_lead for uncontacted counts/response times; conversations for
+waiting replies/oldest age. Failed, partial/capped, skipped, missing or held
+inputs display Unknown. Unrelated source failures do not hide good data.
+The account's displayed snapshot is masked without mutating stored data;
+its affected detailed KPI tiles and copy-ready summary use the same mask.
+The portfolio Follow-up view also checks source coverage before declaring
+an account clear. Existing per-customer examples remain accessible with
+incomplete-data labels. This does not repair the collector's stored zeros
+or change alert evaluation; those backend issues remain in CODE-MAP §6.
+
+Existing reports are retained. Missed calls remain in Detailed reports;
+no new email triggers, recipient changes, sends, database changes, or
+collector calculation changes. Validation: 237 Python tests and 14 web
+tests pass; production build passes. Chrome synthetic-data checks cover
+four summary cards, positive-only unassigned leads, small baseline wording,
+oldest reply age, and failed-contact-source masking. Preview data and
+screenshots are kept outside the public repository.
+
 ## 4. Next steps
 
 Order: A before B. C to F can run in parallel with B. Items marked

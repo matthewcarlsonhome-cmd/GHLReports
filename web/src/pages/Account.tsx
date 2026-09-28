@@ -36,7 +36,7 @@ import {
 } from "recharts";
 
 import { FollowUpCounts, ReportViews } from "../components/FollowUp";
-import { CORE_FOLLOW_UP_CODES, followUpSummary } from "../lib/followUp";
+import { CORE_FOLLOW_UP_CODES, followUpSummary, reportingMetrics, sourceComplete } from "../lib/followUp";
 import { AfterHoursHeatmap } from "../components/Heatmap";
 import {
   DetailTable,
@@ -475,7 +475,9 @@ export default function Account() {
   }
   if (!data) return <div className="p-6"><Skeleton rows={8} /></div>;
 
-  const { sub, snapshot, flags, acks, notes, leadEvents } = data;
+  const { sub, snapshot: rawSnapshot, flags, acks, notes, leadEvents } = data;
+  // Mask incomplete source data for display only; stored metrics and alerts stay intact.
+  const snapshot = rawSnapshot ? { ...rawSnapshot, ...reportingMetrics(rawSnapshot) } : null;
   const details = snapshot?.details;
   const quality = snapshot
     ? snapshot.gate_passed ? coverageQuality(snapshot.coverage) : "held"
@@ -488,7 +490,8 @@ export default function Account() {
   // reds before ambers before infos.
   const unacked = flags.filter((f) => !ackedCodes.has(f.code));
   const acked = flags.filter((f) => ackedCodes.has(f.code));
-  const doNext = unacked.filter((flag) => detailed || (!noData && CORE_FOLLOW_UP_CODES.has(flag.code))).sort((a, b) => {
+  const doNext = unacked.filter((flag) => detailed || (!noData && CORE_FOLLOW_UP_CODES.has(flag.code) && (flag.code === "SLOW_RESPONSE"
+      ? sourceComplete(snapshot, "contacts", "speed_to_lead") : sourceComplete(snapshot, "conversations")))).sort((a, b) => {
     const rank = { red: 0, amber: 1, info: 2 } as const;
     return rank[a.severity] - rank[b.severity];
   }).slice(0, 3);
@@ -653,12 +656,24 @@ export default function Account() {
             })}
           </div>
         ) : null}
+      {details && (detailed || (snapshot?.leads_unassigned_7d ?? 0) > 0) ? <>
+          <Collapsible title={snapshot?.leads_unassigned_7d === null ? "Unassigned leads · incomplete data" : cappedTitle("Unassigned leads", snapshot?.leads_unassigned_7d, details.unassigned_leads.length)}
+                       defaultOpen={!detailed || firingTables.has("unassigned")}>
+            {(snapshot?.leads_unassigned_7d ?? 0) > 0 ? <p className="mb-2 text-sm text-ink-2">Ask the client to assign an owner to each of these new leads so someone is responsible for following up.</p> : null}
+            <DetailTable rows={details.unassigned_leads} empty={snapshot?.leads_unassigned_7d === null ? "Lead ownership data is unavailable. Review coverage in Detailed reports." : (snapshot?.leads_unassigned_7d ?? 0) > 0 ? "Individual leads are not included in this snapshot. Open GHL to review assignment." : "Every new lead has an owner."}
+              columns={[
+                { header: "Lead", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> },
+                { header: "Source", cell: (r) => r.source ?? "—" },
+                { header: "Created", cell: (r) => fmtDateTime(r.created_at) },
+              ]} />
+          </Collapsible>
+      </> : null}
       </Section>
 
       {details && !noData ? <div className="mb-6">
-          <Collapsible title={cappedTitle("Uncontacted leads", snapshot?.leads_uncontacted_24h, details.uncontacted_leads.length)}
+          <Collapsible title={snapshot?.leads_uncontacted_24h === null ? "Uncontacted leads · incomplete data" : cappedTitle("Uncontacted leads", snapshot?.leads_uncontacted_24h, details.uncontacted_leads.length)}
                        defaultOpen={firingTables.has("uncontacted")}>
-            <DetailTable rows={details.uncontacted_leads} empty="No leads sitting uncontacted past 24h."
+            <DetailTable rows={details.uncontacted_leads} empty={snapshot?.leads_uncontacted_24h === null ? "Follow-up data is unavailable. Review coverage in Detailed reports." : "No leads sitting uncontacted past 24h."}
               columns={[
                 { header: "Lead", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> },
                 { header: "Source", cell: (r) => r.source ?? "—" },
@@ -666,9 +681,9 @@ export default function Account() {
                 { header: "Waiting", cell: (r) => fmtHours(r.hours_since), numeric: true },
               ]} />
           </Collapsible>
-          <Collapsible title={cappedTitle("Waiting conversations", snapshot?.convos_waiting, details.waiting_convos.length)}
+          <Collapsible title={snapshot?.convos_waiting === null ? "Waiting conversations · incomplete data" : cappedTitle("Waiting conversations", snapshot?.convos_waiting, details.waiting_convos.length)}
                        defaultOpen={firingTables.has("waiting")}>
-            <DetailTable rows={details.waiting_convos} empty="Nothing inbound is waiting 4h+."
+            <DetailTable rows={details.waiting_convos} empty={snapshot?.convos_waiting === null ? "Reply data is unavailable. Review coverage in Detailed reports." : "Nothing inbound is waiting 4h+."}
               columns={[
                 { header: "Contact", cell: (r) => <ExternalLink href={r.deep_link}>{r.contact}</ExternalLink> },
                 { header: "Channel", cell: (r) => r.channel ?? "—" },
@@ -1112,15 +1127,7 @@ export default function Account() {
           no logging). */}
       {details ? (
         <>
-          <Collapsible title={cappedTitle("Unassigned leads", snapshot?.leads_unassigned_7d, details.unassigned_leads.length)}
-                       defaultOpen={firingTables.has("unassigned")}>
-            <DetailTable rows={details.unassigned_leads} empty="Every new lead has an owner."
-              columns={[
-                { header: "Lead", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> },
-                { header: "Source", cell: (r) => r.source ?? "—" },
-                { header: "Created", cell: (r) => fmtDateTime(r.created_at) },
-              ]} />
-          </Collapsible>
+
 
           {/* missed_calls is optional (Tier 2) — old snapshots lack it, hence
               the ?? [] fallback and the explanatory empty-state wording */}
