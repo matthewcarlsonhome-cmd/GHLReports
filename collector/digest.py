@@ -309,8 +309,12 @@ def _account_card(info: dict) -> str:
 
 def _render_html(run_date: str, total: int, attention: list[dict],
                  steady_names: list[str], no_data: list[dict],
-                 mrr_at_risk: float, am_name: str = "") -> str:
-    """The full email body. One 600px card on a soft ground."""
+                 mrr_at_risk: float, am_name: str = "",
+                 cleared: list[tuple[str, str]] | None = None) -> str:
+    """The full email body. One 600px card on a soft ground.
+
+    `cleared` is (account name, line) for issues an AM note told this AM
+    about that have since cleared (automation.cleared_for_digest)."""
     esc = html.escape
     att_ct, steady_ct, nd_ct = len(attention), len(steady_names), len(no_data)
     preview = f"{att_ct} need attention · {steady_ct} steady · {nd_ct} no data"
@@ -366,6 +370,14 @@ def _render_html(run_date: str, total: int, attention: list[dict],
             f'check the Runs page</span></div>'
             for info in no_data)
         out.append(f'<tr><td style="padding:10px 32px 4px;">{rows}</td></tr>')
+    if cleared:
+        out.append(_section_heading(f"Cleared since your last alert ({len(cleared)})",
+                                    _GREEN, "#cfe9da"))
+        rows = "".join(
+            f'<div style="font-family:{_FONT};font-size:13px;line-height:1.5;color:{_BODY_TX};'
+            f'padding-top:6px;"><span style="color:{_GREEN};font-weight:700;">&#10003;</span>'
+            f'&nbsp; <b>{esc(name)}</b>: {esc(line)}</div>' for name, line in cleared)
+        out.append(f'<tr><td style="padding:8px 32px 4px;">{rows}</td></tr>')
 
     out.append(
         '<tr><td align="center" style="padding:26px 32px 8px;">'
@@ -384,9 +396,15 @@ def _render_html(run_date: str, total: int, attention: list[dict],
 def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
                   flags_by_loc: dict[str, list[dict]],
                   acked_by_loc: dict[str, set[str]],
-                  run_date: str) -> dict[str, dict]:
+                  run_date: str,
+                  cleared_by_loc: dict[str, list[str]] | None = None) -> dict[str, dict]:
     """{am_email: {subject, text, html}} for every AM with client accounts.
     Non-staff addresses are dropped outright.
+
+    cleared_by_loc: optional {location_id: [cleared lines]} from the AM
+    notes (automation.cleared_for_digest). The weekday notes never send a
+    "cleared" line on its own, so the digest is where a fix the AM was told
+    about gets closed out.
 
     Pure function — no network, no database. The inputs are exactly what
     store.read_portfolio returns for one date (subs plus per-location
@@ -425,9 +443,12 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
         attention: list[dict] = []
         steady_names: list[str] = []
         no_data: list[dict] = []
+        cleared: list[tuple[str, str]] = []
         mrr_at_risk = 0.0
         for sub in chunk:
             loc = sub["location_id"]
+            cleared += [(sub.get("name") or sub.get("slug") or loc, line)
+                        for line in (cleared_by_loc or {}).get(loc, [])]
             state, info = _account_summary(
                 sub, snapshots_by_loc.get(loc), flags_by_loc.get(loc, []),
                 acked_by_loc.get(loc, set()))
@@ -471,10 +492,14 @@ def build_digests(subs: list[dict], snapshots_by_loc: dict[str, dict],
             parts.extend(f"- {info['name']}: no data (token or gate) — check /runs"
                          for info in no_data)
             parts.append("")
+        if cleared:
+            parts.append("CLEARED SINCE YOUR LAST ALERT:")
+            parts.extend(f"- {name}: {line}" for name, line in cleared)
+            parts.append("")
         parts.append(f"Full picture: {DASHBOARD_URL}")
         text = "\n".join(parts)
         html_body = _render_html(run_date, len(chunk), attention,
-                                 steady_names, no_data, mrr_at_risk, am_name)
+                                 steady_names, no_data, mrr_at_risk, am_name, cleared)
         return {"subject": subject, "text": text, "html": html_body}
 
     digests: dict[str, dict] = {}

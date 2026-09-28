@@ -151,6 +151,26 @@ def _date_of(value) -> date | None:
         return None
 
 
+def missed_form_checks(form_checks: list[dict] | None, today: date | None,
+                       stale_after_days: int) -> list[dict]:
+    """Weekly form checks that did not land: the newest check is older than
+    `stale_after_days`, or it arrived without a CRM contact behind it.
+
+    Only forms whose check landed in the last 30 days appear in form_checks
+    (main.FORM_CHECK_ACTIVE_DAYS), so a test that was deliberately retired
+    stops counting on its own. Shared by FORM_CHECK_MISSED here and by the
+    AM notices (automation.py), so the email and the dashboard always name
+    the same forms.
+    """
+    missed = []
+    for check in form_checks or []:
+        at = _date_of(check.get("last_check_at"))
+        stale = today is not None and at is not None and (today - at).days > stale_after_days
+        if stale or check.get("contact_ok") is False:
+            missed.append(check)
+    return missed
+
+
 def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
                   sub: dict, today: date | None = None) -> list[dict]:
     """Evaluate every flag rule against one account's metrics.
@@ -256,10 +276,15 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
         # usual weekly volume; a dead-zero source escalates to red.
         current = by_source_now.get(source, 0)
         if current <= th["source_drop_factor"] * weekly_avg:
+            # The source rides along as the entity so each dropped source is
+            # its own issue for the AM notices (automation.py keys on it).
+            # A lead source is a channel label, never a person, and no
+            # deep_link means the dashboard renders nothing new for it.
             flags.append(_flag(
                 "SOURCE_DROP", "red" if current == 0 else "amber", f"Source drop: {source}",
                 f"Leads from {source} went from {weekly_avg:.1f}/wk to {current}. "
                 "Check that channel specifically (form, ad account, phone routing).",
+                entity_type="source", entity_name=source,
             ))
             source_flags += 1
 
@@ -538,16 +563,9 @@ def compute_flags(metrics: dict, thresholds: dict | None, details: dict,
 
     # FORM_CHECK_MISSED — a form under the weekly synthetic check
     # (docs/FORM-MONITORING.md) stopped receiving it, or the check arrived
-    # without a CRM contact behind it. Only forms whose check landed in the
-    # last 30 days appear in form_checks (main.FORM_CHECK_ACTIVE_DAYS), so a
-    # test that was deliberately retired stops flagging on its own.
-    stale_after = int(th["form_check_stale_days"])
-    missed = []
-    for check in form_health.get("form_checks") or []:
-        at = _date_of(check.get("last_check_at"))
-        stale = today is not None and at is not None and (today - at).days > stale_after
-        if stale or check.get("contact_ok") is False:
-            missed.append(check)
+    # without a CRM contact behind it. See missed_form_checks above.
+    missed = missed_form_checks(form_health.get("form_checks"), today,
+                                int(th["form_check_stale_days"]))
     if missed:
         names = ", ".join(c.get("name") or "?" for c in missed[:5])
         more = f" (+{len(missed) - 5} more)" if len(missed) > 5 else ""

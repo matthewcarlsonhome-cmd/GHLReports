@@ -36,56 +36,74 @@ def test_no_pii_reaches_any_stored_row():
     assert "leads_missing_phone_pct_7d" in snap
 
 
-def test_automation_payload_carries_no_contact_pii():
-    """The webhook bridge is the only path that sends data OUT of the app.
+def _two_night_note(day_kwargs):
+    """Run the AM-note logic for two nights on the same inputs and return the
+    payload of the note it produces on the second night."""
+    from datetime import date
+    from collector import automation
 
-    Whatever the flag layer produced, the payload that leaves the building
-    must never carry a lead's name, phone number, email, or message text.
+    settings = automation.Settings.from_env({
+        "AUTOMATION_WEBHOOKS": "on", "AUTOMATION_WEBHOOK_URL": "https://x.invalid/h",
+        "AM_NOTIFY_ALLOWLIST": "mcarlson@smallscreenproducer.com"})
+    sub = {"location_id": "locA", "slug": "acme", "name": "Acme Pools",
+           "am_email": "mcarlson@smallscreenproducer.com", "mlh_status": "active",
+           "alert_triggers": ["T1", "T2", "T3", "T4", "T6", "T7"],
+           "thresholds": {"slow_response_min": 2}, "alert_tracking_since": "2026-08-01"}
+    rows: dict = {}
+    notes = []
+    for night in (date(2026, 8, 25), date(2026, 8, 26)):
+        day = automation.AccountDay(sub=sub, today=night, gate_passed=True, **day_kwargs)
+        plan = automation.evaluate([day], rows, {}, set(), settings, night)
+        notes = [n for n in plan.notices if not n.status]
+        for note in notes:
+            note.payload = automation.compose(note, settings)
+            automation.commit(rows[note.location_id], note.items, note.cleared, night,
+                              note.audience)
+    assert len(notes) == 1
+    return notes[0].payload
+
+
+def test_am_note_carries_no_contact_pii():
+    """The GHL webhook is the only path that sends data OUT of the app.
+
+    Whatever the flag layer produced (contact names in actions and entities,
+    deal names that are customer names), the note that leaves the building
+    must carry counts and account-level facts only.
     """
-    from collector import automation
-
-    payload = automation.build_payload(
-        {"code": "SLOW_RESPONSE", "severity": "amber", "title": "Leads sitting uncontacted",
-         "action": "3 leads uncontacted for 2+ days.",
-         "entity_type": "contact", "entity_id": "cnt_123", "entity_name": "Maria Testani",
-         "deep_link": "https://crm.example.com/contacts/cnt_123"},
-        {"location_id": "locA", "slug": "acme", "name": "Acme Pools",
-         "am_email": "mcarlson@smallscreenproducer.com"},
-        {"opps_open": 4}, "2026-08-25")
-
-    for banned in ("entity_id", "deep_link", "phone", "contact_phone", "contact_email",
-                   "message", "body", "email"):
-        assert banned not in payload, f"{banned} must never leave the app"
-
+    payload = _two_night_note({
+        "metrics": {"leads_uncontacted_24h": 3, "convos_waiting": 6,
+                    "convos_waiting_max_hours": 30, "client_users": 4},
+        "flags": [
+            {"code": "CONVOS_WAITING", "severity": "red", "title": "Inbound conversations waiting",
+             "action": "6 inbound waiting, longest 30h. Oldest: Maria Testani.",
+             "entity_type": "conversation", "entity_id": "cnv_9", "entity_name": "Maria Testani",
+             "deep_link": "https://crm.example.com/conversations/cnv_9"},
+            {"code": "SLOW_RESPONSE", "severity": "amber", "title": "Leads sitting uncontacted",
+             "action": "3 leads uncontacted >24h.", "entity_type": "contact",
+             "entity_id": "cnt_123", "entity_name": "Jane Smith +16085551234",
+             "deep_link": "https://crm.example.com/contacts/cnt_123"},
+            {"code": "STALE_PIPELINE", "severity": "red", "title": "Stale pipeline",
+             "action": "4 deals idle 14d+.", "entity_type": "opportunity",
+             "entity_name": "Eric Dybala"},
+        ],
+        "form_rows": [], "form_checks": []})
     serialized = str(payload)
-    assert "Maria Testani" not in serialized, "a contact entity name must be dropped"
-    assert "cnt_123" not in serialized
-    assert "crm.example.com" not in serialized
+    for banned in ("Maria Testani", "Jane Smith", "Eric Dybala", "cnt_123", "cnv_9",
+                   "crm.example.com", *PII_CANARIES):
+        assert banned not in serialized, f"{banned!r} must never leave the app"
+    assert payload["am_email"].endswith("@smallscreenproducer.com")   # staff only
+    assert "customers waiting" in payload["subject"] or "going cold" in payload["subject"]
 
 
-def test_opportunity_names_are_dropped_because_they_are_usually_people():
-    """Live data check: GHL opportunity names are routinely the customer's
-    name, and STALE_PIPELINE attaches one. It must not reach the payload."""
-    from collector import automation
-
-    payload = automation.build_payload(
-        {"code": "STALE_PIPELINE", "severity": "amber", "title": "Stale pipeline",
-         "action": "4 deals idle 14d+. Re-engage.",
-         "entity_type": "opportunity", "entity_name": "Eric Dybala"},
-        {"location_id": "locA", "slug": "acme", "name": "Acme Pools"},
-        {"opps_open": 6, "opps_stale": 4}, "2026-08-25")
-    assert payload["entity_name"] == ""
-    assert "Dybala" not in str(payload)
-
-
-def test_form_names_still_come_through():
-    """The suppression must not gut the alerts that need a name to be useful."""
-    from collector import automation
-
-    payload = automation.build_payload(
-        {"code": "FORM_WENT_SILENT", "severity": "amber", "title": "Form went silent",
-         "action": "quiet 4 business days", "entity_type": "form",
-         "entity_name": "Hot Tub Brochure"},
-        {"location_id": "locA", "slug": "acme", "name": "Acme Pools"},
-        {}, "2026-08-25")
-    assert payload["entity_name"] == "Hot Tub Brochure"
+def test_form_names_and_pages_still_come_through():
+    """The PII rules must not gut the notes that need a name to be useful."""
+    payload = _two_night_note({
+        "metrics": {"client_users": 4},
+        "flags": [],
+        "form_rows": [{"kind": "form", "form_id": "f1", "name": "Hot Tub Brochure",
+                       "status": "silent", "channel": "Website form", "subs_30d": 12,
+                       "last_submission_at": "2026-08-16",
+                       "page_url": "https://acme.example/hot-tubs"}],
+        "form_checks": []})
+    assert '"Hot Tub Brochure" form went quiet' in payload["subject"]
+    assert "acme.example/hot-tubs" in payload["body_text"]

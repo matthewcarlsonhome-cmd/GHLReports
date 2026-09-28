@@ -1,8 +1,37 @@
 # Handoff — GHL Account Health Dashboard
 
-State as of **2026-09-22 (evening)**. Read this first in a new thread; the other
+State as of **2026-09-28**. Read this first in a new thread; the other
 docs (`DESIGN.md`, `ARCHITECTURE.md`, `GO-LIVE.md`, `FORMS-INTEGRATION.md`,
-`FORM-MONITORING.md`, `ACCOUNT-USAGE.md`) hold the detail.
+`FORM-MONITORING.md`, `ACCOUNT-USAGE.md`, `AM-NOTIFY-WORKFLOW-SPEC.md`) hold
+the detail.
+
+## Update 2026-09-28 (AM notes, Part A built)
+
+- **AM notes built** (`collector/automation.py`, migration 0014, spec build
+  notes at the top of `docs/AM-NOTIFY-WORKFLOW-SPEC.md`). One note per client
+  per day, only for what is new, worse, or due for a reminder; cleared lines
+  ride along or go in the Monday digest. Replaces the never-enabled Phase 1
+  bridge; `--weekly-alerts` is retired. No Supabase edge function exists:
+  the nightly Python job on Render makes the webhook call.
+- **Pilot picks** (from Matthew, 2026-09-28): Lauren = Flohr, Central Jersey
+  with T2 leads going cold, T3 customers left waiting, T4 website capture
+  broken. Lisa = Pettis, Liverpool, McKinney, AAA Spa & Pool; her alert
+  types are not chosen yet, so they start on the same three (provisional).
+  Stored in `subaccounts.alert_triggers`; T2 accounts also got
+  `thresholds.slow_response_min = 2`, so the dashboard shows SLOW_RESPONSE
+  from 2 leads for those six.
+- **September replay** (`--notify-preview 28` logic on stored data): 19 notes
+  in 28 nights (Lauren 10, Lisa 9) vs 102 for one email per account per night
+  while anything is open. T3 is a standing backlog at Central Jersey, Flohr
+  and McKinney (15 to 40 waiting every night).
+- **Still off.** Nothing sends until `AUTOMATION_WEBHOOKS` is `dry`/`on` and
+  `AM_NOTIFY_ALLOWLIST` is set in Render. Go-live order: dry 3 to 5 nights,
+  `--send-test`, update the "MC Account Health - Alerts" workflow (Draft;
+  needs a session on Matthew's computer with Chrome, steps in spec §4),
+  shadow week with `AM_NOTIFY_REDIRECT`, then live.
+- **GitHub Actions nightly job fails every day** (runs 35 to 39: missing
+  secrets). Render is the live scheduler. Disable the Actions schedule or
+  finish the cutover; GitHub emails Matthew on each failure.
 
 ## Update 2026-09-22 evening (branch `claude/lucid-gauss-vz1y98`)
 
@@ -90,11 +119,12 @@ call the client and book a review. Owner: Matthew Carlson
 - Communication to AMs: plain language, short, no tech terms (no "API",
   "PIT", "webhook"). AMs just need to know when a client needs a meeting.
 
-## Next up (as of 2026-09-22 close)
+## Next up (as of 2026-09-28)
 
-1. **AM notification workflow:** build per `docs/AM-NOTIFY-WORKFLOW-SPEC.md`
-   (Part A collector code + migration 0014 here; Part B GHL workflow via
-   Codex with Chrome, Draft only).
+1. **AM notes go-live:** Part A is built and deployed. Next: Matthew sets
+   `AUTOMATION_WEBHOOKS=dry` + `AM_NOTIFY_ALLOWLIST` in Render; Part B
+   (update the "MC Account Health - Alerts" workflow, Draft only) from a
+   session on Matthew's computer with Chrome; Lisa confirms her alert types.
 2. **Form cleanup list:** add a cleanup-candidate column to the form report
    (never used or quiet 60+ days, excluding standard snapshot forms such as
    Unsubscribe, A2P opt-in, How did we do?, booking). Matthew's team retires
@@ -125,11 +155,11 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Repo / branch | `matthewcarlsonhome-cmd/GHLReports`, `claude/gohighlevel-reports-build-l6hlc7` is main (default branch; Render and Netlify deploy from it). Matthew's rule: push straight to main, no pull requests. |
 | Supabase project | `tpavdifpsevkrubplyrg` (query via the Supabase MCP tool; direct HTTPS from the sandbox is blocked) |
 | Dashboard | https://mlhaccountreports.netlify.app — account pages are `/account/<location_id>` |
-| Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--weekly-alerts`, `--send-test`, `--probe`, `--form-urls`, `--form-activity`, `--account-usage`; `--include-non-mlh` adds the accounts marked non-MLH back |
+| Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--send-test`, `--notify-preview [DAYS]`, `--probe`, `--form-urls`, `--form-activity`, `--account-usage`; `--include-non-mlh` adds the accounts marked non-MLH back (`--weekly-alerts` is retired) |
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
-| Migrations | `supabase/migrations/0001`–`0013` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns); all applied live |
-| Tests | `python3 -m pytest collector/tests/ -q` → **193 passing** (branch `claude/lucid-gauss-vz1y98`) |
+| Migrations | `supabase/migrations/0001`–`0014` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns, 0014 = `alert_state` + `alert_triggers` + pilot seed) |
+| Tests | `python3 -m pytest collector/tests/ -q` → **208 passing** |
 | Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 
 ## Current state

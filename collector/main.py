@@ -17,8 +17,9 @@ library's argparse) and the orchestrator for the whole collector. A scheduler
 once a day. Everything else in the package is a supporting player:
 ``fetchers`` pulls raw records from the GoHighLevel (GHL) API, ``metrics``
 turns those records into numbers, ``flags`` scores the numbers against
-thresholds, ``store`` persists everything in Supabase (Postgres), and
-``digest`` emails a Monday summary to each account manager (AM).
+thresholds, ``store`` persists everything in Supabase (Postgres),
+``digest`` emails a Monday summary to each account manager (AM), and
+``automation`` sends the in-between-days AM notes through SSP's GHL workflow.
 
 In plain English, one normal daily run does this:
 
@@ -34,7 +35,10 @@ In plain English, one normal daily run does this:
 5. Run the "peer pass": once every snapshot is written, compute the median
    lead delta per vertical so each account is judged against its peers,
    then compute flags and diff them against last week's flags.
-6. On Mondays, send the AM digest emails; finally record run totals.
+6. AM notes (automation.notify_run): one note per client account, only for
+   what is new, worse, or due for a reminder; off unless AUTOMATION_WEBHOOKS
+   is dry or on.
+7. On Mondays, send the AM digest emails; finally record run totals.
 
 Exit codes (what the scheduler sees): 0 = every location collected and passed
 its sanity gate; 2 = at least one location was held or failed (partial data);
@@ -47,7 +51,10 @@ Key ideas to understand this file
   verify fetchers against the real API); ``--dry-run`` fetches and computes
   but writes and sends nothing (a rehearsal); ``--backfill N`` rebuilds N ISO
   weeks of lead_history from CRM history; ``--digest`` builds/sends the AM
-  email on demand. With no mode flag you get the normal collection run.
+  email on demand; ``--notify-preview [DAYS]`` replays stored history
+  through the AM-note logic and prints the notes (no writes, no sends);
+  ``--send-test`` posts one sample note to the GHL workflow. With no mode
+  flag you get the normal collection run.
 * Environment variables (settings injected by the shell or deploy config, not
   hard-coded) supply things like GHL_APP_BASE and TZ.
 * PIT — a GHL "Private Integration Token", the per-location API secret. PITs
@@ -1183,6 +1190,35 @@ def backfill_location(sub: dict, client: GHLClient, store, now_utc: datetime,
 # -- run ---------------------------------------------------------------------
 
 
+def build_monday_digests(store, run_date: date) -> tuple[dict, dict]:
+    """The per-AM digests for run_date, plus the AM-note "cleared" rows they
+    carry (automation.cleared_for_digest). Used by the Monday run and by
+    --digest. A missing alert_state table (migration 0014 not applied) just
+    means no cleared section."""
+    data = store.read_portfolio(run_date)
+    try:
+        cleared = automation.cleared_for_digest(store.read_alert_state(), data["subs"], run_date)
+    except Exception as exc:  # noqa: BLE001 — the digest must go out regardless
+        log(f"digest: cleared lines unavailable ({type(exc).__name__})")
+        cleared = {}
+    digests = digest_mod.build_digests(
+        data["subs"], data["snapshots_by_loc"], data["flags_by_loc"],
+        data["acked_by_loc"], run_date.isoformat(),
+        cleared_by_loc={loc: [row["cleared_text"] for row in rows]
+                        for loc, rows in cleared.items()})
+    return digests, cleared
+
+
+def _close_out_cleared(store, cleared: dict, sent: int, failed: int) -> None:
+    """Mark the digest's cleared lines delivered, but only when every digest
+    went out; otherwise they wait for the next note or next Monday."""
+    if cleared and sent and not failed:
+        try:
+            automation.mark_cleared_delivered(store, cleared)
+        except Exception as exc:  # noqa: BLE001 — bookkeeping must not fail the run
+            log(f"digest: cleared lines not marked delivered ({type(exc).__name__})")
+
+
 def resolve_location(subs: list[dict], key: str) -> dict | None:
     """Match a --location argument (raw location_id or friendly slug)."""
     for sub in subs:
@@ -1209,12 +1245,17 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     parser.add_argument("--backfill", type=int, metavar="N",
                         help="write N ISO weeks of lead_history from CRM history, then exit")
     parser.add_argument("--send-test", nargs="?", const="daily", choices=["daily", "weekly"],
-                        help="POST one sample alert to AUTOMATION_WEBHOOK_URL and exit "
-                             "(how the GHL workflow learns its field names). "
-                             "'weekly' sends the Monday pipeline shape instead.")
+                        help="POST one sample AM note (is_test = true) to "
+                             "AUTOMATION_WEBHOOK_URL and exit: how the GHL workflow learns "
+                             "its field names. The optional kind is accepted for old "
+                             "scripts and ignored (there is one note format now).")
     parser.add_argument("--weekly-alerts", action="store_true",
-                        help="send the weekly pipeline digest for --date (default today) "
-                             "from stored data, on any day of the week")
+                        help="retired: the weekly pipeline webhook send was replaced by "
+                             "the AM notes; the Monday digest carries the pipeline read")
+    parser.add_argument("--notify-preview", nargs="?", type=int, const=14, metavar="DAYS",
+                        help="replay the last DAYS nights (default 14) of stored data as "
+                             "if AM notes had been on, print every note, and exit; "
+                             "writes nothing, sends nothing")
     parser.add_argument("--digest", action="store_true",
                         help="build and send the per-AM digest from today's data, then exit "
                              "(with --dry-run: print instead of sending)")
@@ -1247,7 +1288,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     # token — only AUTOMATION_WEBHOOK_URL — so the workflow can be built and
     # tested before the rest of the bridge is configured.
     if args.send_test:
-        return automation.send_test_alert(kind=args.send_test, log=log)
+        return automation.send_test_notice(log=log)
 
     # Wire up real dependencies unless the tests injected fakes above.
     if store is None:
@@ -1264,12 +1305,21 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         log("COLLECTOR_KEY rejected by pit_key_ok — aborting (check Vault bootstrap and env)")
         return 1
 
-    # -- weekly-alerts mode ---------------------------------------------------
-    # Fire the Monday pipeline digest from stored snapshots on any day. Same
-    # kill switch and same already-sent dedupe as the nightly path.
+    # -- retired weekly-alerts mode -------------------------------------------
+    # The Monday pipeline webhook send went away with the AM notes (the new
+    # GHL workflow only accepts the account-note format). Kept as a flag so
+    # an old COLLECTOR_ARGS value logs a clear line instead of failing.
     if args.weekly_alerts:
-        tally = automation.send_weekly_alerts(store, run_date, log=log)
-        return 0 if tally["failed"] == 0 else 2
+        log("--weekly-alerts is retired: the Monday digest carries the pipeline read; "
+            "nothing sent")
+        return 0
+
+    # -- notify-preview mode ----------------------------------------------------
+    # Replay stored history through the AM-note logic in memory and print
+    # what each AM would have received. Reads the database only.
+    if args.notify_preview:
+        automation.preview(store, run_date, days=max(1, args.notify_preview), log=log)
+        return 0
 
     subs = store.load_subaccounts(active=True)
     if not subs:
@@ -1374,10 +1424,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     # calls at all). With --dry-run the emails are printed instead of sent —
     # the way to preview exactly what each AM would receive.
     if args.digest:
-        data = store.read_portfolio(run_date)
-        digests = digest_mod.build_digests(
-            data["subs"], data["snapshots_by_loc"], data["flags_by_loc"],
-            data["acked_by_loc"], run_date.isoformat())
+        digests, cleared = build_monday_digests(store, run_date)
         if not digests:
             log("digest: no AMs with client accounts; nothing to send")
             return 0
@@ -1389,6 +1436,7 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             return 0
         sent, digest_failed = digest_mod.send_digests(digests, log=log)
         log(f"digest: {sent} sent, {digest_failed} failed")
+        _close_out_cleared(store, cleared, sent, digest_failed)
         return 0 if digest_failed == 0 else 2
 
     # -- backfill mode ----------------------------------------------------------
@@ -1600,14 +1648,16 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
             f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
 
-    # Insight-to-Workflow Bridge (Phase 1): tell the SSP GoHighLevel workflow
-    # about anything that newly broke. Runs after every flag row is written so
-    # the audit trail can never claim an alert the dashboard cannot show, and
-    # is wrapped because a webhook problem must not fail a good collection.
+    # AM notes (automation.py): one note per client account per day, only for
+    # what is new, worse, or due for a reminder, POSTed to SSP's own GHL
+    # workflow. Runs after every flag row is written so a note can never name
+    # something the dashboard cannot show, and is wrapped because a
+    # notification problem must not fail a good collection. Off by default
+    # (AUTOMATION_WEBHOOKS).
     try:
-        automation.send_run_alerts(store, results, run_date, run_id=run_id, log=log)
+        automation.notify_run(store, results, run_date, run_id=run_id, log=log)
     except Exception as exc:                    # never fatal — see automation.py
-        log(f"automation: bridge failed ({type(exc).__name__}: {exc}); run continues")
+        log(f"notices: failed ({type(exc).__name__}); run continues")
 
     # Monday digest (Tier 2): sent at the end of the Monday run when SMTP is
     # configured. weekday() == 0 means Monday, judged by the snapshot date —
@@ -1615,14 +1665,12 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     # entry, and any other day skips this block entirely. (send_digests is a
     # no-op that logs when SMTP_USER / SMTP_PASS are unset.)
     if run_date.weekday() == 0:
-        data = store.read_portfolio(run_date)
-        digests = digest_mod.build_digests(
-            data["subs"], data["snapshots_by_loc"], data["flags_by_loc"],
-            data["acked_by_loc"], run_date.isoformat())
+        digests, cleared = build_monday_digests(store, run_date)
         if digests:
             sent, digest_failed = digest_mod.send_digests(digests, log=log)
             if sent or digest_failed:
                 log(f"digest: {sent} sent, {digest_failed} failed")
+            _close_out_cleared(store, cleared, sent, digest_failed)
 
     # Close out the run row: totals, an overall status (ok / partial /
     # failed), and a truncated error summary including any 429 counts.

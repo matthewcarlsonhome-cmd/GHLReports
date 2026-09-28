@@ -1,7 +1,58 @@
 # Spec: Account Health → Account Manager notifications
 
-Status: ready to build. Written 2026-09-22 for a Codex build session (repo
-access plus a Chrome connection to GoHighLevel). Owner: Matthew Carlson.
+Status: **Part A built 2026-09-28** (collector code, migration 0014, 208
+tests). Part B (the GHL workflow) is next and needs a session on Matthew's
+computer with Chrome. Written 2026-09-22; owner: Matthew Carlson.
+
+## Build notes (2026-09-28): what changed from this spec, and why
+
+Read these first; the sections below are the original spec, kept for the
+reasoning.
+
+1. **Per-account alert types instead of per-code switches.** Accounts opt
+   in with `subaccounts.alert_triggers` (T1 to T8, the types the AMs were
+   offered). `NOTIFY_RULES` maps each type onto flag codes with the §3.1
+   timings. Pilot (migration 0014): Flohr and Central Jersey (Lauren) and
+   Pettis, Liverpool, McKinney, AAA Spa & Pool (Lisa), all on T2, T3, T4.
+   Lisa's types are provisional until she picks.
+2. **T2 leads going cold** = the account's `slow_response_min` or more leads
+   from the past week with no call, text or email after 24 hours. The pilot
+   accounts set it to 2 ("two or more"), so the dashboard's SLOW_RESPONSE
+   and its Acknowledge button match the email.
+3. **T3 customers left waiting** is new (CONVOS_WAITING was "no" in §3.1):
+   5 or more customers waiting for a reply; red once the oldest waited a day.
+   It is a standing backlog at Central Jersey, Flohr and McKinney (15 to 40
+   every night in September), which is exactly the repeat-email risk the
+   state machine exists for.
+4. **T4 website capture broken** = FORM_SILENT (every form silent while other
+   leads arrive), FORM_CHECK_MISSED per form, and a website or landing-page
+   form quiet for 3 times its usual gap between leads (at least 4 days, and
+   it needs 3 or more leads in 30 days to know its pace). Ad forms are left
+   out (a paused ad is not broken capture) and so are forms renamed
+   "ZZ-RETIRE". "Form disappears" and "bypasses the CRM" need the site crawl
+   and are not built.
+5. **No silent seeding; told whom instead.** `alert_state.notified_to`
+   records who was told (the AM, the redirect, or `dry:` for a rehearsal).
+   A new audience hears each open issue once, so the dry run and the shadow
+   week never use up the real AM's first note. Issues open on the first
+   night an account is tracked are labelled ALREADY OPEN (their real start
+   is unknown); older ones say OPEN SINCE <date>.
+6. **Worse includes a doubling** of the number (T2, T3), not just amber to
+   red, and every WORSE or reminder item says what changed ("Up from 18 in
+   our last note"), so a follow-up never reads as a repeat.
+7. **Cleared lines close quietly when nothing was fixed** (a form ageing
+   into dormant, a zero-lead week turning into another alert); otherwise
+   they ride along with the next note or, failing that, the Monday digest's
+   new "Cleared since your last alert" section.
+8. **The weekly pipeline webhook send is retired** (`--weekly-alerts` logs
+   and exits); the new workflow accepts only `am_account_health` v2 and the
+   Monday digest carries the pipeline read.
+9. **`--notify-preview [DAYS]`** replays stored history in memory and prints
+   every note. September replay for the six pilot accounts: 19 notes in 28
+   nights (Lauren 10, Lisa 9) against 102 for "one email per account per
+   night while anything is open".
+10. Payload adds `headline` (the top item, subject-sized). Everything else
+    is §3.5.
 
 This replaces the per-flag "Phase 1 bridge" in `collector/automation.py`
 (one POST per flag, no reminders, no cleanup). That bridge was never switched
@@ -321,6 +372,21 @@ Keep the wording in one dict so Matthew can edit it without touching logic.
 ---
 
 ## 4. Part B: the GHL workflow (Chrome, SSP account only)
+
+**Update in place (2026-09-28).** The workflow already exists as "MC Account
+Health - Alerts" in the Small Screen Producer subaccount
+(`ZnckuEDPIcWu8fn72ppi`). Keep its Inbound Webhook trigger (the URL in
+Render stays valid) and rebuild the steps after it as in §4.4. Order:
+1. Set the workflow to Draft before editing.
+2. Deploy is done (main). Matthew runs `COLLECTOR_ARGS=--send-test` once
+   on Render, then clears it. In GHL, open the trigger, press Fetch sample
+   requests, pick the newest (`is_test` = true, `schema_version` = 2), save.
+3. Replace the old actions with §4.4 steps 1 to 5. Email subject
+   `{{inboundWebhookRequest.subject}}`, message
+   `{{inboundWebhookRequest.body_html}}` (fall back to `body_text` if the
+   preview shows raw tags).
+4. Leave it in Draft and report V1 to V4 (§4.5). Matthew publishes.
+The original "create" steps below still describe the target shape.
 
 ### 4.1 Before starting
 - Log in to the SSP agency view and switch to the **Small Screen Producer**

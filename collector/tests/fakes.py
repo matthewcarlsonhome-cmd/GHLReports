@@ -266,6 +266,11 @@ class FakeStore:
         self.token_status: dict = {}
         self.subaccount_updates: dict = {}
         self.runs: list = []
+        # AM notices (automation.py): alert_state rows keyed like the table's
+        # primary key, dashboard acks {location_id: {codes}}, and the audit log.
+        self.alert_state: dict = {}
+        self.acks: dict = {}
+        self.automation_sends: list = []
 
     def start_run(self):
         self.runs.append({"status": "running"})
@@ -362,6 +367,33 @@ class FakeStore:
         if row is not None:
             row["peer_median_delta_pct"] = peer_median_delta_pct
             row["peer_n"] = peer_n
+
+    # -- AM notices (same method names as store.Store) -------------------------
+
+    def read_alert_state(self):
+        return [dict(row) for row in self.alert_state.values()]
+
+    def save_alert_state(self, upserts, deletes):
+        for row in upserts:
+            self.alert_state[(row["location_id"], row["code"], row["entity_key"])] = dict(row)
+        for key in deletes:
+            self.alert_state.pop(tuple(key), None)
+
+    def mark_alert_tracking(self, location_ids, since):
+        # Writes through to the seed rows: this dict IS the fake database.
+        for sub in self.subs:
+            if sub["location_id"] in location_ids and not sub.get("alert_tracking_since"):
+                sub["alert_tracking_since"] = since.isoformat()
+
+    def read_active_acks(self, snapshot_date):
+        return {loc: set(codes) for loc, codes in self.acks.items()}
+
+    def read_notices_sent(self, snapshot_date):
+        return {row["location_id"] for row in self.automation_sends
+                if row["snapshot_date"] == snapshot_date.isoformat() and row["status"] == "sent"}
+
+    def record_automation_send(self, row):
+        self.automation_sends.append(row)
 
 
 # Canonical subaccount config rows for tests: the SSP parent ("locP") and one

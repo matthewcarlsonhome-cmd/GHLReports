@@ -31,13 +31,22 @@ services:
         sync: false
       - key: DIGEST_CC          # optional, comma list CC'd on every digest
         sync: false
-      # -- Insight-to-Workflow Bridge (Phase 1) --------------------------
-      # AUTOMATION_WEBHOOKS is the kill switch: off (default) sends nothing,
-      # dry logs what would have been sent, on delivers for real. Flip it here
-      # and press Trigger Run — no deploy needed.
+      # -- AM notes (collector/automation.py, docs/AM-NOTIFY-WORKFLOW-SPEC.md) --
+      # AUTOMATION_WEBHOOKS is the kill switch: off (default) does nothing,
+      # dry runs everything and logs the notes instead of posting them, on
+      # posts to the GHL workflow. Flip it here and press Trigger Run; no
+      # deploy needed.
       - key: AUTOMATION_WEBHOOKS
         value: "off"
       - key: AUTOMATION_WEBHOOK_URL   # the GHL Inbound Webhook URL — treat as a secret
+        sync: false
+      # Comma list of AM addresses allowed to receive notes. Empty = nobody.
+      # Pilot: lhoffman@, ldegner@, mcarlson@ (all @smallscreenproducer.com).
+      - key: AM_NOTIFY_ALLOWLIST
+        sync: false
+      # Shadow week only: send every note here instead, labelled with the AM
+      # it was meant for. Clear it to go live.
+      - key: AM_NOTIFY_REDIRECT
         sync: false
       # That is the complete secret set. PITs are in Supabase Vault, not here.
       #

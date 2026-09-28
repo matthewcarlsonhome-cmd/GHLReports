@@ -309,11 +309,22 @@ python -m collector.main --dry-run --location pilot1   # fetch + compute, write 
 python -m collector.main                   # full daily run (what the cron does)
 python -m collector.main --backfill 12     # (re)build lead_history charts
 python -m collector.main --digest --dry-run  # preview the per-AM digest emails
+python -m collector.main --notify-preview 14 # replay 14 nights of AM notes, send nothing
 
 # tests
 pytest collector/tests -q                  # collector suite (no network)
 cd web && npm run build                    # typecheck + production build
 ```
+
+**AM notes (alerts to account managers)**: one short email per client per
+day, only when something is new, gets worse, or is due for a reminder, sent
+through SSP's own GHL workflow (`collector/automation.py`). Off unless
+`AUTOMATION_WEBHOOKS` is `dry` or `on`. Which accounts and alert types:
+`subaccounts.alert_triggers` (e.g. `{T2,T3,T4}`). Who may receive:
+`AM_NOTIFY_ALLOWLIST`; shadow week: `AM_NOTIFY_REDIRECT`.
+`--notify-preview 14` replays the last 14 nights and prints every note
+without sending; `--send-test` posts one sample note so the GHL workflow
+learns its fields. Design and go-live steps: `docs/AM-NOTIFY-WORKFLOW-SPEC.md`.
 
 **Onboarding a new client is three steps** (no deploys): create the
 read-only PIT in that subaccount → add Vault secret

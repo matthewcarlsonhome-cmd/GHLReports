@@ -40,7 +40,7 @@ Key ideas to understand this file
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -58,6 +58,12 @@ def load_dotenv(path: str | Path = ".env") -> None:
         key, value = key.strip(), value.strip().strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = value
+
+
+def _json_ready(row: dict) -> dict:
+    """A copy of a row with date values as ISO strings, ready for the API."""
+    return {key: (value.isoformat() if isinstance(value, date) else value)
+            for key, value in row.items()}
 
 
 class StoreConfigError(RuntimeError):
@@ -241,60 +247,124 @@ class Store:
             "snapshot_date", snapshot_date.isoformat()).execute()
         return [row["code"] for row in (result.data or [])]
 
-    def read_prev_flag_codes(self, location_id: str, snapshot_date: date) -> list[str] | None:
-        """Flag codes from this location's most recent run BEFORE snapshot_date.
+    # -- AM notices (collector/automation.py, migration 0014) ------------------
+    # alert_state is the notices' memory: which issue each AM was told about,
+    # when, and at what severity. Only the collector writes it (service role);
+    # the dashboard can read it. These methods only move rows in and out;
+    # every decision lives in automation.py.
 
-        Returns None when there is no prior run at all, which the automation
-        bridge treats as "stay silent" — on a location's first run every flag
-        would look newly appeared, and announcing all of them at once is
-        exactly the storm the newly-appeared rule exists to prevent.
+    def read_alert_state(self) -> list[dict]:
+        """Every alert_state row (a handful per account)."""
+        return self._paged(lambda: self.client.table("alert_state").select("*").order(
+            "location_id").order("code").order("entity_key"))
 
-        Distinct from read_flags(), which asks about one specific date (the
-        dashboard diffs against exactly 7 days ago). Here the question is
-        "what did we see last time we looked", however long ago that was —
-        so a weekend gap or a skipped run does not resurface old alerts.
-        """
-        prior = self.client.table("snapshots").select("snapshot_date").eq(
-            "location_id", location_id).lt(
-            "snapshot_date", snapshot_date.isoformat()
-        ).order("snapshot_date", desc=True).limit(1).execute()
-        rows = prior.data or []
-        if not rows:
-            return None
-        return self.read_flags(location_id, date.fromisoformat(rows[0]["snapshot_date"]))
+    def save_alert_state(self, upserts: list[dict],
+                         deletes: list[tuple[str, str, str]]) -> None:
+        """Write the rows the run changed and drop the ones it forgot
+        (issues seen for one night only, never confirmed)."""
+        if upserts:
+            stamp = datetime.now(timezone.utc).isoformat()
+            rows = [{**_json_ready(row), "updated_at": stamp} for row in upserts]
+            self.client.table("alert_state").upsert(
+                rows, on_conflict="location_id,code,entity_key").execute()
+        for location_id, code, entity_key in deletes:
+            self.client.table("alert_state").delete().eq("location_id", location_id).eq(
+                "code", code).eq("entity_key", entity_key).execute()
 
-    def read_pipeline_snapshots(self, snapshot_date: date) -> list[dict]:
-        """Pipeline columns for every location on one date, for the weekly send.
+    def mark_alert_tracking(self, location_ids: list[str], since: date) -> None:
+        """Stamp alert_tracking_since on accounts seen by the notices for the
+        first time; issues open that night are marked as backlog."""
+        self.client.table("subaccounts").update(
+            {"alert_tracking_since": since.isoformat()}).in_(
+            "location_id", list(location_ids)).is_("alert_tracking_since", "null").execute()
 
-        The nightly Monday path reads these straight out of the run in memory;
-        this is the path for --weekly-alerts, which fires the same digest from
-        already-stored data on a day that is not a Monday.
-        """
-        result = self.client.table("snapshots").select(
-            "location_id,opps_open,opps_stale,opps_moved_30d,"
-            "bottleneck_stage,bottleneck_value_usd"
-        ).eq("snapshot_date", snapshot_date.isoformat()).execute()
-        return result.data or []
+    def read_active_acks(self, snapshot_date: date) -> dict[str, set[str]]:
+        """{location_id: flag codes an AM acknowledged on the dashboard whose
+        snooze still covers this date}."""
+        rows = self.client.table("flag_acks").select("location_id,code").gte(
+            "snooze_until", snapshot_date.isoformat()).execute().data or []
+        acked: dict[str, set[str]] = {}
+        for row in rows:
+            acked.setdefault(row["location_id"], set()).add(row["code"])
+        return acked
+
+    def read_notices_sent(self, snapshot_date: date) -> set[str]:
+        """Accounts that already got a delivered AM note on this date. A
+        same-day rerun skips them; the unique index from migration 0008 is
+        the backstop."""
+        rows = self.client.table("automation_sends").select("location_id").eq(
+            "snapshot_date", snapshot_date.isoformat()).eq("flag_code", "AM_NOTICE").eq(
+            "mode", "live").eq("status", "sent").execute().data or []
+        return {row["location_id"] for row in rows}
 
     def record_automation_send(self, row: dict) -> None:
-        """Append one automation audit row (see migration 0008)."""
+        """Append one automation audit row (migrations 0008 and 0014)."""
         self.client.table("automation_sends").insert(row).execute()
 
-    def read_sent_alert_keys(self, snapshot_date: date) -> set[tuple[str, str, str]]:
-        """Alerts already delivered for this date, as (location, code, entity).
+    def read_notice_history(self, location_ids: list[str], start: date,
+                            end: date) -> dict[tuple[str, str], dict]:
+        """Stored inputs for --notify-preview, keyed (location_id, ISO date):
+        {metrics, flags, form_rows, form_checks, gate_passed}.
 
-        Read once per run and used to skip anything already sent, so re-running
-        a day — which recomputes the same flags and would otherwise look newly
-        appeared all over again — cannot double-alert the team. The unique
-        index in migration 0008 is the backstop; this is the cheap check that
-        stops the duplicate POST from ever leaving the building.
+        Selects only the columns the notices read. In particular no
+        contact-level data: flag entity names are fetched for SOURCE_DROP
+        only (a lead-source label), never for codes whose entity is a person.
         """
-        result = self.client.table("automation_sends").select(
-            "location_id,flag_code,entity_name").eq(
-            "snapshot_date", snapshot_date.isoformat()).eq(
-            "status", "sent").execute()
-        return {(row["location_id"], row["flag_code"], row.get("entity_name") or "")
-                for row in (result.data or [])}
+        if not location_ids:
+            return {}
+        lo, hi = start.isoformat(), end.isoformat()
+        snaps = self._paged(lambda: self.client.table("snapshots").select(
+            "location_id,snapshot_date,gate_passed,client_users,leads_new_7d,"
+            "leads_trailing_avg,leads_delta_pct,leads_by_source_7d,leads_by_source_trailing,"
+            "leads_uncontacted_24h,convos_waiting,convos_waiting_max_hours,"
+            "form_submissions_7d,form_submissions_trailing_avg,social_accounts_expired,"
+            "opps_open,opps_moved_30d,form_health:details->form_health"
+        ).in_("location_id", location_ids).gte("snapshot_date", lo).lte(
+            "snapshot_date", hi).order("snapshot_date").order("location_id"))
+        flags = self._paged(lambda: self.client.table("flags").select(
+            "location_id,snapshot_date,code,severity"
+        ).in_("location_id", location_ids).gte("snapshot_date", lo).lte(
+            "snapshot_date", hi).neq("code", "SOURCE_DROP").order("snapshot_date").order("id"))
+        flags += self._paged(lambda: self.client.table("flags").select(
+            "location_id,snapshot_date,code,severity,entity_type,entity_name,title"
+        ).in_("location_id", location_ids).gte("snapshot_date", lo).lte(
+            "snapshot_date", hi).eq("code", "SOURCE_DROP").order("snapshot_date").order("id"))
+        forms = self._paged(lambda: self.client.table("form_health").select(
+            "location_id,snapshot_date,kind,form_id,name,status,channel,subs_30d,"
+            "last_submission_at,page_url"
+        ).in_("location_id", location_ids).gte("snapshot_date", lo).lte(
+            "snapshot_date", hi).eq("kind", "form").order("snapshot_date").order("id"))
+
+        history: dict[tuple[str, str], dict] = {}
+        for snap in snaps:
+            summary = snap.pop("form_health", None) or {}
+            history[(snap["location_id"], str(snap["snapshot_date"])[:10])] = {
+                "metrics": snap, "flags": [], "form_rows": [],
+                "form_checks": summary.get("form_checks") or [],
+                "gate_passed": bool(snap.get("gate_passed")),
+            }
+        for row in flags:
+            entry = history.get((row["location_id"], str(row["snapshot_date"])[:10]))
+            if entry is not None:
+                entry["flags"].append(row)
+        for row in forms:
+            entry = history.get((row["location_id"], str(row["snapshot_date"])[:10]))
+            if entry is not None:
+                entry["form_rows"].append(row)
+        return history
+
+    def _paged(self, build, page: int = 1000) -> list[dict]:
+        """All rows of a query, fetched page by page. PostgREST caps a
+        response at 1,000 rows, so anything that can grow is read this way.
+        `build` returns a fresh, ordered query each time."""
+        rows: list[dict] = []
+        offset = 0
+        while True:
+            chunk = build().range(offset, offset + page - 1).execute().data or []
+            rows += chunk
+            if len(chunk) < page:
+                return rows
+            offset += page
 
     def update_snapshot_changes(self, location_id: str, snapshot_date: date,
                                 flags_new: list[str], flags_resolved: list[str],
