@@ -90,6 +90,22 @@ call the client and book a review. Owner: Matthew Carlson
 - Communication to AMs: plain language, short, no tech terms (no "API",
   "PIT", "webhook"). AMs just need to know when a client needs a meeting.
 
+## Next up (as of 2026-09-22 close)
+
+1. **AM notification workflow:** build per `docs/AM-NOTIFY-WORKFLOW-SPEC.md`
+   (Part A collector code + migration 0014 here; Part B GHL workflow via
+   Codex with Chrome, Draft only).
+2. **Form cleanup list:** add a cleanup-candidate column to the form report
+   (never used or quiet 60+ days, excluding standard snapshot forms such as
+   Unsubscribe, A2P opt-in, How did we do?, booking). Matthew's team retires
+   forms manually in GHL (rename "ZZ-RETIRE", wait 2 weeks, delete).
+3. **Open questions:** AAA Pools pool-builder-ga/fb pages send leads under
+   two form ids (one not in Sites > Forms); `cwf-<locationId>` ids are
+   probably the chat widget (unconfirmed). Backyard Oasis: no client users,
+   not marked; ask Lisa whether to mark it non-MLH.
+4. Monday digest recipients (see the decision section below) and the
+   `REPORTS_*` GitHub secrets are still Matthew's to settle.
+
 ## Architecture (one paragraph)
 
 Python collector (`collector/`) runs nightly at 05:30 CT, reads each
@@ -106,7 +122,7 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 
 | Thing | Location |
 |---|---|
-| Repo / branch | `matthewcarlsonhome-cmd/GHLReports`, `claude/gohighlevel-reports-build-l6hlc7` (head `6aedabc`) |
+| Repo / branch | `matthewcarlsonhome-cmd/GHLReports`, `claude/gohighlevel-reports-build-l6hlc7` is main (default branch; Render and Netlify deploy from it). Matthew's rule: push straight to main, no pull requests. |
 | Supabase project | `tpavdifpsevkrubplyrg` (query via the Supabase MCP tool; direct HTTPS from the sandbox is blocked) |
 | Dashboard | https://mlhaccountreports.netlify.app — account pages are `/account/<location_id>` |
 | Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--weekly-alerts`, `--send-test`, `--probe`, `--form-urls`, `--form-activity`, `--account-usage`; `--include-non-mlh` adds the accounts marked non-MLH back |
