@@ -14,16 +14,22 @@ the detail.
   bridge; `--weekly-alerts` is retired. No Supabase edge function exists:
   the nightly Python job on Render makes the webhook call.
 - **Pilot picks** (from Matthew, 2026-09-28): Lauren = Flohr, Central Jersey
-  with T2 leads going cold, T3 customers left waiting, T4 website capture
-  broken. Lisa = Pettis, Liverpool, McKinney, AAA Spa & Pool; her alert
-  types are not chosen yet, so they start on the same three (provisional).
+  with T2 leads going cold and T3 customers left waiting. Lisa = Pettis,
+  Liverpool, McKinney, AAA Spa & Pool; her alert types are not chosen yet,
+  so they start on the same two (provisional). T4 website capture was
+  dropped the same day (migration 0015): form problems go to the GHL team.
   Stored in `subaccounts.alert_triggers`; T2 accounts also got
   `thresholds.slow_response_min = 2`, so the dashboard shows SLOW_RESPONSE
   from 2 leads for those six.
-- **September replay** (`--notify-preview 28` logic on stored data): 19 notes
-  in 28 nights (Lauren 10, Lisa 9) vs 102 for one email per account per night
-  while anything is open. T3 is a standing backlog at Central Jersey, Flohr
-  and McKinney (15 to 40 waiting every night).
+- **September replay** (`--notify-preview 28` logic on stored data, T2 and
+  T3): 16 notes in 28 nights (Lauren 10, Lisa 6) vs 95 for one email per
+  account per night while anything is open. T3 is a standing backlog at
+  Central Jersey, Flohr and McKinney (15 to 40 waiting every night). Pettis
+  gets no notes at all, so it tests nothing; consider swapping it.
+- **Proposed, not built (awaiting Matthew):** widen T2 to count leads that
+  got only automated replies (Liverpool: 88 to 93% of leads got no personal
+  reply from Sep 22 and no warning fired), a "Facebook leads stopped" alert,
+  and a "slow first personal reply" alert in place of T3.
 - **Still off.** Nothing sends until `AUTOMATION_WEBHOOKS` is `dry`/`on` and
   `AM_NOTIFY_ALLOWLIST` is set in Render. Go-live order: dry 3 to 5 nights,
   `--send-test`, update the "MC Account Health - Alerts" workflow (Draft;
@@ -162,7 +168,7 @@ also exists (`.github/workflows/collector.yml`) — cutover still pending.
 | Collector entry | `collector/main.py` — modes: nightly, `--digest`, `--send-test`, `--notify-preview [DAYS]`, `--probe`, `--form-urls`, `--form-activity`, `--account-usage`; `--include-non-mlh` adds the accounts marked non-MLH back (`--weekly-alerts` is retired) |
 | Flags / digest / alerts | `collector/flags.py`, `collector/digest.py`, `collector/automation.py` |
 | Tools | `collector/tools/` — `pit.py`, `find_client_contact.py`, `form_urls.py` (form → page URL from submissions), `find_embeds.py` (crawl client sites for GHL embeds) |
-| Migrations | `supabase/migrations/0001`–`0014` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns, 0014 = `alert_state` + `alert_triggers` + pilot seed) |
+| Migrations | `supabase/migrations/0001`–`0014` (0009 = AM names, 0010 = `v_portfolio.am_name`, 0011 = form `dormant`, 0012 = client/SSP user counts + view security fix, 0013 = `mlh_status` + form type columns, 0014 = `alert_state` + `alert_triggers` + pilot seed, 0015 = pilot without T4) |
 | Tests | `python3 -m pytest collector/tests/ tagchecker/tests/ -q` → **230 passing** |
 | Reports | `collector/tools/form_activity.py`, `account_usage.py`; `.github/workflows/reports.yml` |
 

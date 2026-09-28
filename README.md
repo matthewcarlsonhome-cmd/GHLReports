@@ -320,7 +320,7 @@ cd web && npm run build                    # typecheck + production build
 day, only when something is new, gets worse, or is due for a reminder, sent
 through SSP's own GHL workflow (`collector/automation.py`). Off unless
 `AUTOMATION_WEBHOOKS` is `dry` or `on`. Which accounts and alert types:
-`subaccounts.alert_triggers` (e.g. `{T2,T3,T4}`). Who may receive:
+`subaccounts.alert_triggers` (e.g. `{T2,T3}`). Who may receive:
 `AM_NOTIFY_ALLOWLIST`; shadow week: `AM_NOTIFY_REDIRECT`.
 `--notify-preview 14` replays the last 14 nights and prints every note
 without sending; `--send-test` posts one sample note so the GHL workflow

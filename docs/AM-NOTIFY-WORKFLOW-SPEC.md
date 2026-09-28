@@ -13,8 +13,10 @@ reasoning.
    in with `subaccounts.alert_triggers` (T1 to T8, the types the AMs were
    offered). `NOTIFY_RULES` maps each type onto flag codes with the §3.1
    timings. Pilot (migration 0014): Flohr and Central Jersey (Lauren) and
-   Pettis, Liverpool, McKinney, AAA Spa & Pool (Lisa), all on T2, T3, T4.
-   Lisa's types are provisional until she picks.
+   Pettis, Liverpool, McKinney, AAA Spa & Pool (Lisa), on T2 and T3. T4
+   was removed on 2026-09-28 (migration 0015): form problems are reported by
+   the GHL team, not AM notes, for now. Lisa's types are provisional until
+   she picks.
 2. **T2 leads going cold** = the account's `slow_response_min` or more leads
    from the past week with no call, text or email after 24 hours. The pilot
    accounts set it to 2 ("two or more"), so the dashboard's SLOW_RESPONSE
@@ -48,9 +50,10 @@ reasoning.
    and exits); the new workflow accepts only `am_account_health` v2 and the
    Monday digest carries the pipeline read.
 9. **`--notify-preview [DAYS]`** replays stored history in memory and prints
-   every note. September replay for the six pilot accounts: 19 notes in 28
-   nights (Lauren 10, Lisa 9) against 102 for "one email per account per
-   night while anything is open".
+   every note. September replay for the six pilot accounts on T2 and T3: 16
+   notes in 28 nights (Lauren 10, Lisa 6) against 95 for "one email per
+   account per night while anything is open". Pettis gets none (its only
+   September issues were form problems).
 10. Payload adds `headline` (the top item, subject-sized). Everything else
     is §3.5.
 
