@@ -1,6 +1,6 @@
 # Handoff: GHL Account Health Dashboard
 
-State as of **2026-09-28, end of day** (live checks at 16:10 to 16:20 UTC).
+State as of **2026-09-28** (pilot workflow and Render settings updated after Matthew's sample run; earlier database checks at 16:10 to 16:20 UTC).
 This is the file a new session starts from. Rules for agents are in
 `/AGENTS.md`; read them first. Detail lives in `CODE-MAP.md` (how the Python
 works), `AM-NOTIFY-WORKFLOW-SPEC.md` (AM notes), `SECURITY-SPEC.md`,
@@ -25,7 +25,7 @@ Hoffman (`lhoffman@`), Michael (`madams@`, out of scope for the pilot).
 | Database | Supabase `tpavdifpsevkrubplyrg` (Postgres, Vault for PITs, Auth) | Migrations 0001 to 0015 applied. No edge functions. |
 | Dashboard | Netlify, https://mlhaccountreports.netlify.app (`/account/<location_id>`) | Live, deploys on every push. |
 | Monday digest | the collector, over SMTP (`SMTP_USER` = Matthew's Workspace account, the sender) | Since commit `5c0a894`, goes to **nobody** unless `DIGEST_REDIRECT` or `DIGEST_ALLOWLIST` is set. |
-| AM notes | the collector POSTs one message per client account to the GHL Inbound Webhook workflow "MC Account Health - Alerts" in SSP's own subaccount (`ZnckuEDPIcWu8fn72ppi`), which emails the AM | Code built and deployed (Part A). **Off.** Workflow not yet rebuilt (Part B). |
+| AM notes | the collector POSTs one message per client account to the GHL Inbound Webhook workflow "MC Account Health - Alerts" in SSP's own subaccount (`ZnckuEDPIcWu8fn72ppi`), which emails the AM | **Dry mode configured; sends nothing.** Workflow rebuilt and saved in Draft; rendering/contactless validation remains open (§3.9). |
 
 ## 3. Current state
 
@@ -47,11 +47,12 @@ Hoffman (`lhoffman@`), Michael (`madams@`, out of scope for the pilot).
   Services (her types are provisional until she picks).
 - T4 website capture was dropped (migration 0015): form problems go to the
   GHL team, not AM notes, for now.
-- Live check after run 44: `alert_state` 0 rows, `automation_sends` 0 rows,
+- Earlier live check after run 44: `alert_state` 0 rows, `automation_sends` 0 rows,
   no account has `alert_tracking_since`. So the notes have never run in dry
   or on mode: `AUTOMATION_WEBHOOKS` is off in Render, or its settings were
   rejected (the run log would then have a `notices: ...; nothing sent`
-  line).
+  line). Dry mode was configured later that day (§3.4); no subsequent
+  nightly run or state-table result has been verified yet.
 - Design in one paragraph: each issue (account, code, form) is a row in
   `alert_state`. It must show on 2 nightly runs (T2, T3) before anyone hears
   about it; then the AM is told once. After that they hear again only when
@@ -73,30 +74,28 @@ Monday still sends a second digest to whoever is chosen (next step C3).
 
 ### 3.4 Render settings: live status and intended test configuration
 
-Chrome recheck on 2026-09-28: `AUTOMATION_WEBHOOKS=off`.
-`AM_NOTIFY_ALLOWLIST`, `AM_NOTIFY_REDIRECT`, `DIGEST_ALLOWLIST`,
-`DIGEST_REDIRECT`, and `COLLECTOR_ARGS` are absent. No linked environment
-groups are shown. Both email paths therefore currently send to nobody;
-a Matthew-only shadow setup has **not** been enabled. The table below is
-an intended test configuration, not a claim about current values.
+Chrome update and read-back on 2026-09-28: `AUTOMATION_WEBHOOKS=dry`,
+`AM_NOTIFY_ALLOWLIST=ldegner@smallscreenproducer.com,lhoffman@smallscreenproducer.com`,
+and `AM_NOTIFY_REDIRECT=mcarlson@smallscreenproducer.com`. Saved with
+"Save and apply on next run"; no run was triggered by the agent.
+`DIGEST_ALLOWLIST`, `DIGEST_REDIRECT`, and `COLLECTOR_ARGS` remain absent.
+No linked environment groups are shown. Both email paths send to nobody:
+notes only rehearse, and digest recipients remain unset. The Matthew-only
+shadow week has **not** started. The SSP workflow is Saved / Draft with
+the v2 guards and routes built; see §3.9 for remaining checks.
 
-The SSP workflow remains Saved / Draft. It still shows the legacy
-Create contact, PIPELINE_WEEKLY condition, task, and Matthew notification
-structure. The v2 Test?/Valid?/AM route flow still needs completion.
-Do not confuse the earlier notification-formatting edits with that rebuild.
-
-| Setting | Intended test value | Meaning |
+| Setting | Current value | Meaning |
 |---|---|---|
-| `DIGEST_REDIRECT` | `mcarlson@smallscreenproducer.com` | every AM's digest goes only to Matthew, labelled "[for Lauren]" |
+| `DIGEST_REDIRECT` | absent | digest sending remains disabled with the empty allowlist |
 | `DIGEST_ALLOWLIST` | empty | with no redirect, only listed AMs get their digest; empty = nobody |
 | `DIGEST_CC` | empty | dropped under a redirect; otherwise each address must be allowlisted |
-| `AUTOMATION_WEBHOOKS` | `off` (`dry` is safe: it logs notes, sends nothing) | kill switch for AM notes |
-| `AM_NOTIFY_ALLOWLIST` | Lauren's and Lisa's addresses, when notes are tested | whose notes are written; empty = nobody |
+| `AUTOMATION_WEBHOOKS` | `dry` | logs proposed notes, sends nothing |
+| `AM_NOTIFY_ALLOWLIST` | `ldegner@smallscreenproducer.com,lhoffman@smallscreenproducer.com` | whose notes are included in the rehearsal |
 | `AM_NOTIFY_REDIRECT` | `mcarlson@smallscreenproducer.com` | every note goes to Matthew, labelled; the payload's `route` becomes `matthew` |
 | `AUTOMATION_WEBHOOK_URL` | set by Matthew only | secret; never in chat, files or logs |
 | `COLLECTOR_ARGS` | empty except during a one-off run | empty + Trigger Run = full nightly run (on Mondays, digest included) |
 
-**Switching the AMs on when the pilot starts** (Matthew's call, not an
+**Switching the AMs on after validation and the shadow week** (Matthew's call, not an
 agent's): digest: clear `DIGEST_REDIRECT`, set `DIGEST_ALLOWLIST` to the
 pilot AMs' addresses. Notes: clear `AM_NOTIFY_REDIRECT` (the allowlist
 already names the pilot AMs). Both take effect on the next run, no deploy.
@@ -186,6 +185,51 @@ four summary cards, positive-only unassigned leads, small baseline wording,
 oldest reply age, and failed-contact-source masking. Preview data and
 screenshots are kept outside the public repository.
 
+### 3.9 GHL pilot draft rebuilt (2026-09-28)
+
+Matthew confirmed he ran `COLLECTOR_ARGS=--send-test` and removed the setting.
+The new sample was available in Draft (`is_test=true`, `schema_version=2`)
+and all contract fields were verified in the mapping picker. The existing
+Inbound Webhook trigger and its URL were retained.
+
+Replaced legacy Create contact, PIPELINE_WEEKLY condition, weekly digest
+notification, task, and alert notification with:
+- **Test?**: `is_test` is `true` -> end; Live request -> Valid?.
+- **Valid?**: `event` is `am_account_health` AND `schema_version` is `2`.
+  Valid -> Route; unexpected -> Matthew-only in-app notification -> end.
+- **Route**: `lauren`, `lisa`, `matthew` -> one Internal Notification email
+  to **Lauren Degner**, **Lisa Hoffman**, **Matthew Carlson**, respectively.
+  Unknown -> Matthew-only in-app notification -> end.
+- Each email uses From name `Account Health`, subject
+  `{{inboundWebhookRequest.subject}}`, body `{{inboundWebhookRequest.body_html}}`.
+  GHL required a From email when a From name is set, so the configured
+  sender is `mcarlson@smallscreenproducer.com`. Sender delivery is untested.
+  Particular user only; no CC/BCC or follower notifications.
+- No contact creation, tasks, tags, opportunities, or client-account writes.
+  Allow re-entry is on; Stop on response is off. Saved / Draft confirmed.
+
+**Validation is incomplete; do not publish yet.**
+- V1 (contactless mapped email): unverified. This editor exposes Send test
+  mail, but no non-sending Preview was found, including its expanded and
+  source-code views. No email test was sent by the agent.
+- V2 (mapped HTML rendering): unverified for the same reason. The HTML
+  field is saved; do not claim the delivered layout was checked or switch
+  to body_text without evidence that HTML escapes.
+- V3: passed. New sample fetched/selected and saved while in Draft.
+- V4: the trigger states it is premium and incurs additional charges per
+  execution; no numeric rate was displayed. Exact price remains unverified.
+- Both in-app actions required Redirect page; only Contact, Conversation,
+  and Opportunity were offered. Contact was selected to save the draft.
+  There is no contact context, so their delivery/deep link is unverified.
+  Resolve this before publishing; use the spec §6.1 dedicated SSP contact
+  fallback if validation proves it necessary.
+
+An explicit request for permission to send exactly one test email to Matthew
+was presented after the draft was complete. No approval had arrived when
+this entry was written. Never treat this note as send authorization.
+Dry-run settings are saved (§3.4); 3 to 5 nightly rehearsals remain to be
+observed. No workflow was published and no live delivery was enabled.
+
 ## 4. Next steps
 
 Order: A before B. C to F can run in parallel with B. Items marked
@@ -209,14 +253,16 @@ Order: A before B. C to F can run in parallel with B. Items marked
   Date each result in this file.
 
 ### B. AM notes go-live (spec §4 and §5)
-- **B1. Dry run.** `AUTOMATION_WEBHOOKS=dry`, allowlist and redirect as in
+- **B1. Dry run (settings saved; observations pending).** `AUTOMATION_WEBHOOKS=dry`, allowlist and redirect as in
   §3.4. Run 3 to 5 nights. Check each morning: the Render log has a line
   `notices: 0 sent, N dry, ...` (N can be 0 on the first night, since an
   issue needs two nights), and the notes logged above it read well.
   `select code, status, count(*) from alert_state group by 1, 2;` shows
   rows. Each pilot account gets at most one note a night and the same issue
   does not repeat night to night.
-- **B2. Update the "MC Account Health - Alerts" workflow** (Part B, spec
+- **B2. Validate the rebuilt "MC Account Health - Alerts" draft** (current
+  findings in §3.9). Build steps below are retained as the procedure;
+  steps 1 to 4 are complete. Do not rebuild again. (Part B, spec
   §4.4), in Draft only. Needs an agent with a browser connected to
   Matthew's logged-in Chrome, or Matthew by hand. Order matters:
   1. Confirm the account on screen is Small Screen Producer. Set the
