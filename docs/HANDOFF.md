@@ -25,7 +25,7 @@ Hoffman (`lhoffman@`), Michael (`madams@`, out of scope for the pilot).
 | Database | Supabase `tpavdifpsevkrubplyrg` (Postgres, Vault for PITs, Auth) | Migrations 0001 to 0015 applied. No edge functions. |
 | Dashboard | Netlify, https://mlhaccountreports.netlify.app (`/account/<location_id>`) | Live, deploys on every push. |
 | Monday digest | the collector, over SMTP (`SMTP_USER` = Matthew's Workspace account, the sender) | Since commit `5c0a894`, goes to **nobody** unless `DIGEST_REDIRECT` or `DIGEST_ALLOWLIST` is set. |
-| AM notes | the collector POSTs one message per client account to the GHL Inbound Webhook workflow "MC Account Health - Alerts" in SSP's own subaccount (`ZnckuEDPIcWu8fn72ppi`), which emails the AM | **Dry mode configured; sends nothing.** Workflow rebuilt and saved in Draft; rendering/contactless validation remains open (§3.9). |
+| AM notes | the collector POSTs one message per client account to the GHL Inbound Webhook workflow "MC Account Health - Alerts" in SSP's own subaccount (`ZnckuEDPIcWu8fn72ppi`), which emails the AM | **Routine delivery in dry mode.** One owner-approved synthetic email delivered to Matthew at 16:35 CDT. Workflow returned to Draft; email/contactless rendering verified, exception-link validation still open (§3.9). |
 
 ## 3. Current state
 
@@ -203,18 +203,22 @@ notification, task, and alert notification with:
 - Each email uses From name `Account Health`, subject
   `{{inboundWebhookRequest.subject}}`, body `{{inboundWebhookRequest.body_html}}`.
   GHL required a From email when a From name is set, so the configured
-  sender is `mcarlson@smallscreenproducer.com`. Sender delivery is untested.
+  sender is `mcarlson@smallscreenproducer.com`; the test reached the work inbox.
   Particular user only; no CC/BCC or follower notifications.
 - No contact creation, tasks, tags, opportunities, or client-account writes.
   Allow re-entry is on; Stop on response is off. Saved / Draft confirmed.
 
-**Validation is incomplete; do not publish yet.**
-- V1 (contactless mapped email): unverified. This editor exposes Send test
-  mail, but no non-sending Preview was found, including its expanded and
-  source-code views. No email test was sent by the agent.
-- V2 (mapped HTML rendering): unverified for the same reason. The HTML
-  field is saved; do not claim the delivered layout was checked or switch
-  to body_text without evidence that HTML escapes.
+**Email validation completed with Matthew's explicit approval; routine
+delivery remains disabled pending the rehearsals and exception checks.**
+- V1 (contactless mapped email): passed in the approved webhook delivery
+  test at 16:35 CDT. GHL traversed Live request -> Valid account health ->
+  Matthew -> Matthew's email action (Success), then finished. No Find/Create
+  Contact action exists. The email arrived in Matthew's work Gmail inbox.
+- V2 (mapped HTML rendering): passed in the received email. Styled account
+  header, colored issue cards, waiting duration, next steps, and links rendered;
+  no raw HTML tags or unresolved subject/body variables. Keep body_html.
+  This editor has no non-sending preview, so verification used the specifically
+  approved synthetic delivery, not GHL's Test workflow or Send test mail buttons.
 - V3: passed. New sample fetched/selected and saved while in Draft.
 - V4: the trigger states it is premium and incurs additional charges per
   execution; no numeric rate was displayed. Exact price remains unverified.
@@ -232,11 +236,17 @@ SAMPLE payload through the normal Matthew route (`is_test=false`), with a
 TEST subject. It accepts only Matthew's exact address, does not collect live
 data or send digests, and exits. It deliberately bypasses dry mode only for
 this explicitly invoked test. Normal `--send-test` remains mapping-only.
-Delivery execution is pending at this commit; authorization is for this one
-send, not recurring test runs. Clear COLLECTOR_ARGS after the run and return
-the workflow to Draft after checking execution. Do not turn normal delivery on.
+Exactly one Render run used this command at 16:35 CDT. The webhook returned
+HTTP 200; GHL's Matthew email action succeeded at 16:35:33. The received
+email was opened and visually checked in `mcarlson@smallscreenproducer.com`'s
+work inbox. No other recipient was used. COLLECTOR_ARGS was removed and its
+absence verified; the workflow was returned to Saved / Draft. Authorization
+was consumed by this one send, not recurring test runs. Normal delivery was
+not turned on. The sample includes a historical form example solely to
+exercise the HTML template; forms remain excluded from the live pilot.
 Dry-run settings are saved (§3.4); 3 to 5 nightly rehearsals remain to be
-observed. No workflow was published and no live delivery was enabled.
+observed. Matthew published temporarily for the test; the agent restored Draft.
+No routine live delivery was enabled. Tests: 241 Python and 14 web pass.
 
 ## 4. Next steps
 
