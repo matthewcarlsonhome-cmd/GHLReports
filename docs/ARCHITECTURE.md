@@ -146,8 +146,9 @@ on day one. Safe to rerun.
   content/social is not sold; relationship without a client contact id)
   never count against the gate.
 - **Gate**: G1 location identity, G2 <2 unavailable, G3 <2 partial, G4
-  sudden all-zero held unless the previous three gate-passed snapshots were
-  also all-zero. Held snapshots store `gate_passed=false`; the UI shows
+  sudden all-zero held unless the previous three snapshots (held ones
+  included, so a genuinely quiet account can prove itself) were also
+  all-zero. Held snapshots store `gate_passed=false`; the UI shows
   "no data", never zeros.
 - **Live baseline** (v3): trailing average computed from the 28 days of CRM
   history before the 7d window — no waiting period. `trailing_n` counts only
@@ -165,7 +166,8 @@ stale/stuck/no-next-step pipeline states with per-account `opp_idle_days` /
 14–42d lead→opp cohort; appointment booked/showed/no-show; social-account
 expiry counts; flag change tracking; per-form/per-survey health
 (`classify_form`, business-day silence clock — weekends never count);
-pipeline movement over 30 days (created / stage-changed / closed); and the
+pipeline movement over 30 days (stage-changed or closed; newly created deals do
+not count, since ads create them automatically); and the
 chart aggregates, always over the FULL opportunity set: stage distribution
 (count, idle count, value, idle value, median days in stage, orphaned-stage
 detection), idle-time aging buckets, weekly won/lost, pipeline-setup hygiene
