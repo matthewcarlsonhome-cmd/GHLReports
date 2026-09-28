@@ -1,8 +1,10 @@
 // database.types.ts — TypeScript mirrors of every table and view this app reads.
 //
-// Hand-written to match supabase/migrations/0001_init.sql (spec v3 section 6).
-// Regenerate with `supabase gen types typescript` once the project exists, or
-// keep this in sync by hand — the SQL migration is the source of truth.
+// Hand-written to match supabase/migrations/0001_init.sql (spec v3 section 6)
+// plus the columns and tables later migrations added (0002 onward). Regenerate
+// with `supabase gen types typescript`, or keep this in sync by hand: the SQL
+// migrations are the source of truth. Some row types list only the columns
+// this app reads.
 //
 // Reading tips for newcomers:
 // - These are compile-time-only declarations; nothing here runs in the browser.

@@ -58,6 +58,11 @@ SCOPE_HINTS = [
 # The only POST endpoints we will ever hit. GHL implements a few *search*
 # operations as POST (the filter body is too rich for a query string), but
 # they are still read-only. Anything else POSTed would be a write — refused.
+# Caution: request() matches these as path PREFIXES, so any POST under
+# /social-media-posting/ passes, including GHL endpoints that create posts.
+# Today only the PIT's read-only scopes stop such a call; exact-path matching
+# is planned (docs/SECURITY-SPEC.md SEC-11). Never add a prefix here without
+# checking every endpoint underneath it.
 ALLOWED_POST_PATHS = ("/contacts/search", "/social-media-posting/")
 
 
@@ -157,6 +162,12 @@ class GHLClient:
 
         Every string that can leave this module inside an exception passes
         through here, so the secret can never reach logs or reports.
+
+        Known gap: only the exact token text is replaced. A token pasted with
+        a control character inside it (a line break, a tab) makes `requests`
+        reject the header and echo it in escaped form, which does not match
+        and so survives (docs/SECURITY-SPEC.md SEC-12). Keep tokens to one
+        printable word until that is fixed.
         """
         if self._token and self._token in text:
             text = text.replace(self._token, "***TOKEN***")

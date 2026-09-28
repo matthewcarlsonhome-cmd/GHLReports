@@ -196,7 +196,11 @@ def collect_book(store, subs: list[dict], days: int = 30,
 
 
 def rows_to_csv_text(rows: list[dict]) -> str:
-    """The finished CSV as one string (header + every row)."""
+    """The finished CSV as one string (header + every row).
+
+    Page titles come from site visitors and are written as-is; see SEC-13
+    in docs/SECURITY-SPEC.md before opening the file in a spreadsheet.
+    """
     import io
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, lineterminator="\n")
@@ -206,6 +210,9 @@ def rows_to_csv_text(rows: list[dict]) -> str:
 
 
 def main() -> None:
+    """CLI entry point (local runs): needs the collector's .env, writes the
+    CSV, exits 1 when any account could not be read. Leave --keep-query off
+    unless you need it: query strings can carry a visitor's own details."""
     parser = argparse.ArgumentParser(prog="form_urls", description=(
         "Map forms to the page URLs they were submitted from (read-only)."))
     parser.add_argument("--location", help="one slug; default: every active account")

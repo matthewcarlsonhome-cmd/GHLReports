@@ -19,6 +19,18 @@
 # REPORTS_ prefix is deliberate: the nightly collector workflow reads the
 # unprefixed names, and filling those would start a second nightly run next
 # to Render. PITs stay in the Supabase Vault.
+#
+# Security notes (details and fixes in docs/SECURITY-SPEC.md):
+#   * This repository is public, so the log and the reports artifact can be
+#     read by anyone. The CSVs hold form names, page titles and the names of
+#     client staff users. Make the repository private before adding the
+#     REPORTS_* secrets (SEC-01).
+#   * The push trigger runs on ANY branch, with these secrets. The service
+#     role key plus COLLECTOR_KEY together unlock every client's PIT, so move
+#     the secrets into a GitHub Environment limited to the default branch
+#     (SEC-02).
+#   * Dispatch inputs and the request file reach the command line only after
+#     the allow-list check in "Choose report flags" below.
 name: Reports
 
 on:
@@ -57,6 +69,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r collector/requirements.txt
 
+      # Turn the dispatch form (or the first line of .github/reports-request.txt
+      # on a push) into collector flags. Inputs arrive as environment
+      # variables, never pasted into the script, and every token is checked
+      # against an allow-list before it is written to the step output.
       - name: Choose report flags
         id: flags
         env:
@@ -90,6 +106,10 @@ jobs:
           echo "args=$flags" >> "$GITHUB_OUTPUT"
           echo "report flags: $flags"
 
+      # Skips with a warning (and exits 0) when the REPORTS_* secrets are not
+      # set, which is the case today. The flags are placed straight into the
+      # command line below; that is only safe because of the allow-list step
+      # above (passing them through an env variable would be safer; SEC-15).
       - name: Run reports
         env:
           SUPABASE_URL: ${{ secrets.REPORTS_SUPABASE_URL }}
@@ -104,6 +124,9 @@ jobs:
           fi
           python -m collector.main ${{ steps.flags.outputs.args }} --report-dir reports
 
+      # Upload the CSVs even when a report failed part way (always()), kept
+      # for 14 days. In a public repository any signed-in GitHub user can
+      # download this artifact (SEC-01).
       - uses: actions/upload-artifact@v4
         if: always()
         with:

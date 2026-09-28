@@ -50,7 +50,7 @@ function TokenHealth({ subs }: { subs: SubaccountRow[] }) {
             { header: "Rotated", cell: (r) => r.token_rotated_at ?? "never" },
             {
               // The fix is literal instructions, keyed to the exact Vault
-              // secret name for this account.
+              // secret name for this account (a name, never the secret).
               header: "Action",
               cell: (r) =>
                 r.token_status !== "ok"
@@ -74,6 +74,11 @@ export default function Runs() {
 
   // One-time load on mount. Promise.all runs both queries concurrently; the
   // IIFE wrapper exists because useEffect's callback itself can't be async.
+  // Error text in runs and subaccounts was written by the collector after it
+  // strips the GHL token from messages (ghl_client.sanitize). Tokens live in
+  // Vault and only ever sit in the collector's memory, so nothing secret
+  // should appear on this page; if one ever does, treat it as a leak and
+  // rotate it (docs/SECURITY-SPEC.md SEC-12).
   useEffect(() => {
     (async () => {
       const [runsRes, subsRes] = await Promise.all([

@@ -118,8 +118,6 @@ const FLAG_TABLE: Record<string, string> = {
   NO_DELIVERY: "publishes",
 };
 
-// Everything the page loads, bundled so a single setData() swap keeps all
-// pieces consistent with each other (no half-updated renders).
 // Slim slice of a week-old snapshot, for the change scorecard. Selecting
 // only these columns keeps the extra query light (no details blob).
 type PrevSnapshot = Pick<SnapshotRow,
@@ -127,6 +125,8 @@ type PrevSnapshot = Pick<SnapshotRow,
   | "speed_to_lead_median_min" | "calls_missed_7d" | "convos_waiting"
   | "leads_uncontacted_24h" | "opps_moved_30d" | "opps_won_7d">;
 
+// Everything the page loads, bundled so a single setData() swap keeps all
+// pieces consistent with each other (no half-updated renders).
 type Loaded = {
   sub: SubaccountRow;
   snapshot: SnapshotRow | null;
@@ -142,9 +142,6 @@ type Loaded = {
   prevFormHealth: FormHealthRow[];
 };
 
-// Expand/collapse wrapper for the detail tables. `defaultOpen` is only the
-// *initial* value (used to auto-open tables tied to firing flags); after
-// mount the user's clicks own the state.
 // Drill-down section titles show the TRUE metric count. The row list under
 // them is capped at 50 for row-size reasons, so an account with 300 stale
 // deals must read "(300 — top 50 shown)", never a misleading "(50)".
@@ -221,6 +218,9 @@ function ChangeScorecard({ snapshot, prev, silentNow, silentPrev, showForms }: {
   );
 }
 
+// Expand/collapse wrapper for the detail tables. `defaultOpen` is only the
+// *initial* value (used to auto-open tables tied to firing flags); after
+// mount the user's clicks own the state.
 function Collapsible({ title, defaultOpen, children }: {
   title: string; defaultOpen: boolean; children: ReactNode;
 }) {
@@ -492,6 +492,8 @@ export default function Account() {
   const firingTables = new Set(unacked.map((f) => FLAG_TABLE[f.code]).filter(Boolean));
 
   // Insert an acknowledgement, then reload so the flag moves to the acked list.
+  // ackedBy must be the signed-in email: RLS refuses any other value, so a
+  // user cannot ack (or write a note) in someone else's name.
   async function submitAck(code: string, days: 7 | 14 | 30) {
     const email = session?.user?.email;
     if (!email || !locationId) return;
@@ -1065,7 +1067,9 @@ export default function Account() {
       {/* 7. detail tables — collapsed unless a firing flag ties to them */}
       {/* All follow one pattern: Collapsible wrapper (auto-open when its flag
           fires) around a DetailTable whose columns pull from details.ts, with
-          deep links back into GHL wherever the data offers one. */}
+          deep links back into GHL wherever the data offers one. These rows
+          show real customers' names: keep them on screen only (no exports,
+          no logging). */}
       {details ? (
         <>
           <Collapsible title={cappedTitle("Uncontacted leads", snapshot?.leads_uncontacted_24h, details.uncontacted_leads.length)}
@@ -1363,6 +1367,9 @@ export default function Account() {
       ) : null}
 
       {/* 9. notes — append-only */}
+      {/* Nobody can edit or delete a note from the app (no UPDATE or DELETE
+          rights), so ask the team not to type customer contact details
+          here; removing one takes an admin SQL change. */}
       <Section title={`Notes (${notes.length})`}>
         <div className="mb-2 flex gap-2">
           <input

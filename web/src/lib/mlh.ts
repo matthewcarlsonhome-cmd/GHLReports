@@ -5,6 +5,10 @@
 // SSP parent always counts. See docs/ACCOUNT-USAGE.md.
 import type { PortfolioRow } from "./database.types";
 
+// True when the account belongs in the default views. Unknown client_users
+// (null: not collected yet) counts as using MLH, so missing data never hides
+// an account. The Monday digest applies the same two tests; the collector
+// skips collection on mlh_status alone (zero-user accounts are still read).
 export function usesMlh(row: Pick<PortfolioRow, "is_parent" | "mlh_status" | "client_users">): boolean {
   if (row.is_parent) return true;
   if (row.mlh_status && row.mlh_status !== "active") return false;

@@ -193,6 +193,11 @@ export function DetailTable<T>({
 // Out-of-app link (deep links into GHL). target="_blank" opens a new tab;
 // rel="noreferrer" stops the target page from reading window.opener or the
 // referrer — standard hygiene for links to another origin.
+// `href` is used as given. Today every caller passes a link the collector
+// built (fixed https GHL base plus ids), a page URL the collector kept only
+// when it starts with "http", or a website an admin set in tag_config. Do not
+// pass other text here: React 18 still renders a javascript: URL
+// (docs/SECURITY-SPEC.md SEC-16).
 export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <a

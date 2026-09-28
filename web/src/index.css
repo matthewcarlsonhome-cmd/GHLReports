@@ -1,12 +1,20 @@
+/* Global stylesheet, imported once by main.tsx.
+   The three @tailwind lines expand (at build time, via PostCSS) into
+   Tailwind's reset, component and utility classes; only classes that appear
+   in index.html or src/ survive the build (tailwind.config.js `content`). Keep
+   custom CSS here to the few rules Tailwind utilities cannot express. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Page background, text color and system font for the whole app. */
 body {
   @apply bg-plane text-ink antialiased;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Equal-width digits so numbers line up in table columns (DetailTable's
+   numeric cells, the portfolio and runs tables, the change scorecard). */
 .tabular {
   font-variant-numeric: tabular-nums;
 }

@@ -109,6 +109,9 @@ function sortByMrrAtRisk(rows: PortfolioRow[]): PortfolioRow[] {
 // CSV escaping per RFC 4180: a field containing a quote, comma, or newline is
 // wrapped in double quotes, with embedded quotes doubled ("" inside).
 // Everything else passes through untouched; null/undefined become empty cells.
+// Not handled yet: a cell that starts with =, +, - or @ is read as a formula
+// by Sheets and Excel, and some exported text (top_action, stage names) comes
+// from outside the company (docs/SECURITY-SPEC.md SEC-13).
 function csvEscape(value: unknown): string {
   const text = value === null || value === undefined ? "" : String(value);
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -304,6 +307,8 @@ export default function Portfolio() {
 
   // The "a" shortcut: acknowledge the most severe (red before amber, info
   // excluded) flag on the selected row, with the default 7-day snooze.
+  // One key press, no confirm: an ack also drops that flag from the Monday
+  // digest until the snooze ends (docs/SECURITY-SPEC.md SEC-17).
   const ackSelected = useCallback(async () => {
     const row = visible[selected];
     const email = session?.user?.email;

@@ -19,6 +19,9 @@ import { usesMlh } from "../lib/mlh";
 import { supabase } from "../lib/supabase";
 import { useSession } from "../lib/useSession";
 
+// The slice of a v_portfolio row this page needs: who the account is, who
+// owns it, whether it counts as using MLH, and its latest snapshot date
+// (form_health rows are matched to that date).
 type Account = Pick<PortfolioRow, "location_id" | "name" | "am_email" | "am_name" | "is_parent"
   | "mlh_status" | "mlh_note" | "client_users" | "snapshot_date">;
 
@@ -34,6 +37,11 @@ const STATUS_FILTERS: { value: string; label: string; statuses: string[] }[] = [
 ];
 const PAGE = 1000;   // PostgREST returns at most 1,000 rows per request
 
+// Every form_health row for these accounts on these snapshot dates, fetched
+// 1,000 rows at a time (.range) until a short page shows we have them all.
+// The .in() filters are sent as query parameters by the Supabase client, and
+// RLS still decides what comes back. The result can include rows from an
+// account's older snapshot when dates differ; the caller filters those out.
 async function loadFormRows(ids: string[], dates: string[]): Promise<FormHealthRow[]> {
   const out: FormHealthRow[] = [];
   for (let from = 0; ; from += PAGE) {
@@ -48,8 +56,12 @@ async function loadFormRows(ids: string[], dates: string[]): Promise<FormHealthR
 
 export default function Forms() {
   const { session } = useSession();
+  // Filters live in the URL query string, like the Portfolio page, so every
+  // view is a shareable link and Back/Forward work.
   const [params, setParams] = useSearchParams();
+  // accounts === null means "still loading" (distinct from [] = none).
   const [accounts, setAccounts] = useState<Account[] | null>(null);
+  // How many accounts were left out as not using MLH (shown in the intro).
   const [hiddenCount, setHiddenCount] = useState(0);
   const [forms, setForms] = useState<FormHealthRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +77,8 @@ export default function Forms() {
   const longestFirst = params.get("order") === "longest";
   const search = params.get("q") ?? "";
 
+  // Write one filter into the URL; empty removes it. replace:true keeps each
+  // keystroke in the search box out of the browser history.
   function setParam(key: string, value: string | null) {
     const next = new URLSearchParams(params);
     if (value === null || value === "") next.delete(key);
@@ -72,6 +86,9 @@ export default function Forms() {
     setParams(next, { replace: true });
   }
 
+  // One-time load: the account list from v_portfolio first (it says which
+  // accounts use MLH and each one's latest snapshot date), then the
+  // form_health rows for exactly those accounts and dates.
   useEffect(() => {
     (async () => {
       const { data, error: err } = await supabase.from("v_portfolio")
@@ -120,11 +137,15 @@ export default function Forms() {
     return map;
   }, [forms, statusFilter, type, search, longestFirst]);
 
+  // Header numbers and the Type dropdown. The status chips count every form
+  // in the visible accounts (before the type/status/search filters); survey
+  // rows share their channel's Type option (the "(survey)" suffix is dropped).
   const visibleIds = new Set(visibleAccounts.map((a) => a.location_id));
   const visibleForms = forms.filter((f) => visibleIds.has(f.location_id));
   const typeOptions = useMemo(() => [...new Set(forms.map((f) =>
     formTypeLabel({ ...f, kind: f.kind === "survey" ? "form" : f.kind })))].sort(), [forms]);
   const counts = (status: string) => visibleForms.filter((f) => f.status === status).length;
+  // True until the first nightly run that fills in channel: shows the notice.
   const unclassified = forms.length > 0 && forms.every((f) => f.channel === null);
 
   // Accounts with a form that went quiet first, then alphabetical.
@@ -243,6 +264,10 @@ export default function Forms() {
                       numeric: true,
                     },
                     {
+                      // page_url is the page of the newest real submission.
+                      // It comes from the visitor's browser, so the collector
+                      // keeps it only when it starts with "http" (see
+                      // ExternalLink in components/ui.tsx).
                       header: "Lives on",
                       cell: (f) => (f.page_url ? <ExternalLink href={f.page_url}>{shortUrl(f.page_url)}</ExternalLink> : "—"),
                     },

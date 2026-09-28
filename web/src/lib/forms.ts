@@ -14,6 +14,9 @@ export const FORM_STATUS: Record<string, { label: string; tone: string; order: n
   no_leads: { label: "○ never used", tone: "text-muted", order: 5 },
 };
 
+// The "Type" column: the channel the collector worked out (website, Google ad,
+// Facebook ad, Facebook lead ad ...), with fallbacks for rows written before
+// channels existed and for lead-ad form ids missing from Sites > Forms.
 export function formTypeLabel(f: Pick<FormHealthRow, "channel" | "kind">): string {
   const base = f.channel ?? (f.kind === "unlisted" ? "Not in Sites > Forms" : "Not classified yet");
   return f.kind === "survey" ? `${base} (survey)` : base;
@@ -30,6 +33,9 @@ export function shortUrl(url: string): string {
   }
 }
 
+// Whole days between an ISO timestamp and now (86400000 ms per day), or null
+// when there is no timestamp. Calendar days, not the business days the
+// collector uses for the "went quiet" status.
 export function daysSince(iso: string | null): number | null {
   if (!iso) return null;
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);

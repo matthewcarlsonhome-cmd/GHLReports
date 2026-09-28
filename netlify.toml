@@ -1,13 +1,42 @@
+# Netlify deploy config for the dashboard (web/). Netlify reads this file on
+# every push to the default branch and publishes the result at
+# https://mlhaccountreports.netlify.app.
+#
+# How this fits in
+#   The dashboard is a static single-page app: Netlify only builds and serves
+#   files. It never sees a GHL token, the service role key or COLLECTOR_KEY.
+#   The two values the build needs (VITE_SUPABASE_URL and
+#   VITE_SUPABASE_ANON_KEY) are set in the Netlify UI, not here. Vite copies
+#   every VITE_* value into the public JavaScript bundle, so only the anon
+#   (public) key may ever go there; the service role key must never be set in
+#   Netlify. See docs/SECURITY-SPEC.md (SEC-16).
+
+# Build: run from web/, install exactly what package-lock.json pins
+# (`npm ci`, not `npm install`), type-check and bundle, publish web/dist.
 [build]
   base = "web"
   command = "npm ci && npm run build"
   publish = "dist"
 
+# Single-page-app fallback: every path (for example /account/<location_id>)
+# is answered with index.html and a 200, and React Router picks the page in
+# the browser. Without this, a refresh on a deep link would be a 404.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
+# Security headers on every response.
+#   Content-Security-Policy: only `frame-ancestors` today, which lists the
+#     sites allowed to show the dashboard inside an iframe (SSP's white-label
+#     GHL domain and GHL's own hosts, for the planned Custom Menu Link). It
+#     replaces X-Frame-Options, which is left out on purpose because it
+#     cannot allow a list of hosts. The wildcard GHL hosts and the missing
+#     script/connect rules are review items (docs/SECURITY-SPEC.md SEC-16):
+#     test any change here with the GHL embed before shipping it.
+#   X-Content-Type-Options: stops browsers from guessing file types.
+#   Referrer-Policy: other sites see only our origin, never a full URL
+#     (dashboard URLs contain location ids).
 [[headers]]
   for = "/*"
   [headers.values]

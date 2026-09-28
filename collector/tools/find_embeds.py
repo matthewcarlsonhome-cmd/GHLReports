@@ -95,6 +95,12 @@ CSV_COLUMNS = ["account", "slug", "status", "kind", "form_name", "form_id",
 def real_fetch(url: str, delay: float = 0.4) -> str | None:
     """GET one URL, returning body text or None. Sleeps `delay` first —
     the crawler is a guest on client infrastructure."""
+    # Limits as they stand: TIMEOUT applies to each connect/read, not to the
+    # whole page, so a server that trickles bytes can hold a worker; the body
+    # is capped at 2 MB; urllib follows redirects to any host. The URLs come
+    # from client sites and form submissions, which outsiders can influence,
+    # so tightening this (https on the client's own host only, no private
+    # IPs, no cross-host redirects) is docs/SECURITY-SPEC.md SEC-14.
     time.sleep(delay)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -112,12 +118,19 @@ def site_base(website: str) -> str:
 
 
 def same_host(url: str, base: str) -> bool:
+    """True when `url` is on the site's own host, with or without "www.".
+
+    This is what keeps the crawl on the client's site: links and sitemap
+    page entries on any other host are dropped.
+    """
     host = urlsplit(url).netloc.lower()
     want = urlsplit(base).netloc.lower()
     return host == want or host == "www." + want or "www." + host == want
 
 
 def is_page_url(url: str) -> bool:
+    """False for images, scripts, stylesheets and other files that cannot
+    contain a form embed (see SKIP_EXTENSIONS), so they are never fetched."""
     path = urlsplit(url).path.lower()
     return not path.endswith(SKIP_EXTENSIONS)
 
@@ -128,6 +141,8 @@ def discover_sitemap_urls(base: str, fetch) -> list[str]:
     sitemaps: list[str] = []
     robots = fetch(base + "/robots.txt")
     if robots:
+        # Sitemap locations are taken as the site states them, on any host;
+        # only the PAGE urls found inside are filtered by same_host() below.
         sitemaps += SITEMAP_LINE_RE.findall(robots)
     if not sitemaps:
         sitemaps = [base + p for p in
@@ -144,6 +159,9 @@ def discover_sitemap_urls(base: str, fetch) -> list[str]:
         if not body:
             continue
         locs = LOC_RE.findall(body)
+        # A sitemap index lists further sitemaps rather than pages: queue
+        # them (on whatever host they name; the seen_maps check above stops
+        # after about 30 sitemaps per site).
         if "<sitemapindex" in body:
             queue.extend(locs)
         else:
@@ -328,6 +346,13 @@ def run_crawl(targets_by_slug: dict[str, list[dict]], sites: dict[str, str],
 
 
 def main() -> None:
+    """CLI entry point: load targets and websites, crawl, write embeds.csv.
+
+    Needs the collector's .env (Store) only when --sites is not given, to
+    read websites from subaccounts.tag_config. Exits 1 when --location
+    matches no target. embeds.csv is written to the current directory by
+    default and is not git-ignored: keep it out of commits.
+    """
     parser = argparse.ArgumentParser(prog="find_embeds", description=(
         "Crawl client sites for GHL form/survey embeds (public pages only)."))
     parser.add_argument("--targets", required=True,

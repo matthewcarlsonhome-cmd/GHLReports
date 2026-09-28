@@ -180,6 +180,10 @@ def project(sub: dict, check_email: str) -> dict:
     (our own test contact)."""
     email = str(sub.get("email") or "").strip().lower()
     is_check = bool(check_email) and email == check_email
+    # eventData is reported by the visitor's browser, so the page URL and
+    # title are whatever the visitor (or a bot) sent. Only URLs starting with
+    # "http" are kept, and both values must be treated as untrusted text
+    # wherever they end up (CSV cells, HTML, links).
     event = (sub.get("others") or {}).get("eventData") or {}
     if not isinstance(event, dict):
         event = {}

@@ -11,6 +11,18 @@
 // VITE_ into the client bundle at build time (from .env files or the host's
 // environment). That prefix is a deliberate opt-in marker: only variables meant
 // to be public get it.
+//
+// Security notes (docs/SECURITY-SPEC.md):
+// - VITE_SUPABASE_ANON_KEY must be the anon key. If the service role key were
+//   ever pasted into Netlify under this name, it would ship to every browser
+//   and bypass RLS for anyone who looked (SEC-16 suggests a fail-fast check).
+// - Being signed in is not what grants access: the RLS policies call
+//   public.is_staff(), which requires a signed-in @smallscreenproducer.com
+//   address. Every staff user can read every account.
+// - The session (including the long-lived refresh token) sits in this
+//   browser's localStorage until sign-out. Access therefore lasts until the
+//   Supabase user is deleted or a session time limit set in Supabase Auth
+//   runs out (SEC-08).
 import { createClient } from "@supabase/supabase-js";
 
 // Email-code auth only (spec 9.1): no OAuth, no URL detection, refresh-token

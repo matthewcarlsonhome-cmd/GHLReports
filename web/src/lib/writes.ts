@@ -10,6 +10,13 @@
 //
 // Both helpers return an error *message* (string) on failure or null on
 // success, so callers can show the message inline without try/catch.
+//
+// What the database enforces, whatever this file sends: the row is refused
+// unless the signed-in user is staff (is_staff()) AND acked_by / author equals
+// the email in their login token, so pass the session's own email and nothing
+// else. account_notes.body is capped at 4000 characters by a CHECK
+// constraint; flag_acks.note has no cap yet, and snooze_until may be at most
+// 90 days out. See docs/SECURITY-SPEC.md SEC-17 for planned tightening.
 
 import { supabase } from "./supabase";
 

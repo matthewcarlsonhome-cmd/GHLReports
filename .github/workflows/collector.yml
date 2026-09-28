@@ -21,6 +21,22 @@
 #   Optional, for the Monday digest emails: SMTP_USER + SMTP_PASS (the same
 #   Google Workspace account + app password the Supabase auth mailer uses)
 #   and DIGEST_CC (comma list CC'd on every digest). Unset = digest skipped.
+#
+# Security notes (details and fixes in docs/SECURITY-SPEC.md):
+#   * This repository is public, so this workflow's logs are public too.
+#     Do not set its secrets, and do not run --probe, --dry-run or
+#     --digest --dry-run here, until the repository is private: those modes
+#     print lead names, deal names and digest text to the log (SEC-01, SEC-04).
+#   * Render is the scheduler actually in use. This schedule fails every day
+#     because the secrets above are unset (SEC-15). Pause it or finish the
+#     cutover, and never run both schedulers: the digest would go out twice.
+#   * The `args` box reaches the collector only through the COLLECTOR_ARGS
+#     environment variable (never pasted into the shell command), so it cannot
+#     inject shell commands. It does accept every collector flag, including
+#     ones that send email or post to the GHL webhook (--digest, --send-test).
+#   * There is no `permissions:` block yet, so the job gets the repository's
+#     default GITHUB_TOKEN rights, and actions are pinned by version tag
+#     rather than commit SHA (SEC-15).
 name: Nightly collector
 
 on:
@@ -38,17 +54,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Put this repository's code on the runner.
       - uses: actions/checkout@v4
 
+      # Python 3.11, with pip's download cache keyed on the requirements file.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: collector/requirements.txt
 
+      # Versions are not locked yet (SEC-06): each run installs the newest
+      # releases the `>=` ranges allow.
       - name: Install dependencies
         run: pip install -r collector/requirements.txt
 
+      # Secrets exist only inside this step, as environment variables. GHL
+      # tokens (PITs) are fetched from Supabase Vault at run time and never
+      # pass through GitHub.
       - name: Run collector
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

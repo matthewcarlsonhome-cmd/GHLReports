@@ -34,6 +34,9 @@ function SnapshotBanner() {
 }
 
 // Auth guard: only renders its children when a session exists.
+// - This is a convenience, not the security boundary: the database's RLS
+//   policies decide what any request can read (staff emails only), so a page
+//   rendered without the right login simply gets no rows back.
 // - While the session is still being looked up we show a loading stub instead
 //   of redirecting — otherwise a signed-in user would flash to /login on every
 //   hard refresh before the stored session was read back.

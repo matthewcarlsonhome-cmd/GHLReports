@@ -133,6 +133,8 @@ def is_hosted(url: str) -> bool:
 
 
 def hosted_url(kind: str, form_id: str) -> str:
+    """GHL's own public link for a form or survey (the page GHL hosts itself,
+    as opposed to a client page that embeds it). Built from the id only."""
     return f"{HOSTED_BASE}/{'survey' if kind == 'survey' else 'form'}/{form_id}"
 
 
@@ -309,6 +311,12 @@ def crawl_account(sub: dict, result: dict, fetch, max_pages: int, today: date,
     {url: bool|None}}, site: {form_id: [urls]}, note: str}."""
     from . import find_embeds
     still: dict[str, dict[str, bool | None]] = defaultdict(dict)
+    # Page URL -> form ids submitted from it in the last year. These URLs
+    # come from submission data (others.eventData.page.url), which a site
+    # visitor can set to anything; form_history.project() keeps only values
+    # starting with "http". Re-fetching them is capped at VERIFY_PAGE_CAP per
+    # account; restricting them to the client's own host is SEC-14 in
+    # docs/SECURITY-SPEC.md.
     known: dict[str, set[str]] = defaultdict(set)
     for form in result["forms"]:
         for url, entry in form["pages"].items():
@@ -458,6 +466,8 @@ CHANNEL_BUCKETS = ("website", "google_ads", "facebook_ads", "facebook_lead_ads",
 
 
 def _channel_bucket(channel: str) -> str:
+    """Collapse lead_channels' labels into the five CHANNEL_BUCKETS used for
+    the per-account 90-day columns; anything unlisted counts as "other"."""
     return {lead_channels.WEBSITE_FORM: "website",
             lead_channels.GOOGLE_AD_FORM: "google_ads",
             lead_channels.FACEBOOK_AD_FORM: "facebook_ads",
@@ -465,10 +475,13 @@ def _channel_bucket(channel: str) -> str:
 
 
 def _fmt(value) -> str | int:
+    """A count for the CSV: unknown (None) becomes an empty cell, never 0."""
     return "" if value is None else value
 
 
 def _still_label(value: bool | None) -> str:
+    """Page re-check result as a CSV cell: "yes" (form still on the page),
+    "NO" (page loaded, form gone) or "" (not checked, or the page failed)."""
     return {True: "yes", False: "NO", None: ""}.get(value, "") if value is not None else ""
 
 
@@ -561,6 +574,14 @@ def verdict(account_rows: list[dict], today: date) -> str:
 
 
 def to_csv(rows: list[dict], columns: list[str]) -> str:
+    """Rows as CSV text with a header, in `columns` order (extra keys are
+    ignored). Shared by main.py --form-activity and write_outputs().
+
+    Cells are written as-is. Page titles and form names come from outside
+    (site visitors, client staff), and a cell starting with =, +, - or @ is
+    treated as a formula by Sheets and Excel; neutralizing that is SEC-13 in
+    docs/SECURITY-SPEC.md.
+    """
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=columns, lineterminator="\n", extrasaction="ignore")
     writer.writeheader()
@@ -569,6 +590,8 @@ def to_csv(rows: list[dict], columns: list[str]) -> str:
 
 
 def write_outputs(out_dir: str, form_rows, page_rows, account_rows) -> list[str]:
+    """Write the three CSVs into `out_dir` (created if missing) and return
+    their paths. The files are not git-ignored: keep them out of commits."""
     os.makedirs(out_dir, exist_ok=True)
     paths = []
     for name, rows, columns in (("form-activity.csv", form_rows, FORM_COLUMNS),
@@ -582,6 +605,9 @@ def write_outputs(out_dir: str, form_rows, page_rows, account_rows) -> list[str]
 
 
 def main() -> None:
+    """CLI entry point (local runs). Reads the subaccounts and each PIT
+    through Store, so it needs the collector's .env; writes the three CSVs
+    and exits 1 when any account could not be read."""
     parser = argparse.ArgumentParser(prog="form_activity", description=(
         "Per-form activity and page locations across the book (read-only)."))
     parser.add_argument("--location", help="one slug; default: every active account")

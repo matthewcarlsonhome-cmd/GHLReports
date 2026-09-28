@@ -38,6 +38,21 @@ Running it
   python -m tagchecker.main --dry-run   # print results, write nothing
 Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY. No GHL tokens, no COLLECTOR_KEY.
 Deployed as a scheduled GitHub Actions workflow (.github/workflows/tagchecker.yml).
+
+Security notes (docs/SECURITY-SPEC.md SEC-05)
+---------------------------------------------
+  * Every page this service opens runs third-party JavaScript. The browser
+    is launched with Playwright's defaults (Chromium's own sandbox off, and
+    it inherits this process's environment, service role key included), so
+    treat any change that widens what the browser can reach as a security
+    change. The planned fix is to run the browser in a job with no secrets.
+  * Only three columns are read (location_id, name, tag_config) and only
+    tag_checks rows are written; the service role key could do far more,
+    which is why keeping this file small and boring matters.
+  * Websites come from subaccounts.tag_config, which dashboard users cannot
+    change (only the service role and database admins can). Request URLs the
+    page makes are held in memory for the check and never stored; error text
+    is cut to 500 characters.
 """
 
 from __future__ import annotations
@@ -131,6 +146,9 @@ def check_site(browser, website: str, consent_click: str | None,
     try:
         context = browser.new_context()
         page = context.new_page()
+        # Record the URL of every request the page makes (scripts, pixels,
+        # beacons). evaluate_expectations() later searches this list; the
+        # URLs themselves are never written to the database.
         page.on("request", lambda req: captured.append(req.url))
         page.goto(website, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
         if consent_click:
@@ -166,6 +184,15 @@ def load_accounts(client) -> list[dict]:
 
 
 def run(argv: list[str] | None = None) -> int:
+    """Check every configured account once; returns the process exit code.
+
+    Order: parse flags, connect to Supabase with the service role key, load
+    the accounts that have expectations, then (only if there is work) start
+    one headless Chromium and check each site in turn. Each result is
+    printed, and written to tag_checks unless --dry-run. Exit code 1 means
+    the checker itself could not run (missing env vars); tags that did not
+    fire are data, not failures, and still exit 0.
+    """
     parser = argparse.ArgumentParser(description="Check that client tracking tags fire.")
     parser.add_argument("--dry-run", action="store_true",
                         help="print results instead of writing tag_checks rows")
@@ -189,6 +216,10 @@ def run(argv: list[str] | None = None) -> int:
     from playwright.sync_api import sync_playwright
     alerts = errors = 0
     with sync_playwright() as pw:
+        # Playwright defaults: no Chromium sandbox, and the browser inherits
+        # this process's environment variables (including the service role
+        # key). See the security notes at the top of this file before
+        # changing how the browser is launched.
         browser = pw.chromium.launch(headless=True)
         try:
             for account in accounts:

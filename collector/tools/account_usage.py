@@ -268,6 +268,12 @@ def collect_book(store, subs: list[dict], *, client_factory=GHLClient,
 
 
 def to_csv(rows: list[dict]) -> str:
+    """Rows as CSV text in COLUMNS order (extra keys ignored).
+
+    `client_user_names` holds the names of the client's own staff, which is
+    personal data: share the file only inside SSP (docs/SECURITY-SPEC.md
+    SEC-01). Cells are written as-is; see SEC-13 there for formula-safe CSVs.
+    """
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=COLUMNS, lineterminator="\n", extrasaction="ignore")
     writer.writeheader()
@@ -276,6 +282,9 @@ def to_csv(rows: list[dict]) -> str:
 
 
 def main() -> None:
+    """CLI entry point (local runs). Needs the collector's .env (Store, for
+    the subaccounts and each PIT); writes account-usage.csv and exits 1 when
+    any account could not be read."""
     parser = argparse.ArgumentParser(prog="account_usage", description=(
         "Who actually works leads in MLH vs ads + automation only (read-only)."))
     parser.add_argument("--location", help="one slug; default: every active account")

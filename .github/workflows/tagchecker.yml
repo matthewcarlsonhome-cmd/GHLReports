@@ -11,6 +11,17 @@
 #
 # Needs only two secrets (no GHL tokens are involved at all):
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+#
+# Security notes (details and fixes in docs/SECURITY-SPEC.md):
+#   * Chromium runs other people's JavaScript (every configured client site)
+#     inside the same job that holds SUPABASE_SERVICE_ROLE_KEY, a key that
+#     can read and change every table (SEC-05). The planned fix is a browser
+#     job with no secrets plus a small job that writes the results.
+#   * These are the same secret names collector.yml reads, so setting them
+#     for this workflow also hands them to the nightly collector workflow
+#     (which still needs COLLECTOR_KEY before it can run).
+#   * The schedule fails every day while the secrets are unset (SEC-15), and
+#     the repository is public, so logs are public (SEC-01).
 name: Tag checker
 
 on:
@@ -40,9 +51,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r tagchecker/requirements.txt
 
+      # Downloads the Chromium build that matches the installed Playwright
+      # version, plus the Linux libraries it needs (hence --with-deps).
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
 
+      # dry_run is a boolean input, so the expression on the run line can
+      # only produce the fixed text --dry-run or nothing; no free text from
+      # the form reaches the shell.
       - name: Check tags
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

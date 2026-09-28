@@ -67,6 +67,8 @@ export default function Login() {
     if (err) {
       // Translate Supabase's generic "signups not allowed" wording into a
       // message that tells staff what actually happened and who to ask.
+      // (Supabase's answer already shows whether an address has an account;
+      // with a small, known staff list that is a low risk.)
       const message = err.message ?? "";
       const lower = message.toLowerCase();
       if (lower.includes("signups not allowed") || lower.includes("restricted")) {

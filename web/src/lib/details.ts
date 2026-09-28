@@ -10,6 +10,11 @@
 // into the matching record in GoHighLevel, so every table row is clickable.
 // Timestamps are ISO strings; durations are pre-computed by the collector
 // (hours_since, days_idle, ...) so the UI never re-derives them.
+//
+// Personal data: the `name` / `contact` fields below are real customers'
+// names (and opportunity names are usually customer names too). They are
+// fine on screen for signed-in staff, but do not copy them into exports,
+// logs, error reports or anything sent outside the app.
 
 export type Details = {
   users: Record<string, string>; // userId -> display name
