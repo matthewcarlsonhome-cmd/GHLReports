@@ -14,6 +14,7 @@
 // - Column choices persist in localStorage; CSV export builds the file
 //   in-browser from the currently visible rows.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FollowUpPortfolio, ReportViews } from "../components/FollowUp";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Sparkline } from "../components/Sparkline";
@@ -152,6 +153,9 @@ export default function Portfolio() {
   const sortMode = params.get("sort") === "mrr" ? "mrr" : "grade";
   const groupByAm = params.get("group") === "am";
   const band = (params.get("band") ?? "") as Band | "";
+  // Honor saved reporting URLs unless the user explicitly chooses Follow-up.
+  const detailed = params.has("mode") ? params.get("mode") === "reports"
+    : ["layout", "band", "flag", "state", "vertical", "group", "sort", "ssp", "nonmlh"].some((key) => params.has(key));
   const layout = params.get("layout") === "wall" ? "wall" : "table";
 
   // Load everything the page needs, in three queries:
@@ -284,7 +288,7 @@ export default function Portfolio() {
       noData: baseVisible.filter((r) => r.state === "no_data"),
     };
   }, [baseVisible]);
-  const [reportOpen, setReportOpen] = useState(true);
+  const [reportOpen, setReportOpen] = useState(false);
 
   // Dropdown option lists derived from the data itself (deduped via Set).
   const verticals = useMemo(
@@ -333,8 +337,9 @@ export default function Portfolio() {
   // so those bail out early (Escape blurs the field instead).
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (!detailed) return;
       const target = event.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+      if (target.closest("input, textarea, select, button, a, [contenteditable=true]")) {
         if (event.key === "Escape") target.blur();
         return;
       }
@@ -351,7 +356,7 @@ export default function Portfolio() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [visible, selected, navigate, ackSelected]);
+  }, [visible, selected, navigate, ackSelected, detailed]);
 
   // Write one filter into the URL. Empty/null deletes the param so default
   // states produce clean URLs; replace:true avoids flooding browser history
@@ -694,8 +699,12 @@ export default function Portfolio() {
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [visible, groupByAm]);
 
+  if (!detailed) return <FollowUpPortfolio rows={rows} error={error} email={session?.user?.email} />;
+
   return (
     <div className="mx-auto max-w-[1500px] px-4 py-4">
+      <h1 className="mb-4 text-2xl font-semibold">Account health reports</h1>
+      <ReportViews detailed />
       {/* filters */}
       {/* every control below reads from and writes to the URL via setParam */}
       <div className="mb-3 flex flex-wrap items-center gap-2">

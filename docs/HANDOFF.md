@@ -97,6 +97,42 @@ already names the pilot AMs). Both take effect on the next run, no deploy.
 - The repository is **public** (checked 16:0x UTC). Making it private is
   step A1.
 
+### 3.6 Dashboard follow-up view (2026-09-28)
+
+Matthew requested a simpler account list and account detail page, preserving
+all existing code and reporting while emphasizing core follow-up work.
+The default **Follow-up** view now shows uncontacted leads (>24 hours) and
+waiting conversations, a plain-language next step, account-manager/search
+filters, and account counts for follow-up, clear, and data review. The
+existing table, wall, exports, advanced filters, charts, pipeline analysis,
+forms and coverage reports remain under **Detailed reports** (`mode=reports`).
+Saved URLs with advanced reporting filters continue to open reporting.
+
+Account pages bring the two existing customer detail tables above the
+additional reporting. The default priorities show SLOW_RESPONSE and
+CONVOS_WAITING; other priorities remain in Detailed reports with a visible
+link/count. Notes, acknowledgements, GHL links, and the copy-ready weekly
+summary remain available. Account metadata is expandable. Calendar-date
+formatting no longer shifts a snapshot/summary to the previous day in Central
+time. Mobile navigation wraps and opening another page returns to the top.
+
+This is presentation only: no collector rules, thresholds, pilot membership,
+notification timing, recipient gates, database schema, or sending settings
+changed. Counts are work queues, **not notification eligibility or send
+receipts**. Unknown/held values never appear as zero/clear; acknowledged
+issues do not erase the snapshot's counts. The account list retains the
+existing default exclusion of SSP and non-MLH accounts; Detailed reports
+still exposes those inclusion controls. No customer data or preview fixtures
+are committed, and no email/webhook test was sent.
+
+Validation: 237 Python tests passed (`python -X utf8 -m pytest
+collector/tests/ tagchecker/tests/ -q`; Windows needs UTF-8 for an existing
+CSV fixture); 7 new web tests passed (`cd web; npm test`); production build
+passed. Chrome checks with synthetic data covered manager/search/status
+filters, default vs detailed views, customer-table disclosure, missing/held
+counts, corrected dates, and desktop/390px layouts. The existing bundle-size
+warning remains. Local preview mocks live outside the repository.
+
 ## 4. Next steps
 
 Order: A before B. C to F can run in parallel with B. Items marked

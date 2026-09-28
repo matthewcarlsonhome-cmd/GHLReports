@@ -17,7 +17,7 @@
 //   and rendered with Recharts, a React charting library whose components
 //   (<ComposedChart>, <Bar>, <Line>...) are declared as JSX.
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -35,6 +35,8 @@ import {
   YAxis,
 } from "recharts";
 
+import { FollowUpCounts, ReportViews } from "../components/FollowUp";
+import { CORE_FOLLOW_UP_CODES, followUpSummary } from "../lib/followUp";
 import { AfterHoursHeatmap } from "../components/Heatmap";
 import {
   DetailTable,
@@ -227,7 +229,7 @@ function Collapsible({ title, defaultOpen, children }: {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="mb-4">
-      <button onClick={() => setOpen((v) => !v)}
+      <button aria-expanded={open} onClick={() => setOpen((v) => !v)}
               className="mb-2 flex w-full items-baseline justify-between text-left">
         <h2 className="text-sm font-semibold text-ink">{title}</h2>
         <span className="text-xxs text-ink-2 underline underline-offset-2">{open ? "collapse" : "expand"}</span>
@@ -240,6 +242,8 @@ function Collapsible({ title, defaultOpen, children }: {
 export default function Account() {
   // :locationId from the /account/:locationId route (see App.tsx).
   const { locationId } = useParams<{ locationId: string }>();
+  const [params, setParams] = useSearchParams();
+  const detailed = params.get("mode") === "reports";
   const { session } = useSession();
   const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -484,7 +488,7 @@ export default function Account() {
   // reds before ambers before infos.
   const unacked = flags.filter((f) => !ackedCodes.has(f.code));
   const acked = flags.filter((f) => ackedCodes.has(f.code));
-  const doNext = [...unacked].sort((a, b) => {
+  const doNext = unacked.filter((flag) => detailed || (!noData && CORE_FOLLOW_UP_CODES.has(flag.code))).sort((a, b) => {
     const rank = { red: 0, amber: 1, info: 2 } as const;
     return rank[a.severity] - rank[b.severity];
   }).slice(0, 3);
@@ -536,10 +540,12 @@ export default function Account() {
       <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
         <div>
           <div className="mb-0.5 text-xxs text-muted">
-            <Link to="/" className="underline underline-offset-2">Portfolio</Link> / {sub.slug}
+            <Link to="/" className="underline underline-offset-2">Accounts</Link> / {sub.slug}
           </div>
-          <h1 className="text-lg font-semibold">{sub.name}</h1>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-2">
+          <h1 className="text-2xl font-semibold tracking-tight">{sub.name}</h1>
+          <p className="mt-1 text-sm text-ink-2">{sub.am_name ?? sub.am_email ?? "No account manager assigned"}</p>
+          <details className="mt-2 text-xs text-ink-2"><summary className="cursor-pointer">Account information</summary>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-2">
             {sub.am_email ? <span>AM: {sub.am_email}</span> : null}
             {sub.vertical ? <span className="rounded bg-grid px-1.5 py-0.5 text-xxs">{sub.vertical}</span> : null}
             {sub.services.map((service) => (
@@ -550,6 +556,7 @@ export default function Account() {
               {sub.contract_end ? fmtDate(sub.contract_end) : "not set"}
             </span>
           </div>
+          </details>
         </div>
         <div className="text-right text-xs">
           <div className="mb-1 flex items-center justify-end gap-2">
@@ -561,27 +568,30 @@ export default function Account() {
           {details ? (
             <div className="flex justify-end gap-3">
               <ExternalLink href={details.ghl_dashboard_url}>Open in GHL</ExternalLink>
-              <ExternalLink href={details.ghl_dashboard_url}>Ads (native dashboard)</ExternalLink>
+              {detailed ? <ExternalLink href={details.ghl_dashboard_url}>Ads (native dashboard)</ExternalLink> : null}
             </div>
           ) : null}
           {sub.token_status !== "ok" ? (
-            <div className="mt-1 text-status-critical">token {sub.token_status} — no fresh data</div>
+            <div className="mt-1 text-status-critical">Account connection needs attention — no fresh data</div>
           ) : null}
         </div>
       </div>
 
+      <ReportViews detailed={detailed} />
+      {!detailed ? <FollowUpCounts row={snapshot} /> : null}
+
       {noData ? (
         <EmptyState>
           {snapshot
-            ? "The latest snapshot was held by the data-quality gate — the numbers below it were not trusted. See Coverage and caveats."
+            ? "The latest data could not be verified. Review Coverage and caveats in Detailed reports before acting on it."
             : "No snapshot collected yet for this account."}
         </EmptyState>
       ) : null}
 
       {/* 2. Do next */}
-      <Section title="Do next">
+      <Section title={detailed ? "All account priorities" : "Next steps"}>
         {doNext.length === 0 ? (
-          <EmptyState>Nothing needs acknowledging — no unacked flags.</EmptyState>
+          <EmptyState>{detailed ? "No outstanding priorities to acknowledge." : followUpSummary(snapshot).action}</EmptyState>
         ) : (
           <div className="grid gap-1.5">
             {doNext.map((flag) => (
@@ -589,7 +599,7 @@ export default function Account() {
                 <div className="flex items-start gap-2">
                   <SeverityChip severity={flag.severity} />
                   <div className="min-w-0 flex-1">
-                    <span className="text-xs font-semibold">{flag.code}</span>
+                    <span className="text-xs font-semibold">{flag.title}</span>
                     <p className="text-xs text-ink-2">{flag.action}</p>
                     {flag.deep_link ? (
                       <ExternalLink href={flag.deep_link}>
@@ -632,11 +642,11 @@ export default function Account() {
         {/* already-acknowledged flags: quiet gray receipts of who/when/note */}
         {acked.length > 0 ? (
           <div className="mt-2 grid gap-1">
-            {acked.map((flag) => {
+            {acked.filter((flag) => detailed || CORE_FOLLOW_UP_CODES.has(flag.code)).map((flag) => {
               const ack = acks.find((a) => a.code === flag.code);
               return (
                 <div key={flag.id} className="rounded border border-grid/60 bg-plane px-3 py-1.5 text-xxs text-muted">
-                  {flag.code} — acked
+                  {flag.title} — acknowledged
                   {ack ? ` by ${ack.acked_by.split("@")[0]}, ${daysAgo(ack.acked_at)}${ack.note ? `: ${ack.note}` : ""} (until ${fmtDate(ack.snooze_until)})` : ""}
                 </div>
               );
@@ -644,6 +654,36 @@ export default function Account() {
           </div>
         ) : null}
       </Section>
+
+      {details && !noData ? <div className="mb-6">
+          <Collapsible title={cappedTitle("Uncontacted leads", snapshot?.leads_uncontacted_24h, details.uncontacted_leads.length)}
+                       defaultOpen={firingTables.has("uncontacted")}>
+            <DetailTable rows={details.uncontacted_leads} empty="No leads sitting uncontacted past 24h."
+              columns={[
+                { header: "Lead", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> },
+                { header: "Source", cell: (r) => r.source ?? "—" },
+                { header: "Created", cell: (r) => fmtDateTime(r.created_at) },
+                { header: "Waiting", cell: (r) => fmtHours(r.hours_since), numeric: true },
+              ]} />
+          </Collapsible>
+          <Collapsible title={cappedTitle("Waiting conversations", snapshot?.convos_waiting, details.waiting_convos.length)}
+                       defaultOpen={firingTables.has("waiting")}>
+            <DetailTable rows={details.waiting_convos} empty="Nothing inbound is waiting 4h+."
+              columns={[
+                { header: "Contact", cell: (r) => <ExternalLink href={r.deep_link}>{r.contact}</ExternalLink> },
+                { header: "Channel", cell: (r) => r.channel ?? "—" },
+                { header: "Last inbound", cell: (r) => fmtDateTime(r.last_inbound_at) },
+                { header: "Waiting", cell: (r) => fmtHours(r.hours), numeric: true },
+              ]} />
+          </Collapsible>
+      </div> : null}
+      {!detailed ? <div className="mb-6 rounded-xl border border-grid bg-surface p-4 text-sm text-ink-2">
+        <p>Follow-up counts remain visible after an issue is acknowledged. Notification timing and account eligibility are managed separately.</p>
+        <button className="mt-2 font-medium text-series underline underline-offset-4" onClick={() => { const next = new URLSearchParams(params); next.set("mode", "reports"); setParams(next); }}>
+          {unacked.filter((flag) => !CORE_FOLLOW_UP_CODES.has(flag.code)).length > 0 ? `${unacked.filter((flag) => !CORE_FOLLOW_UP_CODES.has(flag.code)).length} other account issue(s) · ` : ""}View full performance, forms, and data coverage →
+        </button>
+      </div> : null}
+      {detailed ? <>
 
       {/* 3. Changed this week */}
       <Section title="Changed this week">
@@ -1072,17 +1112,6 @@ export default function Account() {
           no logging). */}
       {details ? (
         <>
-          <Collapsible title={cappedTitle("Uncontacted leads", snapshot?.leads_uncontacted_24h, details.uncontacted_leads.length)}
-                       defaultOpen={firingTables.has("uncontacted")}>
-            <DetailTable rows={details.uncontacted_leads} empty="No leads sitting uncontacted past 24h."
-              columns={[
-                { header: "Lead", cell: (r) => <ExternalLink href={r.deep_link}>{r.name}</ExternalLink> },
-                { header: "Source", cell: (r) => r.source ?? "—" },
-                { header: "Created", cell: (r) => fmtDateTime(r.created_at) },
-                { header: "Waiting", cell: (r) => fmtHours(r.hours_since), numeric: true },
-              ]} />
-          </Collapsible>
-
           <Collapsible title={cappedTitle("Unassigned leads", snapshot?.leads_unassigned_7d, details.unassigned_leads.length)}
                        defaultOpen={firingTables.has("unassigned")}>
             <DetailTable rows={details.unassigned_leads} empty="Every new lead has an owner."
@@ -1103,17 +1132,6 @@ export default function Account() {
                 { header: "Contact", cell: (r) => <ExternalLink href={r.deep_link}>{r.contact}</ExternalLink> },
                 { header: "When", cell: (r) => fmtDateTime(r.at) },
                 { header: "Call status", cell: (r) => r.status },
-              ]} />
-          </Collapsible>
-
-          <Collapsible title={cappedTitle("Waiting conversations", snapshot?.convos_waiting, details.waiting_convos.length)}
-                       defaultOpen={firingTables.has("waiting")}>
-            <DetailTable rows={details.waiting_convos} empty="Nothing inbound is waiting 4h+."
-              columns={[
-                { header: "Contact", cell: (r) => <ExternalLink href={r.deep_link}>{r.contact}</ExternalLink> },
-                { header: "Channel", cell: (r) => r.channel ?? "—" },
-                { header: "Last inbound", cell: (r) => fmtDateTime(r.last_inbound_at) },
-                { header: "Waiting", cell: (r) => fmtHours(r.hours), numeric: true },
               ]} />
           </Collapsible>
 
@@ -1335,6 +1353,8 @@ export default function Account() {
           </div>
         </Collapsible>
       ) : null}
+
+      </> : null}
 
       {/* copy-ready weekly client summary (Tier 2): template fill, no LLM */}
       {snapshot && !noData ? (

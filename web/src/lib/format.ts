@@ -60,7 +60,8 @@ export function fmtMinutes(value: number | null | undefined): string {
 // Short date ("Aug 18"). An unparseable string also collapses to Unknown.
 export function fmtDate(value: string | null | undefined): string {
   if (!value) return UNKNOWN;
-  const date = new Date(value);
+  // Snapshot dates are calendar dates, not UTC instants.
+  const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value);
   if (Number.isNaN(date.getTime())) return UNKNOWN;
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }

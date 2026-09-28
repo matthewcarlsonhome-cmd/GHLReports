@@ -10,7 +10,7 @@
 //   declarative redirect: rendering it changes the URL instead of showing UI.
 // - "session" is the Supabase auth session (a JWT — a signed token proving who
 //   the user is). useSession (lib/useSession.ts) keeps it in React state.
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { fullViewUrl, isEmbedded } from "./lib/embed";
@@ -79,12 +79,12 @@ function Nav() {
     );
   }
   return (
-    <nav className="flex items-center gap-4 border-b border-grid bg-surface px-4 py-2">
+    <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-grid bg-surface px-4 py-2">
       <Link to="/" className="text-sm font-semibold text-ink">
         Account Health
       </Link>
       <Link to="/" className="text-xs text-ink-2 hover:text-ink">
-        Portfolio
+        Accounts
       </Link>
       <Link to="/forms" className="text-xs text-ink-2 hover:text-ink">
         Forms
@@ -92,8 +92,8 @@ function Nav() {
       <Link to="/runs" className="text-xs text-ink-2 hover:text-ink">
         Runs
       </Link>
-      <div className="ml-auto flex items-center gap-3">
-        {session?.user?.email ? <span className="text-xxs text-muted">{session.user.email}</span> : null}
+      <div className="ml-auto flex max-w-full items-center gap-3">
+        {session?.user?.email ? <span className="break-all text-xxs text-muted">{session.user.email}</span> : null}
         {session ? (
           <button
             onClick={() => void supabase.auth.signOut()}
@@ -111,6 +111,9 @@ function Nav() {
 // "*" catch-all sends unknown URLs back to the portfolio.
 export default function App() {
   const { session } = useSession();
+  const { pathname } = useLocation();
+  // Opening an account should start at its priorities, even from a long list.
+  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
   return (
     <div className="min-h-screen">
       <Nav />

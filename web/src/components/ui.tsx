@@ -73,7 +73,7 @@ export function SeverityChip({ severity, count }: { severity: "red" | "amber" | 
     info: "bg-grid text-ink-2",
   } as const;
   const glyphs = { red: "●", amber: "▲", info: "i" } as const;
-  const labels = { red: "red", amber: "amber", info: "info" } as const;
+  const labels = { red: "urgent", amber: "review", info: "note" } as const;
   return (
     <span className={`inline-block rounded px-1.5 py-0.5 text-xxs font-semibold ${styles[severity]}`}>
       <span aria-hidden>{glyphs[severity]} </span>

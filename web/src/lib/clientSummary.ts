@@ -30,7 +30,7 @@ function minutes(value: number): string {
 export function buildClientSummary(sub: SubaccountRow, snapshot: SnapshotRow): string {
   const lines: string[] = [];
   const week = snapshot.snapshot_date
-    ? new Date(snapshot.snapshot_date).toLocaleDateString("en-US", {
+    ? new Date(`${snapshot.snapshot_date}T00:00:00`).toLocaleDateString("en-US", {
         month: "long", day: "numeric", year: "numeric",
       })
     : "";
