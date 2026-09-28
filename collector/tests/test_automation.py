@@ -411,6 +411,37 @@ def test_send_test_needs_the_url():
     assert A.send_test_notice(log=lambda *a: None, env={}, today=D0) == 2
 
 
+def test_delivery_sample_posts_once_to_matthew_even_with_other_redirect(monkeypatch):
+    posted = []
+    monkeypatch.setattr(A, "post_alert", lambda url, payload:
+                        (posted.append(payload), (200, None))[1])
+    env = dict(ENV, AUTOMATION_WEBHOOKS="dry",
+               AM_NOTIFY_REDIRECT="ldegner@smallscreenproducer.com")
+    assert A.send_test_notice(log=lambda *a: None, env=env, today=D0,
+                             deliver_to="mcarlson@smallscreenproducer.com") == 0
+    [payload] = posted
+    assert payload["is_test"] == "false"
+    assert payload["is_delivery_test"] == "true"
+    assert payload["route"] == "matthew"
+    assert payload["am_email"] == "mcarlson@smallscreenproducer.com"
+    assert payload["location_id"] == "SAMPLE"
+    assert payload["subject"].startswith("[TEST")
+
+
+def test_delivery_sample_rejects_any_other_recipient(monkeypatch):
+    def unexpected_post(*args):
+        raise AssertionError("must not post")
+    monkeypatch.setattr(A, "post_alert", unexpected_post)
+    assert A.send_test_notice(env=ENV, deliver_to="ldegner@smallscreenproducer.com") == 2
+
+
+def test_delivery_sample_cli_exits_before_collection(monkeypatch):
+    calls = []
+    monkeypatch.setattr(A, "send_test_notice", lambda **kw: (calls.append(kw), 0)[1])
+    assert main_mod.run(["--send-test-email-to", "mcarlson@smallscreenproducer.com"]) == 0
+    assert calls[0]["deliver_to"] == "mcarlson@smallscreenproducer.com"
+
+
 def test_post_errors_never_echo_the_webhook_url(monkeypatch):
     url = "https://services.example.invalid/hooks/secret-token-123"
 

@@ -16,6 +16,24 @@ PII_CANARIES = [
 ]
 
 
+def test_explicit_delivery_test_is_synthetic_and_does_not_log_secrets(monkeypatch):
+    from collector import automation
+    posted, logs = [], []
+    monkeypatch.setattr(automation, "post_alert", lambda url, payload:
+                        (posted.append(payload), (200, None))[1])
+    secret = "https://example.invalid/SECRET_WEBHOOK_CANARY"
+    assert automation.send_test_notice(
+        log=logs.append,
+        env={"AUTOMATION_WEBHOOK_URL": secret,
+             "AM_NOTIFY_REDIRECT": "PII_BODY_DO_NOT_STORE@example-client.com"},
+        deliver_to="mcarlson@smallscreenproducer.com") == 0
+    [payload] = posted
+    assert payload["location_id"] == "SAMPLE"
+    serialized = json.dumps([payload, logs])
+    for canary in PII_CANARIES + [secret, "SECRET_WEBHOOK_CANARY"]:
+        assert canary not in serialized
+
+
 def test_no_pii_reaches_any_stored_row():
     store = FakeStore(subs=[PARENT_SUB, CLIENT_SUB])
     assert run_with(store, make_factory()) == 0

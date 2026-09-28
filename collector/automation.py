@@ -1378,7 +1378,8 @@ def sample_notice(today: date) -> Notice:
                   today=today)
 
 
-def send_test_notice(log=print, env=None, today: date | None = None) -> int:
+def send_test_notice(log=print, env=None, today: date | None = None,
+                     deliver_to: str | None = None) -> int:
     """POST one sample note with is_test "true" and return an exit code.
 
     This is how the GHL workflow gets its first payload: GHL cannot offer the
@@ -1386,23 +1387,37 @@ def send_test_notice(log=print, env=None, today: date | None = None) -> int:
     workflow's first step drops anything with is_test = true, so this never
     reaches a person. Sends regardless of AUTOMATION_WEBHOOKS (it is the
     rehearsal for building the workflow) and writes no audit row.
+    The separate, owner-approved delivery test may pass the guard, but only
+    for the fixed synthetic account and Matthew's exact staff address.
     """
     env = env if env is not None else os.environ
+    if deliver_to is not None and deliver_to != "mcarlson@smallscreenproducer.com":
+        log("send-test: delivery tests are restricted to Matthew; nothing sent")
+        return 2
     settings = Settings.from_env(env, mode="on")
     if not settings.url:
         log("send-test: AUTOMATION_WEBHOOK_URL is not set; nothing to send")
         return 2
-    payload = compose(sample_notice(today or date.today()), settings, is_test=True)
+    payload = compose(sample_notice(today or date.today()), settings,
+                      is_test=deliver_to is None)
+    if deliver_to is not None:
+        payload["subject"] = "[TEST — sample account] " + payload["subject"]
+        payload["is_delivery_test"] = "true"
     shown = {k: (v if k not in ("body_html", "body_text") else f"<{len(v)} characters>")
              for k, v in payload.items()}
-    log("send-test: posting a sample note (is_test = true):")
+    log("send-test: posting ONE synthetic delivery test to Matthew" if deliver_to
+        else "send-test: posting a sample note (is_test = true):")
     log(json.dumps(shown, indent=2))
     http_status, error = post_alert(settings.url, payload)
     if error:
         log(f"send-test: FAILED ({error})")
         return 2
-    log(f"send-test: delivered (HTTP {http_status}). In GHL, fetch the sample request; "
-        "every field should now be selectable.")
+    if deliver_to:
+        log(f"send-test: webhook accepted (HTTP {http_status}); check GHL execution "
+            "and Matthew's inbox. This does not confirm email delivery.")
+    else:
+        log(f"send-test: delivered (HTTP {http_status}). In GHL, fetch the sample request; "
+            "every field should now be selectable.")
     return 0
 
 

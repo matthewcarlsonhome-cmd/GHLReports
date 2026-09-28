@@ -224,9 +224,17 @@ notification, task, and alert notification with:
   Resolve this before publishing; use the spec §6.1 dedicated SSP contact
   fallback if validation proves it necessary.
 
-An explicit request for permission to send exactly one test email to Matthew
-was presented after the draft was complete. No approval had arrived when
-this entry was written. Never treat this note as send authorization.
+Matthew subsequently approved exactly one test email through the webhook
+and published the workflow himself, then confirmed approval. To preserve the
+normal `--send-test` guard, the separate command
+`--send-test-email-to mcarlson@smallscreenproducer.com` sends one synthetic
+SAMPLE payload through the normal Matthew route (`is_test=false`), with a
+TEST subject. It accepts only Matthew's exact address, does not collect live
+data or send digests, and exits. It deliberately bypasses dry mode only for
+this explicitly invoked test. Normal `--send-test` remains mapping-only.
+Delivery execution is pending at this commit; authorization is for this one
+send, not recurring test runs. Clear COLLECTOR_ARGS after the run and return
+the workflow to Draft after checking execution. Do not turn normal delivery on.
 Dry-run settings are saved (§3.4); 3 to 5 nightly rehearsals remain to be
 observed. No workflow was published and no live delivery was enabled.
 

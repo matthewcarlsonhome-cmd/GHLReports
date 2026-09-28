@@ -1275,6 +1275,10 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
                              "AUTOMATION_WEBHOOK_URL and exit: how the GHL workflow learns "
                              "its field names. The optional kind is accepted for old "
                              "scripts and ignored (there is one note format now).")
+    parser.add_argument("--send-test-email-to", choices=["mcarlson@smallscreenproducer.com"],
+                        help="Owner-approved ONE synthetic email through the webhook to "
+                             "Matthew; bypasses the sample guard and exits without collection. "
+                             "Requires a published workflow. Normal --send-test never emails.")
     parser.add_argument("--weekly-alerts", action="store_true",
                         help="retired: the weekly pipeline webhook send was replaced by "
                              "the AM notes; the Monday digest carries the pipeline read")
@@ -1313,6 +1317,10 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
     # every dependency below: this needs no database, no Vault key, and no GHL
     # token — only AUTOMATION_WEBHOOK_URL — so the workflow can be built and
     # tested before the rest of the bridge is configured.
+    if args.send_test_email_to:
+        if args.send_test or args.dry_run:
+            parser.error("--send-test-email-to cannot be combined with --send-test or --dry-run")
+        return automation.send_test_notice(log=log, deliver_to=args.send_test_email_to)
     if args.send_test:
         return automation.send_test_notice(log=log)
 
