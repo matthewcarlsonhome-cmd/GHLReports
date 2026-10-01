@@ -13,7 +13,9 @@ are not enabled by this release.
   0016 is not applied. Project overview reports migration 0015 and a recent backup.
 - Existing SSP GHL dashboard contains an Account Report widget. Its configuration
   has not been changed or saved. No workflow has been changed or published.
-- Code is ready for deployment with new publication defaulting off. Live owner
+- Commit `2d1fcc3` is pushed; the new Netlify client route is visibly deployed
+  and correctly unavailable before database activation. New publication defaults
+  off. Live owner
   bootstrap, function deployment, collector publication, authenticated embedding,
   and browser acceptance remain pending. Do not describe this pilot as launched.
 - September 28 mail settings in HANDOFF are historical, not a new October 1 audit.

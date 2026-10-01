@@ -10,7 +10,8 @@ are implemented. Existing SSP reports and notification code are preserved.
 
 **Live preflight October 1:** Supabase signed in; Matthew's identity is verified,
 SSP is active in America/Chicago, eight existing verified staff identities exist.
-Migration 0016 is **not yet applied**; owner bootstrap and live pilot activation
+Commit `2d1fcc3` is pushed; the new Netlify route is live and correctly
+shows reports unavailable before activation. Migration 0016 is **not yet applied**; owner bootstrap and live pilot activation
 are pending. GHL's existing Account Report widget has not been saved or changed.
 Customer report emails and invitation sends remain off; none were sent.
 
