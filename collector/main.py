@@ -850,7 +850,18 @@ def collect_location(sub: dict, client: GHLClient, store, parent_ctx: ParentCont
     history_rows = metrics.weekly_lead_history(
         kept_all, submissions, tz, [this_week, this_week - timedelta(days=7)])
 
+    from .client_reports import build_reports
+    client_report_rows = []
+    if os.environ.get("CLIENT_REPORTS") == "on":
+        try:
+            client_report_rows = build_reports(sub, snapshot, kept_all, lead_events,
+                                               now_utc, history_start, tz)
+        except Exception:
+            # Client publication must never interrupt the existing SSP run.
+            # Do not log exception text that could contain source records.
+            print("Client report calculation unavailable; existing reports retained.")
     return {
+        "client_reports": client_report_rows,
         "token_invalid": False,
         "snapshot": snapshot,
         "lead_events": lead_event_rows,
@@ -1622,6 +1633,13 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
             store.upsert_lead_history(location_id, result["lead_history"])
             store.upsert_form_health(location_id, run_date.isoformat(),
                                      result.get("form_health") or [])
+            # Opt-in publisher is independent of SSP notifications. A missing
+            # migration or failed publication must not interrupt existing runs.
+            if os.environ.get("CLIENT_REPORTS") == "on":
+                try:
+                    store.publish_client_reports(location_id, result["client_reports"])
+                except Exception:  # Never log report contents or provider errors.
+                    log(f"{slug}: client report publication failed; existing report retained")
         results[location_id] = {**result, "sub": sub}
 
         # Gate hold path: a held snapshot IS written (with gate_passed=False)

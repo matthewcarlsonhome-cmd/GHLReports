@@ -24,17 +24,19 @@ export function useSession(): { session: Session | null; loading: boolean } {
   // The empty dependency array [] means this effect runs once when the
   // component mounts; the returned cleanup runs when it unmounts.
   useEffect(() => {
+    let active = true;
     supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
       setSession(data.session);
       setLoading(false);
-    });
+    }).catch(() => { if (active) {setSession(null);setLoading(false);} });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
       setSession(next);
       setLoading(false);
     });
     // Cleanup: drop the listener so unmounted components don't leak or try to
     // set state after they're gone.
-    return () => sub.subscription.unsubscribe();
+    return () => {active = false;sub.subscription.unsubscribe();};
   }, []);
 
   return { session, loading };

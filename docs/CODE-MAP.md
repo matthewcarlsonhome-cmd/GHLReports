@@ -143,3 +143,21 @@ Runs as `python -m collector.main` at 05:30 Central on the Render cron (`render.
 - **Speed counts only the answered.** Median and p90 use leads that got a human reply; unanswered leads don't make it worse (metrics.py:580-585).
 - **Win rate and days to close** rest on lastStatusChangeAt. A deal created already won counts as won in about 0 days if GHL stamps that date at creation, or is skipped if it's empty; the code can't tell which. Closed-deal paging also stops at the first page with a close older than 90 days, with no sort requested, so it assumes newest-first order (fetchers.py:422-448).
 - **Relationship blind spot.** Parent meetings are fetched only 60 days back (main.py:149). With no recent meeting and no conversation, client_last_touch_days is None and NO_CLIENT_TOUCH can't fire: the most neglected client shows "unknown", not red.
+# October 1 additive client reporting
+
+`collector/client_reports.py` produces a versioned allowlist of aggregate fields
+for attention, calendar weeks and months. It reuses speed-to-lead calculations;
+period medians use individual response events, not daily medians. Missing or
+capped sources produce nulls, with coverage metadata. The existing 42-day contact
+and 14-day/100-target response windows limit historical completeness. Attention
+queue and speed figures preserve existing snapshot formulas. No GHL writes or
+customer email path is added.
+
+`main.py` calculates/publishes only with `CLIENT_REPORTS=on`; `store.py` additionally
+requires per-account publication. Errors retain existing reports and do not stop
+SSP processing. `0016_client_dashboard.sql` provides explicit grants, restricted
+internal policies, safe report RPCs, invitation acceptance, MFA-checked admin
+operations and retained report versions. `prepare-client-access` provisions an
+unconfirmed invited identity without sending email. Client UI is in
+`ClientDashboard.tsx`; administration is `AccessSettings.tsx`. See
+`CLIENT-DASHBOARD-ROLLOUT.md` for live gates and test commands.

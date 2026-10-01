@@ -22,6 +22,10 @@ import Forms from "./pages/Forms";
 import Login from "./pages/Login";
 import Portfolio from "./pages/Portfolio";
 import Runs from "./pages/Runs";
+import ClientDashboard from "./pages/ClientDashboard";
+import AccessSettings from "./pages/AccessSettings";
+import { AccessProvider, useAccess } from "./lib/useAccess";
+import { safeDestination } from "./lib/dashboard";
 
 // Thin strip under the nav showing how fresh the data is ("Data as of ...").
 // useSnapshotAge returns null until it has loaded, so we render nothing then.
@@ -35,22 +39,25 @@ function SnapshotBanner() {
 
 // Auth guard: only renders its children when a session exists.
 // - This is a convenience, not the security boundary: the database's RLS
-//   policies decide what any request can read (staff emails only), so a page
+//   policies decide what any request can read from explicit account grants, so a page
 //   rendered without the right login simply gets no rows back.
 // - While the session is still being looked up we show a loading stub instead
 //   of redirecting — otherwise a signed-in user would flash to /login on every
 //   hard refresh before the stored session was read back.
 // - On redirect we stash the current location in navigation state so Login can
 //   send the user back to the page they originally asked for.
-function RequireAuth({ children }: { children: ReactNode }) {
+function RequireAuth({ children, client = false, admin = false }: { children: ReactNode; client?: boolean; admin?: boolean }) {
   const { session, loading } = useSession();
+  const access = useAccess();
   const location = useLocation();
-  if (loading) {
+  if (loading || access.loading) {
     return <div className="p-6 text-sm text-muted">Loading…</div>;
   }
   if (!session) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
+  if (admin && !access.admin) return <Navigate to="/client" replace />;
+  if (!client && !access.staff) return <Navigate to="/client" replace />;
   return <>{children}</>;
 }
 
@@ -62,18 +69,26 @@ function RequireAuth({ children }: { children: ReactNode }) {
 //   useSession) then fires and RequireAuth redirects to /login.
 function Nav() {
   const { session } = useSession();
+  const { staff, admin } = useAccess();
+  const { pathname, state } = useLocation();
   const embedded = isEmbedded();
+  const clientView = pathname.startsWith('/client') || !staff;
+  const returnTo = state?.from;
+  const standalone = new URL(pathname === '/login' && returnTo
+    ? safeDestination(`${returnTo.pathname}${returnTo.search ?? ''}`) : fullViewUrl(), window.location.origin);
+  standalone.searchParams.delete('embed');
 
-  if (embedded) {
+  if (embedded || clientView) {
     return (
       <div className="flex items-center justify-end border-b border-grid bg-surface px-3 py-1">
+        {session && <button className="mr-4 text-xs underline" onClick={() => void supabase.auth.signOut()}>Sign out</button>}
         <a
-          href={fullViewUrl()}
+          href={standalone.toString()}
           target="_blank"
           rel="noreferrer"
           className="text-xxs text-series underline underline-offset-2"
         >
-          Open full view ↗
+          Open secure report in a new tab ↗
         </a>
       </div>
     );
@@ -92,6 +107,7 @@ function Nav() {
       <Link to="/runs" className="text-xs text-ink-2 hover:text-ink">
         Runs
       </Link>
+      {admin && <Link to="/access" className="text-xs text-ink-2">Client access</Link>}
       <div className="ml-auto flex max-w-full items-center gap-3">
         {session?.user?.email ? <span className="break-all text-xxs text-muted">{session.user.email}</span> : null}
         {session ? (
@@ -110,7 +126,11 @@ function Nav() {
 // The route table. Every page except /login sits inside RequireAuth, and the
 // "*" catch-all sends unknown URLs back to the portfolio.
 export default function App() {
+  return <AccessProvider><AppContent /></AccessProvider>;
+}
+function AppContent() {
   const { session } = useSession();
+  const access = useAccess();
   const { pathname } = useLocation();
   // Opening an account should start at its priorities, even from a long list.
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
@@ -118,9 +138,12 @@ export default function App() {
     <div className="min-h-screen">
       <Nav />
       {/* Only show the freshness banner once signed in — it queries the DB. */}
-      {session ? <SnapshotBanner /> : null}
-      <Routes>
+      {session && access.staff && !pathname.startsWith('/client') ? <SnapshotBanner /> : null}
+      <Routes key={session?.user.id ?? 'signed-out'}>
         <Route path="/login" element={<Login />} />
+        <Route path="/client" element={<RequireAuth client><ClientDashboard /></RequireAuth>} />
+        <Route path="/client/accounts/:locationId" element={<RequireAuth client><ClientDashboard /></RequireAuth>} />
+        <Route path="/access" element={<RequireAuth admin><AccessSettings /></RequireAuth>} />
         <Route
           path="/"
           element={

@@ -27,19 +27,17 @@
   status = 200
 
 # Security headers on every response.
-#   Content-Security-Policy: only `frame-ancestors` today, which lists the
-#     sites allowed to show the dashboard inside an iframe (SSP's white-label
-#     GHL domain and GHL's own hosts, for the planned Custom Menu Link). It
-#     replaces X-Frame-Options, which is left out on purpose because it
-#     cannot allow a list of hosts. The wildcard GHL hosts and the missing
-#     script/connect rules are review items (docs/SECURITY-SPEC.md SEC-16):
-#     test any change here with the GHL embed before shipping it.
+#   Content-Security-Policy restricts scripts and connections and permits frames
+#     only on the approved SSP and GHL hosts. Inline styles support React charts.
+#     X-Frame-Options is omitted because it cannot allow this explicit host list.
+#     Verify embedded login and charts in the pilot before enabling client access.
 #   X-Content-Type-Options: stops browsers from guessing file types.
 #   Referrer-Policy: other sites see only our origin, never a full URL
 #     (dashboard URLs contain location ids).
 [[headers]]
   for = "/*"
   [headers.values]
-    Content-Security-Policy = "frame-ancestors 'self' https://crm.smallscreenproducer.com https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com https://*.msgsndr.com"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://crm.smallscreenproducer.com https://app.gohighlevel.com"
+    Cache-Control = "no-store"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"

@@ -8,21 +8,21 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { emailHint } from "../lib/embed";
 import { supabase } from "../lib/supabase";
+import { safeDestination } from "../lib/dashboard";
 
 // Seconds before "Resend code" becomes clickable again — stops accidental
 // double-sends and spamming the email provider.
 const RESEND_COOLDOWN_S = 30;
 
-// Email-code sign-in only, for pre-provisioned staff accounts (spec v3 9.1):
-// public sign-up is disabled in Supabase Auth, the domain trigger is the
-// backstop, and this flow works identically standalone and in any iframe.
+// Email-code sign-in for approved identities. Public signup stays disabled;
+// the invitation trigger and database grants are the authorization boundary.
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   // RequireAuth stashed the page the user originally wanted in router state;
   // fall back to the portfolio ("/") when they came straight to /login.
   const from = (location.state as { from?: { pathname: string; search: string } } | null)?.from;
-  const destination = from ? `${from.pathname}${from.search ?? ""}` : "/";
+  const destination = safeDestination(from ? `${from.pathname}${from.search ?? ""}` : "/");
 
   // Form state. `stage` drives which of the two forms renders; `busy` disables
   // buttons while a request is in flight; notice/error are user feedback.
@@ -59,28 +59,14 @@ export default function Login() {
     setBusy(true);
     setError(null);
     setNotice(null);
-    const { error: err } = await supabase.auth.signInWithOtp({
+    try { await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: { shouldCreateUser: false },
-    });
+    }); } catch { /* Keep the response generic; do not disclose account existence. */ }
     setBusy(false);
-    if (err) {
-      // Translate Supabase's generic "signups not allowed" wording into a
-      // message that tells staff what actually happened and who to ask.
-      // (Supabase's answer already shows whether an address has an account;
-      // with a small, known staff list that is a low risk.)
-      const message = err.message ?? "";
-      const lower = message.toLowerCase();
-      if (lower.includes("signups not allowed") || lower.includes("restricted")) {
-        setError("Not a registered staff account. Ask Matthew to add you.");
-      } else {
-        setError(message || "Could not send the code. Try again.");
-      }
-      return;
-    }
     setStage("code");
     setCooldown(RESEND_COOLDOWN_S);
-    setNotice("Code sent. Check your email — it expires in 10 minutes.");
+    setNotice("If this email has approved access, a sign-in code has been sent. Contact SSP if it does not arrive.");
   }
 
   // preventDefault stops the browser's default full-page form submission —
@@ -115,7 +101,7 @@ export default function Login() {
       <div className="rounded border border-grid bg-surface p-5">
         <h1 className="mb-1 text-base font-semibold">Account Health</h1>
         <p className="mb-4 text-xs text-ink-2">
-          Sign in with your work email. smallscreenproducer.com staff accounts only.
+          Sign in with the email approved by SSP. Each account’s reports require explicit access.
         </p>
 
         {/* stage switch: email form first, code form after a code was sent */}
@@ -132,7 +118,7 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="mb-3 w-full rounded border border-hairline bg-white px-2 py-1.5 text-sm"
-              placeholder="you@smallscreenproducer.com"
+              placeholder="Your approved email"
             />
             <button
               type="submit"

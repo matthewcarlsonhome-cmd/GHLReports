@@ -204,6 +204,17 @@ class Store:
         self.client.table("snapshots").upsert(
             row, on_conflict="location_id,snapshot_date").execute()
 
+    def publish_client_reports(self, location_id: str, rows: list[dict]) -> None:
+        """Publish opt-in safe aggregates without touching any delivery path."""
+        if not rows:
+            return
+        settings = self.client.table("client_report_settings").select("publication_enabled").eq(
+            "location_id", location_id).maybe_single().execute()
+        if not settings.data or not settings.data.get("publication_enabled"):
+            return
+        self.client.table("client_reports").upsert(rows, on_conflict=
+            "location_id,period_kind,period_start,generated_at").execute()
+
     def upsert_lead_events(self, rows: list[dict]) -> None:
         """Write per-lead speed-to-lead rows; key = (location, contact)."""
         if rows:

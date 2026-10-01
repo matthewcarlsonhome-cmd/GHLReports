@@ -16,6 +16,18 @@ PII_CANARIES = [
 ]
 
 
+def test_client_report_projection_never_exposes_lead_data():
+    from .test_client_reports import fixture, build
+    snapshot, contacts, events = fixture()
+    snapshot['details'] = {'name': 'SECRET_LEAD_CANARY', 'email': 'secret@example-client.com'}
+    snapshot['coverage']['sources']['speed_to_lead']['note'] = 'SECRET_LEAD_CANARY'
+    for item in contacts + events:
+        item.update(contact_name='SECRET_LEAD_CANARY', source='SECRET_LEAD_CANARY', email='secret@example-client.com')
+    serialized = json.dumps(build(snapshot, contacts, events))
+    for canary in PII_CANARIES + ['SECRET_LEAD_CANARY', 'contact_id', 'contact_name', 'details']:
+        assert canary not in serialized
+
+
 def test_explicit_delivery_test_is_synthetic_and_does_not_log_secrets(monkeypatch):
     from collector import automation
     posted, logs = [], []

@@ -1,5 +1,34 @@
 # Handoff: GHL Account Health Dashboard
 
+## October 1 client-dashboard implementation
+
+Read `CLIENT-DASHBOARD-ROLLOUT.md` for the implementation, tested safeguards,
+deployment order and outstanding release gates; requirements are in
+`CLIENT-DASHBOARD-SPEC.md` v1.1. New client routes, explicit grants, administrator
+MFA, invitation preparation without email, safe period reports and access controls
+are implemented. Existing SSP reports and notification code are preserved.
+
+**Live preflight October 1:** Supabase signed in; Matthew's identity is verified,
+SSP is active in America/Chicago, eight existing verified staff identities exist.
+Migration 0016 is **not yet applied**; owner bootstrap and live pilot activation
+are pending. GHL's existing Account Report widget has not been saved or changed.
+Customer report emails and invitation sends remain off; none were sent.
+
+**Validation:** 252 Python tests, 21 web tests, isolated PostgreSQL migration/RLS
+suite, and production build pass. The database suite includes tenant isolation,
+assigned AMs, multi-account clients, revocation, MFA, invitation expiry/replay,
+unverified identity denial and retained complete reports. Local synthetic preview
+is not evidence of a live usable GHL embed. Safari/live Auth/production isolation
+and successful nightly client publication are still release gates.
+
+`CLIENT_REPORTS` defaults off. Keep it off until migration and approved SSP-only
+publication setup. The current 14-day response scan cannot certify many historical
+monthly speed values, which remain unavailable. Staff keep their existing grants
+until the assignment roster is reviewed. No retention deletion is implemented.
+
+The September 28 operational settings below are historical unless expressly
+rechecked; do not interpret them as fresh October 1 mail/workflow evidence.
+
 State as of **2026-09-28** (pilot workflow and Render settings updated after Matthew's sample run; earlier database checks at 16:10 to 16:20 UTC).
 This is the file a new session starts from. Rules for agents are in
 `/AGENTS.md`; read them first. Detail lives in `CODE-MAP.md` (how the Python
