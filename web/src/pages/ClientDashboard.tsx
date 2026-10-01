@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAccess } from '../lib/useAccess';
+import { isEmbedded } from '../lib/embed';
 import { displayDuration, displayNumber, leadTrend, periodLabel, staleReport, type ClientAccount, type ClientReport } from '../lib/dashboard';
 
 export default function ClientDashboard() {
@@ -10,6 +11,7 @@ export default function ClientDashboard() {
   const [query,setQuery]=useSearchParams();
   const navigate=useNavigate();
   const {userId,admin}=useAccess();
+  const embedded=isEmbedded();
   const [accounts,setAccounts]=useState<ClientAccount[]>([]);
   const [reports,setReports]=useState<ClientReport[]>([]);
   const [busy,setBusy]=useState(true);
@@ -24,11 +26,14 @@ export default function ClientDashboard() {
     async function refresh() {
       const ticket=++sequence;
       try {
+        if(embedded && !locationId) throw new Error('This dashboard needs an account-specific report link. Contact SSP.');
         const a=await supabase.rpc('dashboard_accounts');
         if(a.error) throw new Error('Reports are not available yet. Please contact SSP.');
         if(cancelled || ticket!==sequence) return;
         const allowed=(a.data ?? []) as ClientAccount[];
-        setAccounts(allowed);
+        // The frame displays its configured account only. This is presentation;
+        // database grants still decide whether the signed-in person can read it.
+        setAccounts(embedded ? allowed.filter(item=>item.location_id===locationId) : allowed);
         if(!locationId && allowed.length===1) {
           navigate(`/client/accounts/${encodeURIComponent(allowed[0].location_id)}?${query}`,{replace:true});return;
         }
@@ -52,7 +57,7 @@ export default function ClientDashboard() {
     return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',focus);};
     // View/period controls never change the access scope or fetch identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[locationId,userId,revision,navigate]);
+  },[locationId,userId,revision,navigate,embedded]);
   const account=accounts.find(a=>a.location_id===locationId);
   const views=account?.enabled_views ?? ['attention','week','month'];
   const tab=views.includes(requested) ? requested : views[0];
@@ -71,10 +76,10 @@ export default function ClientDashboard() {
   }
   function view(value:string) {const next=new URLSearchParams(query);next.set('view',value);next.delete('period');next.delete('previous');setQuery(next);}
   return <main className="mx-auto max-w-6xl px-4 py-6 sm:px-8">
-    {admin && <p className="mb-4 rounded border border-blue-200 bg-blue-50 p-3 text-sm">Administrator preview · Read-only client report <Link className="underline" to="/access">Manage access</Link></p>}
+    {admin && <p className="mb-4 rounded border border-blue-200 bg-blue-50 p-3 text-sm">Administrator preview · Read-only client report {!embedded && <Link className="underline" to="/access">Manage access</Link>}</p>}
     <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs uppercase tracking-widest text-muted">Account follow up</p><h1 className="mt-1 break-words text-2xl font-semibold">{account?.name ?? 'Your reports'}</h1><p className="mt-2 text-sm text-muted">A clear view of lead response and outstanding follow-up.</p></div>
-      {accounts.length>1 && <label className="text-sm">Account<select className="ml-2 max-w-full rounded border p-2" value={locationId ?? ''} onChange={e=>navigate(`/client/accounts/${encodeURIComponent(e.target.value)}?embed=1`)}><option value="" disabled>Select an account</option>{accounts.map(a=><option key={a.location_id} value={a.location_id}>{a.name}</option>)}</select></label>}
+      {!embedded && accounts.length>1 && <label className="text-sm">Account<select className="ml-2 max-w-full rounded border p-2" value={locationId ?? ''} onChange={e=>navigate(`/client/accounts/${encodeURIComponent(e.target.value)}`)}><option value="" disabled>Select an account</option>{accounts.map(a=><option key={a.location_id} value={a.location_id}>{a.name}</option>)}</select></label>}
     </header>
     {busy ? <p role="status">Loading your report…</p> : error ? <div role="alert" className="rounded border bg-white p-5">{error} <button className="underline" onClick={()=>setRevision(x=>x+1)}>Try again</button></div> : null}
     {!busy && !account && !error && <div className="rounded border bg-white p-5"><p>{accounts.length ? 'Select an account to open its report.' : 'No reports are assigned or enabled yet. Contact SSP for access.'}</p></div>}

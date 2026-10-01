@@ -2,6 +2,15 @@
 
 ## October 1 client-dashboard implementation
 
+**Embedded account display correction:** the client widget now shows only the
+account specified in `/client/accounts/:locationId`, with no account selector or
+Manage access link while framed or marked `?embed=1`. An embedded URL without an
+account shows a configuration error. Standalone multi-account selection is
+preserved. This is a display restriction, not a change to authorization: Matthew
+remains portfolio administrator; client identities still require explicit account
+memberships. Chrome checks with a synthetic multi-account administrator verified
+the embedded selector/link are absent and the standalone selector remains present.
+
 Read `CLIENT-DASHBOARD-ROLLOUT.md` for the implementation, tested safeguards,
 deployment order and outstanding release gates; requirements are in
 `CLIENT-DASHBOARD-SPEC.md` v1.1. New client routes, explicit grants, administrator

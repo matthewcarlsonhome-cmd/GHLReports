@@ -94,6 +94,14 @@ token, or email authentication parameter belongs in the widget. Frame ancestors
 are restricted to the Netlify origin itself, `crm.smallscreenproducer.com`, and
 `app.gohighlevel.com`. Use the actual approved host for final testing.
 
+The embedded view displays only that URL's account and omits account switching
+and administration links, even for Matthew. Opening the report outside the frame
+restores the authorized account selector. A widget URL without an account ID is
+a configuration error. This does not remove administrator permissions or grant
+client access: assigned client roles and the access switch remain the security
+boundary. Test actual client isolation with a client identity, not Matthew's
+administrator session.
+
 Verify embedded sign-in, three views, completed periods, empty/partial/stale states,
 wrong account, logout, session expiry, revoked membership, narrow layout and a long
 account name. Test Chrome and Safari and blocked third-party storage. The new-tab
