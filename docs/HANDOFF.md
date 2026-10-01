@@ -8,12 +8,22 @@ deployment order and outstanding release gates; requirements are in
 MFA, invitation preparation without email, safe period reports and access controls
 are implemented. Existing SSP reports and notification code are preserved.
 
-**Live preflight October 1:** Supabase signed in; Matthew's identity is verified,
-SSP is active in America/Chicago, eight existing verified staff identities exist.
-Commit `2d1fcc3` is pushed; the new Netlify route is live and correctly
-shows reports unavailable before activation. Migration 0016 is **not yet applied**; owner bootstrap and live pilot activation
-are pending. GHL's existing Account Report widget has not been saved or changed.
-Customer report emails and invitation sends remain off; none were sent.
+**Live October 1 after Matthew ran the prepared query:** migration 0016 and
+owner bootstrap are applied. Read-back confirms Matthew is active administrator,
+eight active staff grants, six new tables with RLS, zero client memberships, zero
+enabled client accounts, zero publishing accounts, and zero client reports.
+The Netlify client route is deployed. `prepare-client-access` is deployed in
+Supabase with Verify JWT enabled. Render runs the deployed `204e192` code;
+`CLIENT_REPORTS=on` was saved with **Save and apply on next run**, without triggering
+a run. `AUTOMATION_WEBHOOKS=dry` was read back unchanged; digest recipient settings
+and `COLLECTOR_ARGS` are absent. No emails, invitations or collection runs sent.
+
+**Next user step:** Matthew must finish his own authenticator enrollment and
+verification at `/access`; this is pending. Then enable SSP-only publication,
+verify the first report, and complete dashboard acceptance. Client access remains
+off. GHL tab control currently times out, so the existing Account Report widget
+has not been changed. Render sign-in was explicitly approved after an automatic
+review initially blocked it; access is now working.
 
 **Validation:** 252 Python tests, 21 web tests, isolated PostgreSQL migration/RLS
 suite, and production build pass. The database suite includes tenant isolation,
@@ -22,8 +32,8 @@ unverified identity denial and retained complete reports. Local synthetic previe
 is not evidence of a live usable GHL embed. Safari/live Auth/production isolation
 and successful nightly client publication are still release gates.
 
-`CLIENT_REPORTS` defaults off. Keep it off until migration and approved SSP-only
-publication setup. The current 14-day response scan cannot certify many historical
+`CLIENT_REPORTS` defaults off in code and is now on in Render; per-account
+publication remains off pending SSP pilot setup. The current 14-day response scan cannot certify many historical
 monthly speed values, which remain unavailable. Staff keep their existing grants
 until the assignment roster is reviewed. No retention deletion is implemented.
 

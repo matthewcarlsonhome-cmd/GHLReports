@@ -8,18 +8,22 @@ are not enabled by this release.
 
 ## Verified baseline and current gate
 
-- October 1 live Supabase preflight: SSP is active in America/Chicago; Matthew's
-  authentication email is verified; eight confirmed SSP users exist. Migration
-  0016 is not applied. Project overview reports migration 0015 and a recent backup.
-- Existing SSP GHL dashboard contains an Account Report widget. Its configuration
-  has not been changed or saved. No workflow has been changed or published.
-- Commit `2d1fcc3` is pushed; the new Netlify client route is visibly deployed
-  and correctly unavailable before database activation. New publication defaults
-  off. Live owner
-  bootstrap, function deployment, collector publication, authenticated embedding,
-  and browser acceptance remain pending. Do not describe this pilot as launched.
-- September 28 mail settings in HANDOFF are historical, not a new October 1 audit.
-  Preserve those live settings; this rollout does not authorize any send.
+- Matthew applied migration 0016 and the verified-owner bootstrap on October 1.
+  Live read-back: active owner administrator, eight active staff grants, six new
+  protected tables, zero client memberships, zero enabled/publishing accounts,
+  and zero client report rows. SSP is active in America/Chicago.
+- The Netlify client route and Render commit `204e192` are deployed. Supabase
+  `prepare-client-access` is deployed with Verify JWT enabled. No invitation was
+  created and the function has not been exercised with live onboarding.
+- Render `CLIENT_REPORTS=on` is saved for the next run, without triggering one.
+  Account publication remains off pending administrator verification. Existing
+  `AUTOMATION_WEBHOOKS=dry` is confirmed unchanged; digest recipient settings and
+  `COLLECTOR_ARGS` are absent. No email or invitation was sent.
+- Matthew must complete authenticator verification himself at `/access`. GHL tab
+  control is currently timing out; the existing Account Report widget is unchanged.
+  SSP publication, first report, production-equivalent non-admin session tests,
+  authenticated embedding and browser acceptance remain pending. Do not describe
+  this pilot as launched.
 
 ## Permission migration and deployment
 
