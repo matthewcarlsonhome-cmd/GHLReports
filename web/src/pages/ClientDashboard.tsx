@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase';
 import { useAccess } from '../lib/useAccess';
 import { isEmbedded } from '../lib/embed';
+import OwnerReportPanel from '../components/OwnerReportPanel';
 import { displayDuration, displayNumber, leadTrend, periodLabel, staleReport, type ClientAccount, type ClientReport } from '../lib/dashboard';
 
 export default function ClientDashboard() {
@@ -19,6 +20,7 @@ export default function ClientDashboard() {
   const [token,setToken]=useState('');
   const [notice,setNotice]=useState('');
   const [revision,setRevision]=useState(0);
+  const [ownerAvailable,setOwnerAvailable]=useState(false);
   const requested=query.get('view') === 'week' ? 'week' : query.get('view') === 'month' ? 'month' : 'attention';
   useEffect(() => {
     let cancelled=false, sequence=0;
@@ -84,7 +86,8 @@ export default function ClientDashboard() {
     {busy ? <p role="status">Loading your report…</p> : error ? <div role="alert" className="rounded border bg-white p-5">{error} <button className="underline" onClick={()=>setRevision(x=>x+1)}>Try again</button></div> : null}
     {!busy && !account && !error && <div className="rounded border bg-white p-5"><p>{accounts.length ? 'Select an account to open its report.' : 'No reports are assigned or enabled yet. Contact SSP for access.'}</p></div>}
     {!busy && (!account || query.get('join')==='1') && <details className="my-4 text-sm"><summary className="cursor-pointer text-muted">Have an invitation code?</summary><p className="my-2">Sign in with the email approved by SSP, then enter your one-time invitation code.</p><label>Invitation code<input type="password" className="mx-2 rounded border p-2" autoComplete="off" value={token} onChange={e=>setToken(e.target.value)}/></label><button disabled={!token} className="rounded border px-3 py-2 disabled:opacity-40" onClick={()=>void accept()}>Accept access</button><p role="status">{notice}</p></details>}
-    {account && !error && <>
+    {account && !error && <OwnerReportPanel location={account.location_id} staleHours={account.stale_hours} enabledViews={views} onAvailability={setOwnerAvailable}/>}
+    {account && !error && !ownerAvailable && <>
       <div className="mb-5 flex flex-wrap gap-2" aria-label="Report views">{(['attention','week','month'] as const).map((t,i)=>views.includes(t) && <button key={t} aria-pressed={tab===t} onClick={()=>view(t)} className={`rounded-full border px-4 py-2 text-sm ${tab===t?'bg-ink text-white':'bg-white'}`}>{['Needs attention','This week','This month'][i]}</button>)}</div>
       {options.length>0 && <label className="mb-4 block text-sm">{tab==='attention'?'Recorded window starting':'Reporting period'} <select className="ml-2 rounded border p-2" value={selected?.period_start ?? ''} onChange={e=>{const next=new URLSearchParams(query);next.set('period',e.target.value);next.delete('previous');setQuery(next);}}>{options.map(r=><option key={r.period_start} value={r.period_start}>{r.period_start}{r.data.to_date?' · to date':''}</option>)}</select></label>}
       {!selected ? <p className="rounded border bg-white p-5">A report has not been published for this view yet.</p> : <>

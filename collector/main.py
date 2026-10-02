@@ -1708,6 +1708,16 @@ def run(argv: list[str] | None = None, store=None, client_factory=None,
         log(f"{sub.get('slug') or location_id}: {len(location_flags)} flags "
             f"(+{len(flags_new)} new, -{len(flags_resolved)} resolved)")
 
+    # Owner summaries are independent of every delivery switch and use safe
+    # aggregate sources. Missing migration 0017 must not fail staff collection.
+    if os.environ.get("CLIENT_REPORTS") == "on":
+        from .owner_store import OwnerStore
+        for location_id, result in results.items():
+            try:
+                OwnerStore(store.client).publish(result["sub"], result, run_date)
+            except Exception:
+                log("owner reports: publication unavailable for an account; existing reports retained")
+
     # AM notes (automation.py): one note per client account per day, only for
     # what is new, worse, or due for a reminder, POSTed to SSP's own GHL
     # workflow. Runs after every flag row is written so a note can never name

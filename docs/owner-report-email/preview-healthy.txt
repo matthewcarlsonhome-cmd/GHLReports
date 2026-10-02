@@ -1,0 +1,37 @@
+Example Pool Company — Weekly lead follow-up
+September 21–27, 2026 · America/Chicago
+
+Hello Alex,
+
+Your follow-up routine is on track
+No follow-up issues were found in the selected topics at the latest check. Keep your team's routine in place and review the dashboard for new activity.
+
+Last week's results
+New leads: 40
+34 the previous week · up 18%.
+Follow-up recorded: 38 of 38
+100% of eligible leads had outbound activity by week end.
+Typical first human response: 9 minutes
+90th percentile: 35 minutes · 38 measured responses.
+Eligible leads were at least 24 hours old at week end. Follow-up recorded does not mean contacted within 24 hours or reached successfully.
+
+CURRENT FOLLOW-UP QUEUE
+September 28, 2026 at 5:45 a.m. CDT — latest check, not a period total.
+0 recent leads overdue for follow-up · 0 eligible conversations waiting · 0 unassigned leads.
+
+Keep the routine going
+Continue checking new activity
+The selected topics have no corrective items at the latest check.
+Check the dashboard and keep ownership and next actions current.
+
+This summary covers the selected topics and measured windows; it is not a sales or conversion assessment.
+
+
+ABOUT THESE FIGURES
+Sources are complete for the figures shown. Speed includes responded leads only; unanswered leads appear separately. Queue counts can change as records enter or leave the measured windows.
+
+View your account report: https://example.com/report-preview
+Design preview only. This example button does not open a client report. Production links require sign-in and open the exact report version.
+
+You receive this weekly summary as the designated report owner. Contact your SSP account manager to change the recipient or pause reports. The dashboard requires sign-in.
+FICTIONAL DATA · Template owner-weekly-v1 · Report sample-week-2026-09-21

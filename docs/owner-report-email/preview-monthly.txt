@@ -1,0 +1,41 @@
+Example Pool Company — Monthly lead follow-up review
+September 1–30, 2026 · America/Chicago
+
+Hello Alex,
+
+Patterns to improve
+Overdue follow-up appeared in three reporting weeks during September. Use the current queue to decide what to address now.
+
+September's results
+New leads: 160
+148 in August · up 8% across these complete calendar months.
+Follow-up recorded: Unavailable
+Response history is incomplete for this period. Missing data does not mean no follow-up.
+Typical first human response: Unavailable
+A trustworthy median and 90th percentile cannot be calculated yet.
+Monthly results and current queues have different cutoffs. Monthly response figures remain unavailable where history is incomplete.
+
+CURRENT FOLLOW-UP QUEUE
+October 1, 2026 at 5:45 a.m. CDT — latest check, not a period total.
+Overdue follow-up: unavailable · 7 conversations waiting · oldest wait: 18 hours · 2 leads without an owner.
+
+Priorities for the next month
+1. Assign a daily follow-up owner
+Overdue follow-up was observed on 8 of 22 valid checks, across 3 reporting weeks.
+Choose who reviews new leads each day and confirms their next action.
+
+2. Clear the current reply queue
+7 conversations are waiting at the latest check; the oldest has waited 18 hours.
+Answer the oldest messages first, then agree who checks replies daily.
+
+Repeated observations describe an issue category; they are not a count of unique affected leads.
+
+
+ABOUT THESE FIGURES
+Lead and conversation sources are complete. Response history is incomplete; affected figures are withheld. This report cannot support an all-clear conclusion.
+
+View your account report: https://example.com/report-preview
+Design preview only. This example button does not open a client report. Production links require sign-in and open the exact report version.
+
+You receive this weekly summary as the designated report owner. Contact your SSP account manager to change the recipient or pause reports. The dashboard requires sign-in.
+FICTIONAL DATA · Monthly design variant only; sending deferred

@@ -1,0 +1,45 @@
+Example Pool Company — Weekly lead follow-up
+September 21–27, 2026 · America/Chicago
+
+Hello Alex,
+
+Your team's next steps
+Last week's activity is below. At the latest check, three follow-up priorities need your team's attention.
+
+Last week's results
+New leads: 40
+34 the previous week · up 18%.
+Follow-up recorded: 34 of 38
+89.5% of eligible leads had outbound activity by week end. Four did not.
+Typical first human response: 12 minutes
+90th percentile: 58 minutes · 35 measured responses.
+Eligible leads were at least 24 hours old at week end. Follow-up recorded does not mean contacted within 24 hours or reached successfully.
+
+CURRENT FOLLOW-UP QUEUE
+September 28, 2026 at 5:45 a.m. CDT — latest check, not a period total.
+5 recent leads without follow-up after 24 hours · 7 conversations waiting · oldest wait: 18 hours · 2 leads without an owner.
+
+Three priorities for your team
+1. Follow up with 5 recent leads
+These leads have no recorded call, text or email after 24 hours.
+Assign the leads and record their next call, text or email in GHL.
+
+2. Answer 7 waiting conversations
+The oldest eligible unanswered message has waited 18 hours.
+Start with the oldest messages. Close conversations that no longer need a reply.
+
+3. Give 2 leads a clear owner
+These leads had no assigned owner at the latest check.
+Assign a team member and confirm the next follow-up step.
+
+These are current follow-up items; they may differ from last week's closing totals.
+
+
+ABOUT THESE FIGURES
+Sources are complete for the figures shown. Speed includes responded leads only; unanswered leads appear separately. Queue counts can change as records enter or leave the measured windows.
+
+View your account report: https://example.com/report-preview
+Design preview only. This example button does not open a client report. Production links require sign-in and open the exact report version.
+
+You receive this weekly summary as the designated report owner. Contact your SSP account manager to change the recipient or pause reports. The dashboard requires sign-in.
+FICTIONAL DATA · Template owner-weekly-v1 · Report sample-week-2026-09-21

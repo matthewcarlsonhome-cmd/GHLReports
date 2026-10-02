@@ -1,0 +1,18 @@
+{
+  "event": "owner_followup_weekly",
+  "schema_version": "1",
+  "mode": "mapping",
+  "delivery_id": "00000000-0000-0000-0000-000000000001",
+  "location_id": "ZnckuEDPIcWu8fn72ppi",
+  "workflow_binding": "623657b3-eabc-451f-b0a6-b8c34865d4a2",
+  "recipient_binding_version": "1",
+  "period_start": "2026-09-21",
+  "period_end": "2026-09-28T00:00:00-05:00",
+  "timezone": "America/Chicago",
+  "report_id": "00000000-0000-0000-0000-000000000002",
+  "template_version": "owner-weekly-v1",
+  "claim_expires_at": "2026-09-29T13:00:00Z",
+  "claim_credential": "",
+  "completion_credential": "",
+  "envelope": "{\"event\":\"owner_followup_weekly\",\"schema_version\":\"1\",\"mode\":\"mapping\",\"delivery_id\":\"00000000-0000-0000-0000-000000000001\",\"location_id\":\"ZnckuEDPIcWu8fn72ppi\",\"workflow_binding\":\"623657b3-eabc-451f-b0a6-b8c34865d4a2\",\"recipient_binding_version\":\"1\",\"period_start\":\"2026-09-21\",\"period_end\":\"2026-09-28T00:00:00-05:00\",\"timezone\":\"America/Chicago\",\"report_id\":\"00000000-0000-0000-0000-000000000002\",\"template_version\":\"owner-weekly-v1\",\"claim_expires_at\":\"2026-09-29T13:00:00Z\",\"claim_credential\":\"\",\"completion_credential\":\"\"}"
+}

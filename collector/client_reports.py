@@ -97,6 +97,15 @@ def build_reports(sub, snapshot, contacts, events, now, history_start, tz):
                          'conversations':kind == 'attention' and complete(snapshot,'conversations')},
             'metrics': values,
         }
+        if kind == 'month' and start == month_start(cutoff):
+            prior_start = month_start(start, -1)
+            prior_end = min(prior_start + (end-start), start)
+            available = volume_ok and prior_start >= history_start
+            prior_contacts = {str(c.get('id')) for c in contacts if c.get('id') and
+                (created := metrics.parse_ts(c.get('dateAdded'))) is not None and prior_start <= created < prior_end}
+            data['comparison'] = {'available': available, 'new_leads': len(prior_contacts) if available else None,
+                'label': f'Prior month through day {(prior_end-prior_start).days} (matched elapsed days, capped)',
+                'period_start': prior_start.isoformat(), 'period_end': prior_end.isoformat()}
         rows.append({'location_id':sub['location_id'],'period_kind':kind,'period_start':start.date().isoformat(),
                      'generated_at':now.astimezone(timezone.utc).isoformat(),'data':data})
     return rows

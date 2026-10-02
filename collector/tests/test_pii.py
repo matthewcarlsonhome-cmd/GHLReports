@@ -178,3 +178,19 @@ def test_no_customer_names_in_dry_run_output(capsys):
     out = capsys.readouterr().out
     for name in _fixture_person_names():
         assert name not in out, f"{name!r} printed by --dry-run"
+
+
+def test_owner_email_and_json_drop_customer_canaries():
+    from collector.tests.test_owner_reports import reports,NOW
+    from collector.owner_reports import summarize,observations
+    from collector.owner_report_templates import render
+    period,current=reports()
+    secret='OWNER_PRIVATE_CUSTOMER_CANARY'
+    for report in (period,current):
+        report['data']['details']={'name':secret,'phone':'+16085551212','email':'secret@example-client.com','message':secret}
+        report['data']['metrics']['private']=secret
+    report=summarize({'location_id':'fixture-a','name':'Example Business'},period,current,now=NOW)
+    content=render({'id':'saved','period_start':'2026-09-28','data':report},'https://reports.example.com')
+    out=json.dumps([report,content])
+    for value in [secret,'+1608555','@example-client.com','contact_id','message_body']:
+        assert value not in out

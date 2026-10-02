@@ -115,4 +115,5 @@ await db.exec('reset role');
 const policies=await db.query("select tablename from pg_tables where schemaname='public' and tablename in ('staff_access','account_memberships','client_report_settings','client_invitations','client_reports','access_audit') and rowsecurity");
 assert.equal(policies.rows.length,6);
 console.log('PASS: all migrations; tenant and field isolation; spoofed claims; admin MFA; revoke and kill switches; assigned AM and multi-account client; no client writes; invitation binding/replay/revocation/expiry/verification; last complete report; anonymous denial.');
+await (await import('./owner_reports.mjs')).default({db,asUser,scalar,denied,owner,a,b});
 await db.close();

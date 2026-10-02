@@ -1,0 +1,34 @@
+%%account_name%% — %%report_label%%
+%%period_label%%
+
+%%greeting%%
+
+%%headline%%
+%%introduction%%
+
+%%scorecard_title%%
+%%metric_1_label%%: %%metric_1_value%%
+%%metric_1_detail%%
+%%metric_2_label%%: %%metric_2_value%%
+%%metric_2_detail%%
+%%metric_3_label%%: %%metric_3_value%%
+%%metric_3_detail%%
+%%period_note%%
+
+CURRENT FOLLOW-UP QUEUE
+%%current_as_of%% — latest check, not a period total.
+%%current_queue_text%%
+
+%%actions_heading%%
+%%actions_text%%
+%%more_issues_text%%
+%%improvement_text%%
+
+ABOUT THESE FIGURES
+%%data_note%%
+
+%%cta_label%%: %%report_url%%
+%%link_note%%
+
+%%footer_text%%
+%%report_reference%%

@@ -1,6 +1,115 @@
 # Handoff: GHL Account Health Dashboard
 
+## October 2 owner-report development and GHL validation checkpoint
+
+The owner-report implementation is now tested locally, with delivery off by default.
+See `OWNER-REPORT-PILOT-RUNBOOK.md` for the exact deployment order, GHL mappings,
+saved Draft status and remaining live gates. Migration 0017 and the two owner edge
+functions have NOT been applied/deployed to the live ghl-health project during
+this work. Do not mistake passing isolated database tests for a live deployment.
+
+Implemented/fixed: safe immutable weekly/monthly snapshots; selected topics and
+views; current follow-up priorities and speed; comparable month-to-date lead
+counts; canonical HTML/text rendering; persisted synthetic report links; atomic
+snapshot/credential dispatch; one-use claims and callbacks; account-specific
+freshness; MFA-protected readiness/owner controls; pause and test acceptance.
+Corrected encoded punctuation in the new display/email text. Existing reporting
+continues when 0017 is absent. Monthly response-history reconstruction remains
+incomplete and is labeled unavailable rather than inferred or averaged.
+
+Chrome confirmed the existing SSP report is populated on October 2. The prior
+no-data diagnosis is closed. This does not validate the new owner-delivery path.
+
+GHL location ZnckuEDPIcWu8fn72ppi, saved Draft **SSP - Owner Report Template QA - v1**,
+workflow 623657b3-eabc-451f-b0a6-b8c34865d4a2 now has four connected actions:
+test-only claim -> allow_send true / rejected-end -> Matthew-only internal email
+-> guarded callback. Email subject/body use the claim output picker; recipient is
+fixed Custom email mcarlson@smallscreenproducer.com, followers off, no CC/BCC,
+account default sender. HTML merge rendering/inbox receipt remain unverified.
+
+Matthew approved up to ten no-email Custom Code validations capped at $1. TWO
+were used and passed (claim mapping denies send; empty callback makes no request).
+No main workflow test, actual email, publication, collector run, or webhook post.
+The trigger is NOT saved because GHL requires a received mapping sample and none
+exists. The first code action still contains a harmless literal mapping envelope.
+Repository rules prohibit the agent from copying the private inbound URL.
+`docs/owner-workflow/send-mapping-sample.ps1` is prepared for Matthew to run locally
+after approving that separate mapping request; it prompts invisibly and never
+prints/saves the URL. Then select the sample, save the trigger, map envelope with
+the picker, and keep Draft. Never include hook URLs in chat/screenshots/git.
+
+Production acceptance design: WF-02 must accept approved test and live modes on
+its OWN verified binding, passing the original mode to the server. Its template
+`production-claim-action.js` remains pinned to SSP with an unset workflow ID.
+Rebinding a clone invalidates prior acceptance; run a fresh approved test there.
+WF-02 is not yet created. No client-account workflow exception has been enabled.
+
+Validation: 278 Python tests, 28 web/edge/adapter tests, all isolated PostgreSQL
+migration/RLS/owner-ledger tests, and production website build passed. Existing
+large-bundle warning remains. Screenshot evidence is outside the public repo in
+the original workspace's output/ssp-owner-workflow-draft-oct2.jpg.
+
+Remaining live gates: deploy disabled application/database/edge release; receive
+mapping sample; verify recipient/sender and HTML rendering; approve one named
+test delivery and record inbox acceptance; publish/activate only with Matthew.
+
+
+## October 2 Python design and SSP ownership handoff
+
+Matthew requested a visual Python design document, an Eric setup one-sheet,
+and a complete-copy specification for an SSP-owned managed Supabase organization.
+The current hosting decision is to retain managed Supabase; self-hosted Supabase
+and a plain internal PostgreSQL rewrite are deferred. Ownership transfer of the
+existing project and an independent new-project copy are distinct procedures.
+
+`PYTHON-DESIGN-GUIDE.html` documents the inspected working tree, diagrams,
+calculations, limitations and an index of all 44 Python files. It explicitly
+labels the uncommitted owner-report implementation as unfinished, not live.
+Selected synthetic worked examples were checked against pure calculation code.
+The two PDF handoff documents are in the original task workspace's `output/pdf`:
+`Eric-Account-Health-Setup-One-Sheet.pdf` and
+`SSP-Supabase-Ownership-and-Complete-Copy-Specification.pdf`.
+No infrastructure migration, live setting change, database write, message send,
+production deployment or commit was performed for this documentation task.
+The owner-report implementation from earlier work still needs completion and
+release checks; the older specification-only statement below predates that work.
+
+## October 2 proposed weekly owner reporting
+
+Matthew requested a detailed implementation/workflow specification and owner
+email templates. `OWNER-WEEKLY-REPORT-SPEC.md` defines the separate weekly owner
+delivery path, issue-first weekly/monthly dashboard, settings, protected outbox,
+recipient binding, claim gate, GHL Draft workflows and acceptance requirements.
+`owner-report-email/` contains HTML/plain-text sources and four synthetic previews.
+This is specification/design work only: no owner delivery code, production
+settings, client grants, sends or workflow publication were changed. The current
+SSP-only notification policy needs a narrow reviewed exception before client
+workflow implementation. Contactless GHL claim-response branching and template
+rendering remain live feasibility gates; do not claim them tested.
+
+## October 1 proposed SSP hosting migration
+
+Matthew requested a migration plan, not a production cutover. See
+`SSP-HOSTING-MIGRATION-PLAN.md` for the proposed move of the Netlify dashboard
+and Render collector to an SSP-controlled server while initially retaining
+managed Supabase. Server details and hostname remain unconfirmed. The plan
+includes origin/auth configuration, tenant-isolation acceptance, single-scheduler
+cutover, notification safeguards and rollback. No hosting, DNS, schedule,
+credentials or live access settings were changed while preparing this plan.
+
 ## October 1 client-dashboard implementation
+
+**Later October 1 SSP empty-report diagnosis:** live Chrome read-back confirms
+SSP's `Publish safe reports after collection` is checked, client access remains
+off, and no client report is published. Matthew can now see administrator controls.
+Render has `CLIENT_REPORTS=on`, `AUTOMATION_WEBHOOKS=dry`, and
+`COLLECTOR_ARGS=--location ZnckuEDPIcWu8fn72ppi`; digest recipient settings are
+absent. The recent manual action is a successful build of `35a5c59`, not a
+collection run. Runs shows the latest collection at October 1 05:30 CDT, before
+publication setup, with no later manual run. Next: Matthew clicks Trigger Run,
+checks its logs/result, then clears COLLECTOR_ARGS after completion. Do not
+mistake a successful build for data collection. No production setting was changed
+and no run or message was triggered during diagnosis.
 
 **Embedded account display correction:** the client widget now shows only the
 account specified in `/client/accounts/:locationId`, with no account selector or

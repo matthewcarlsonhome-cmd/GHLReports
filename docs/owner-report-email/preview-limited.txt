@@ -1,0 +1,41 @@
+Example Pool Company — Weekly lead follow-up
+September 21–27, 2026 · America/Chicago
+
+Hello Alex,
+
+Some results need another check
+Lead counts are available, but incomplete response history prevents a reliable follow-up rate and response-time figure.
+
+Last week's results
+New leads: 40
+34 the previous week · up 18%.
+Follow-up recorded: Unavailable
+Response history is incomplete for this period. Missing data does not mean no follow-up.
+Typical first human response: Unavailable
+A trustworthy median and 90th percentile cannot be calculated yet.
+Eligible leads were at least 24 hours old at week end. Follow-up recorded does not mean contacted within 24 hours or reached successfully.
+
+CURRENT FOLLOW-UP QUEUE
+September 28, 2026 at 5:45 a.m. CDT — latest check, not a period total.
+Overdue follow-up: unavailable · 7 conversations waiting · oldest wait: 18 hours · 2 leads without an owner.
+
+Act on the verified items
+1. Answer 7 waiting conversations
+The oldest eligible unanswered message has waited 18 hours.
+Start with the oldest messages. Close conversations that no longer need a reply.
+
+2. Give 2 leads a clear owner
+These leads had no assigned owner at the latest check.
+Assign a team member and confirm the next follow-up step.
+
+SSP needs to review the missing response data before you use the unavailable figures to judge performance.
+
+
+ABOUT THESE FIGURES
+Lead and conversation sources are complete. Response history is incomplete; affected figures are withheld. This report cannot support an all-clear conclusion.
+
+View your account report: https://example.com/report-preview
+Design preview only. This example button does not open a client report. Production links require sign-in and open the exact report version.
+
+You receive this weekly summary as the designated report owner. Contact your SSP account manager to change the recipient or pause reports. The dashboard requires sign-in.
+FICTIONAL DATA · Template owner-weekly-v1 · Report sample-week-2026-09-21
