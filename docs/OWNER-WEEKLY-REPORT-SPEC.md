@@ -253,7 +253,7 @@ Steps:
 3. mode=mapping: end with no notification. Unknown/missing values: end.
 4. mode=test: require a valid test-only claim; reject live claims. Branch only on allow_send=true.
 5. Render/select attention, healthy or limited template from canonical returned fields.
-6. Internal Notification → Email → Matthew only. The SSP QA Draft uses a fixed Custom email value mcarlson@smallscreenproducer.com; verify it against the application binding before sending. Production uses one verified Particular User. No Assigned User, All Users, roles, CC or BCC.
+6. Internal Notification → Email → Particular User → Matthew Carlson only. Verify the SSP user email mcarlson@smallscreenproducer.com against the application binding before sending. Production uses one verified Particular User. No Assigned User, All Users, roles, CC or BCC.
 7. Record action outcome through the bounded callback, if supported and validated.
 8. End. No contacts, tags, tasks, opportunity changes or recurring wait loops.
 

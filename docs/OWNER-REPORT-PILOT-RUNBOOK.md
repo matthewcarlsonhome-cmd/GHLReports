@@ -2,7 +2,7 @@
 
 Implementation checkpoint: October 2, 2026. This supplements OWNER-WEEKLY-REPORT-SPEC.md and records actual setup status. Delivery remains off until the checks below are completed.
 
-Release 606203e is pushed. Migration 0017 is now applied to ghl-health; read-back confirms nine tables with row security enabled/forced, mode off, zero pilot locations and zero queued sends. The claim and result functions are deployed as single-file bundles of the shared handler and corresponding entry point, with gateway JWT verification still ON. Owner mode remains default off. The application hosting deployment is not yet verified. The ordered steps below describe the full rollout, including steps now completed; do not rerun the additive migration.
+Release 606203e is pushed. Migration 0017 is now applied to ghl-health; read-back confirms nine tables with row security enabled/forced, mode off, zero pilot locations and zero queued sends. The claim and result functions are deployed as single-file bundles of the shared handler and corresponding entry point, with gateway JWT verification OFF for these two endpoints following Matthew's explicit approval. Owner mode remains default off. Both live endpoints reject GET (405) and empty POST (403). The owner screens are visible on Netlify, and Render confirms 33cbffc deployed; no new collector run has occurred. The ordered steps below describe the full rollout, including steps now completed; do not rerun the additive migration.
 
 ## What is built
 
@@ -16,7 +16,7 @@ The existing SSP embedded dashboard was inspected in Chrome on October 2 and con
 
 | Workflow | Accepts | Recipient | Schedule |
 |---|---|---|---|
-| SSP Owner Report Template QA v1 | Only an explicitly approved SSP `test` envelope | Fixed custom email mcarlson@smallscreenproducer.com; recipient remains to be verified against the app binding | One test by reference, no recurring schedule |
+| SSP Owner Report Template QA v1 | Only an explicitly approved SSP `test` envelope | Verified Particular User Matthew Carlson (mcarlson@smallscreenproducer.com) | One test by reference, no recurring schedule |
 | SSP Weekly Owner Report v1 | `test` acceptance and then `live` envelopes for the same account and bound workflow | One verified SSP report owner | Application dispatcher, Monday 8 a.m. local by default |
 
 Both stay Draft until Matthew publishes. Build and verify the QA path first; create the weekly workflow from the verified structure, then bind its own identity. Neither workflow creates, searches for or modifies a contact. Existing MC Account Health Alerts remains separate.
@@ -26,7 +26,7 @@ Both stay Draft until Matthew publishes. Build and verify the QA path first; cre
 1. **Inbound Webhook** trigger. Use `mapping-sample.json` for field mapping, with no contact email or phone. Mapping mode cannot send. Do not retain an automatically added Create Contact action. The operator transfers the inbound URL directly to the app's masked connection field; never include it in a document, screenshot, log or chat.
 2. **Custom Code — Verify SSP test envelope and claim once.** One input named `envelope`, selected from the inbound sample's envelope field using the Custom Value picker. Use `claim-action.js`. The file pins SSP location, QA workflow ID and `test` mode. Its destination is the protected Supabase claim endpoint. Test mapping/malformed/wrong-account/live inputs: all return `allow_send = "false"`. This is a code test, not a test email.
 3. **If / Else — Approved claim only.** Select the Custom Code action's **allow_send** output in GHL's picker. Compare to the literal string `true`. The unmatched branch ends. Never branch on an inbound allow_send value.
-4. **Internal Notification — Email — Custom email (SSP QA only).** The saved Draft has the fixed address mcarlson@smallscreenproducer.com. It uses the account default sender, because GHL requires a sender address when a custom From Name is entered. Confirm the sender and recipient before any approved inbox test. Production uses one verified Particular User. No Assigned User, All Users, CC, BCC or SMS.
+4. **Internal Notification — Email — Particular User.** The saved Draft selects only Matthew Carlson. SSP Users confirms mcarlson@smallscreenproducer.com and user ID 5jJfcIlQiy0jRxIvH039; the app is bound to that same identity. It uses the account default sender, because GHL requires a sender address when a custom From Name is entered. Confirm sender delivery during the approved inbox test. No Assigned User, All Users, CC, BCC or SMS.
 5. **Subject and body.** Pick **subject** and **body_html** from the claim action output, not the inbound webhook. Only use body_html if GHL renders it as HTML in this specific action; otherwise use the reviewed scalar template mappings or plain-text body. Do not assume raw HTML merge fields render correctly. The rendered content chooses attention, healthy or limited styling from the same saved report shown in the dashboard. Keep the visible TEST SAMPLE DATA banner for tests.
 6. **Custom Code — Record notification action.** Place after the email action. Use `result-action.js`; map **delivery_id** and **completion_credential** from the successful claim action. This records an action outcome, not proof of inbox delivery.
 7. **End.** No repeat loop, waiting sequence or GHL weekly trigger. Never manually restart at the email action; doing so bypasses the one-use claim.
@@ -49,7 +49,7 @@ Then choose Fetch sample requests > the mapping request > Save trigger. Open the
 | Notification HTML or text | Claim action → body_html or body_text, after renderer verification |
 | Callback delivery_id | Claim action → delivery_id |
 | Callback completion_credential | Claim action → completion_credential |
-| Recipient | QA: fixed Matthew custom email. Production: one verified Particular User. Never supplied by the envelope |
+| Recipient | One verified Particular User: Matthew in SSP QA. Never supplied by the envelope |
 
 Use the picker to obtain actual GHL merge syntax. These labels are a mapping specification, not invented merge expressions.
 
@@ -57,7 +57,7 @@ Use the picker to obtain actual GHL merge syntax. These labels are a mapping spe
 
 1. Run Python/web/database checks and build. Push the release with all owner sending off. Existing Render collection and Netlify hosting continue; no server migration is necessary.
 2. Apply `supabase/migrations/0017_owner_reports.sql` to **ghl-health**, project `tpavdifpsevkrubplyrg`. Do not apply it to the separately open SSPAutomation project. This is an additive migration, tested in isolated PostgreSQL; it does not enable sending or grant client memberships.
-3. Deploy `owner-report-claim` and `owner-report-result` with their `_shared/owner-workflow.ts` dependency. Keep `OWNER_REPORTS_MODE=off` initially. They authenticate each request using expiring one-use credentials checked against the database. GHL does not carry an app-user JWT, so deployment must explicitly configure gateway JWT handling for these two endpoints only after reviewing the credential-authentication design. Do not change the existing prepare-client-access function's JWT policy.
+3. Deploy `owner-report-claim` and `owner-report-result` with their `_shared/owner-workflow.ts` dependency. Keep `OWNER_REPORTS_MODE=off` initially. They authenticate each request using expiring one-use credentials checked against the database. GHL does not carry an app-user JWT, so deployment must explicitly configure gateway JWT handling for these two endpoints only after reviewing the credential-authentication design. This scoped change is now approved and applied for these two functions only. Do not change the existing prepare-client-access function's JWT policy.
 4. Keep `CLIENT_REPORTS=on`. Run an SSP-only collection with existing AM sending disabled/dry and digest recipients not enabled. Owner publication uses the completed collection and migration; absent migration leaves existing reporting intact.
 5. In Access settings, select SSP; confirm publication, freshness threshold and timezone. Assign an existing verified person the report Owner role. Save topics/schedule in Preview. Bind the actual GHL user ID/email and workflow ID/revision. The masked connection field stores the URL in Supabase Vault.
 6. Finish the GHL claim/branch/template checks, record evidence, prepare one test and approve its specific reference. Set the dispatcher and endpoints to Preview. Run only that approved reference through `python -m collector.owner_delivery --approved-test <reference>`. Do not run the nightly collector as a substitute for this command.

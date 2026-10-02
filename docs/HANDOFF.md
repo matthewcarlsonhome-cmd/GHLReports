@@ -10,9 +10,11 @@ the default deployment branch. Migration 0017 was applied to live ghl-health
 nine tables with RLS enabled AND forced, delivery mode off, zero pilot locations,
 zero queued deliveries. Both owner edge functions were deployed through the
 browser as single-file bundles of the committed shared handler plus their entry
-point. Both retain Verify JWT with legacy secret ON; OWNER_REPORTS_MODE remains
-default off. Connecting GHL requires approval for the scoped custom-auth change.
-Netlify/Render deployment completion has not yet been verified.
+point. Matthew explicitly approved disabling Verify JWT with legacy secret for
+ONLY these two handlers; both changes are saved. OWNER_REPORTS_MODE remains default
+off. Live unauthenticated checks: both reject GET with 405 and empty POST with 403.
+Netlify serves the owner settings/report screens. Render shows 33cbffc as its last
+successfully deployed commit; no collection run was started (latest run 5:30 AM).
 
 Implemented/fixed: safe immutable weekly/monthly snapshots; selected topics and
 views; current follow-up priorities and speed; comparable month-to-date lead
@@ -30,7 +32,8 @@ GHL location ZnckuEDPIcWu8fn72ppi, saved Draft **SSP - Owner Report Template QA 
 workflow 623657b3-eabc-451f-b0a6-b8c34865d4a2 now has four connected actions:
 test-only claim -> allow_send true / rejected-end -> Matthew-only internal email
 -> guarded callback. Email subject/body use the claim output picker; recipient is
-fixed Custom email mcarlson@smallscreenproducer.com, followers off, no CC/BCC,
+Particular User Matthew Carlson, verified in SSP Users as
+mcarlson@smallscreenproducer.com / 5jJfcIlQiy0jRxIvH039; followers off, no CC/BCC,
 account default sender. HTML merge rendering/inbox receipt remain unverified.
 
 Matthew approved up to ten no-email Custom Code validations capped at $1. TWO
@@ -55,7 +58,15 @@ migration/RLS/owner-ledger tests, and production website build passed. Existing
 large-bundle warning remains. Screenshot evidence is outside the public repo in
 the original workspace's output/ssp-owner-workflow-draft-oct2.jpg.
 
-Remaining live gates: verify hosting deployment; approve endpoint auth setting; receive
+Matthew's existing SSP membership was changed from am to client_owner; his global
+administrator access is unchanged. SSP owner settings are saved in Preview with
+the five default topics, Monday 08:00 America/Chicago, and the verified Matthew
+user/QA workflow binding. Global mode remains off. Client viewing remains off.
+No connection URL is stored and no setup/inbox acceptance evidence is recorded.
+The setup wording now distinguishes configuration checks before a test from
+actual rendering/inbox acceptance afterward; do not attest to unperformed tests.
+
+Remaining live gates: receive
 mapping sample; verify recipient/sender and HTML rendering; approve one named
 test delivery and record inbox acceptance; publish/activate only with Matthew.
 

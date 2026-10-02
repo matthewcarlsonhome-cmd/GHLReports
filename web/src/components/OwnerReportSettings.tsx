@@ -64,9 +64,9 @@ export default function OwnerReportSettings({location}:{location:string}){
    <label className="text-sm">New webhook URL<input className={input} type="password" autoComplete="new-password" value={secret} onChange={e=>setSecret(e.target.value)}/></label>
    <button disabled={busy||!secret||!state.destination} className="mt-3 rounded border px-4 py-2" onClick={()=>{const value=secret;setSecret('');void act(()=>supabase.rpc('owner_save_destination',{p_location:location,p_url:value}));}}>Save securely</button>
    <h3 className="mt-6 font-semibold">4. Verify the actual workflow</h3>
-   <p className="my-2 text-sm">Verify the selected GHL user's account/email, contactless claim response, denied replay and template mapping in Draft. This records evidence; it does not perform those tests.</p>
+   <p className="my-2 text-sm">Check the selected GHL user's account/email, workflow ID, blocked-send branch and template field mappings in Draft. This records setup evidence so an approved test can be prepared. Check successful delivery, rendering and the report link during that separate test.</p>
    <label className="block text-sm">Verification evidence<textarea className={input} rows={3} value={evidence} maxLength={500} onChange={e=>setEvidence(e.target.value)} placeholder="Record the workflow revision, selected user and verification results. Never paste secrets."/></label>
-   <label className="my-3 block text-sm"><input type="checkbox" checked={verified} onChange={e=>setVerified(e.target.checked)}/> I verified the actual recipient and the claim/rendering behavior.</label>
+   <label className="my-3 block text-sm"><input type="checkbox" checked={verified} onChange={e=>setVerified(e.target.checked)}/> I verified the recipient, workflow binding, blocked-send branch and mapped fields.</label>
    <button disabled={busy||!verified||evidence.trim().length<20||!state.destination?.secret_configured} className="rounded border px-4 py-2" onClick={()=>void act(()=>supabase.rpc('owner_verify_binding',{p_location:location,p_evidence:evidence}))}>Record verification</button>
    <h3 className="mt-6 font-semibold">5. Preview, test and delivery history</h3>
    <Link className="my-3 block underline" to={`/client/accounts/${encodeURIComponent(location)}?view=week`}>Preview weekly owner report</Link>
