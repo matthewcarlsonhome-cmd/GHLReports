@@ -2,6 +2,8 @@
 
 Implementation checkpoint: October 2, 2026. This supplements OWNER-WEEKLY-REPORT-SPEC.md and records actual setup status. Delivery remains off until the checks below are completed.
 
+Release 606203e is pushed. Migration 0017 is now applied to ghl-health; read-back confirms nine tables with row security enabled/forced, mode off, zero pilot locations and zero queued sends. The claim and result functions are deployed as single-file bundles of the shared handler and corresponding entry point, with gateway JWT verification still ON. Owner mode remains default off. The application hosting deployment is not yet verified. The ordered steps below describe the full rollout, including steps now completed; do not rerun the additive migration.
+
 ## What is built
 
 The application contains weekly and monthly owner summaries, current queues, topic settings, versioned email rendering, account-bound saved report links, a separate dispatcher and protected send ledger. Default weekly delivery is Monday at 8 a.m. in the account timezone. Monthly email is not enabled.

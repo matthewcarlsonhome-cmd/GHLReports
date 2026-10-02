@@ -4,9 +4,15 @@
 
 The owner-report implementation is now tested locally, with delivery off by default.
 See `OWNER-REPORT-PILOT-RUNBOOK.md` for the exact deployment order, GHL mappings,
-saved Draft status and remaining live gates. Migration 0017 and the two owner edge
-functions have NOT been applied/deployed to the live ghl-health project during
-this work. Do not mistake passing isolated database tests for a live deployment.
+saved Draft status and remaining live gates. Code release 606203e was pushed to
+the default deployment branch. Migration 0017 was applied to live ghl-health
+(tpavdifpsevkrubplyrg) using Supabase's Run and enable RLS option. Read-back:
+nine tables with RLS enabled AND forced, delivery mode off, zero pilot locations,
+zero queued deliveries. Both owner edge functions were deployed through the
+browser as single-file bundles of the committed shared handler plus their entry
+point. Both retain Verify JWT with legacy secret ON; OWNER_REPORTS_MODE remains
+default off. Connecting GHL requires approval for the scoped custom-auth change.
+Netlify/Render deployment completion has not yet been verified.
 
 Implemented/fixed: safe immutable weekly/monthly snapshots; selected topics and
 views; current follow-up priorities and speed; comparable month-to-date lead
@@ -49,7 +55,7 @@ migration/RLS/owner-ledger tests, and production website build passed. Existing
 large-bundle warning remains. Screenshot evidence is outside the public repo in
 the original workspace's output/ssp-owner-workflow-draft-oct2.jpg.
 
-Remaining live gates: deploy disabled application/database/edge release; receive
+Remaining live gates: verify hosting deployment; approve endpoint auth setting; receive
 mapping sample; verify recipient/sender and HTML rendering; approve one named
 test delivery and record inbox acceptance; publish/activate only with Matthew.
 
